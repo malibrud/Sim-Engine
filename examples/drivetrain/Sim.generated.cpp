@@ -12,33 +12,35 @@
 //       settings fold to literals and they leave no runtime trace.
 //    2. A wire is not its own variable — it coincides with the producer's `out`
 //       storage. Fan-out is free, nothing is copied.
-//    3. Continuous states live in one flat `double` array; units stop there.
+//    3. Units are CHECKED BY THE DSL AND ERASED. Every declaration below is a
+//       plain `double` that is, by construction, in its declared unit — see the
+//       trailing comment on each one, and Sim.units.txt for the full manifest.
+//       Nothing here depends on a units library; this file compiles with a
+//       stock C++17 compiler and no third-party packages.
 //    4. Purity and feedthrough are enforced by the C++ type system, not by an
 //       analyzer. See the notes on each method below.
 // ─────────────────────────────────────────────────────────────────────────────
 
 #include "state_ref.hpp"
 
-#include <mp-units/systems/si.h>
 #include <array>
 #include <cstdint>
 
 namespace drivetrain {
 
-using namespace mp_units;
-using namespace mp_units::si::unit_symbols;
 using sim::state_ref;
 
 // ═════════════════════════════════════════════════════════════════════════════
 //  type WheelState                                          [WheelState.se:10]
 //
 //  The user-defined record. Unchanged by every lowering choice — it is a plain
-//  struct with one unit-typed member per field.
+//  struct with one member per field, each carrying its declared unit as a
+//  comment.
 // ═════════════════════════════════════════════════════════════════════════════
 struct WheelState {
-    quantity<rad / s>  speed;
-    quantity<N * m>    torque;
-    quantity<one>      slip;
+    double speed;    // rad/s
+    double torque;   // N*m
+    double slip;     // -
 };
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -48,20 +50,22 @@ struct WheelState {
 //  matter how many corners the model instantiates.
 // ═════════════════════════════════════════════════════════════════════════════
 struct Wheel {
-    struct Param { quantity<kg * m * m> inertia; quantity<m> radius; };
-    struct Var   { quantity<one / (kg * m * m)> inertia_inv; };
+    struct Param { double inertia;      // kg*m^2
+                   double radius; };    // m
+    struct Var   { double inertia_inv; };   // 1/(kg*m^2)
 
     // `continuous omega` => a proxy bound to a slot in Sim::x, not real storage.
-    struct State { state_ref<rad / s>       omega; };
-    struct Der   { state_ref<rad / (s * s)> omega; };   // bound into Sim::xd
+    struct State { state_ref omega; };   // rad/s
+    struct Der   { state_ref omega; };   // rad/s^2 — bound into Sim::xd
 
     struct Out   { WheelState ws; };
 
     // FEEDTHROUGH IS THIS: one In view per method, holding exactly the inputs
     // that method's DSL signature listed. Reading an input you did not declare
     // is not a stale value — it is "no such member", a compile error.
-    struct In_rates  { quantity<N * m> drive_torque; };
-    struct In_output { quantity<N * m> drive_torque; quantity<m / s> ground_speed; };
+    struct In_rates  { double drive_torque; };    // N*m
+    struct In_output { double drive_torque;       // N*m
+                       double ground_speed; };    // m/s
 
     Param param;
     State state;
@@ -97,17 +101,18 @@ struct Wheel {
 //  It costs nothing at runtime.
 // ═════════════════════════════════════════════════════════════════════════════
 struct TractionController {
-    struct Param { quantity<one> slip_limit; quantity<N * m> gain; };
+    struct Param { double slip_limit;   // -
+                   double gain; };      // N*m
 
     // `discrete cut` => real storage in the node. It never reaches the solver.
-    struct State { quantity<N * m> cut; };
+    struct State { double cut; };   // N*m
 
     // The x+ = h(t,x,u) buffer. Separate storage is what makes `next.` a
     // SIMULTANEOUS update: every discrete state reads the old value and writes
     // the new one, so results do not depend on statement order in on_step().
-    struct Next  { quantity<N * m> cut; };
+    struct Next  { double cut; };   // N*m
 
-    struct Out   { quantity<N * m> torque_cut; };
+    struct Out   { double torque_cut; };   // N*m
 
     struct In_step   { WheelState ws; };
     struct In_output {};                    // empty => sort root => breaks loops
@@ -119,7 +124,7 @@ struct TractionController {
     void on_step(const In_step& in, Next& next) const {
 #line 24 "examples/drivetrain/TractionController.se"
         auto excess = in.ws.slip - param.slip_limit;
-        next.cut = excess > 0.0 ? param.gain * excess : 0.0 * (N * m);
+        next.cut = excess > 0.0 ? param.gain * excess : 0.0;
     }
 
     void output(const In_output& in, Out& out) const {
@@ -136,7 +141,8 @@ struct TractionController {
 // ═════════════════════════════════════════════════════════════════════════════
 struct Sim {
     // ── continuous state vector ──────────────────────────────────────────────
-    //  Plain doubles. No units, ever. This is the external solver's whole ABI.
+    //  Plain doubles — as is everything else in this file. This is also the
+    //  external solver's whole ABI.
     //
     //  SLOT MAP  (value is in the state's declared unit)
     //      x[0] / xd[0]  =  fl.whl.omega   [rad/s]
@@ -171,8 +177,8 @@ struct Sim {
     TractionController::Next fl_tc_next;
 
     // ── root boundary ────────────────────────────────────────────────────────
-    quantity<N * m> src_axle_torque{};
-    quantity<m / s> src_ground_speed{};
+    double src_axle_torque{};    // N*m
+    double src_ground_speed{};   // m/s
 
     Sim() {
         bind_states();
@@ -188,11 +194,15 @@ struct Sim {
     // Setting flow-down, evaluated at elaboration. `Corner::wheel_inertia` does
     // not exist at runtime — the expression `param.wheel_inertia` folded to a
     // literal here. Composite settings evaporate entirely.
+    //
+    // Any unit CONVERSION the DSL had to apply folded into these literals too:
+    // a setting declared (km/h) and fed a (m/s) expression arrives here as one
+    // already-scaled number. This is why C++ never needs conversion machinery.
     void elaborate() {
-        fl_whl.param.inertia   = 0.9  * (kg * m * m);
-        fl_whl.param.radius    = 0.31 * m;
-        fl_tc.param.slip_limit = 0.10 * one;
-        fl_tc.param.gain       = 400.0 * (N * m);
+        fl_whl.param.inertia   = 0.9;     // kg*m^2
+        fl_whl.param.radius    = 0.31;    // m
+        fl_tc.param.slip_limit = 0.10;    // -
+        fl_tc.param.gain       = 400.0;   // N*m
         // fl.tc.rate = 200 Hz on a 1 kHz base => decimation 5, see on_step_tick.
     }
 
@@ -200,8 +210,8 @@ struct Sim {
     // proxy lands in x[0]. Sim-file IC overrides would be applied right here —
     // the single override channel, which is what discrete states buy over vars.
     void apply_initial_conditions() {
-        fl_whl.state.omega = 0.0 * (rad / s);
-        fl_tc.state.cut    = 0.0 * (N * m);
+        fl_whl.state.omega = 0.0;   // rad/s
+        fl_tc.state.cut    = 0.0;   // N*m
     }
 
     void init() {

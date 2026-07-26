@@ -31,7 +31,9 @@ node Wheel {
     }
 
     // pack the record; reads inputs -> feedthrough on both, declared by signature.
-    // units penetrate the body (mp-units) so the C++ compiler checks dimensions here too.
+    // accessors arrive as plain double, guaranteed by the generator to be in the
+    // unit declared above. body arithmetic is NOT dimension-checked -- units are
+    // checked by the DSL at declarative sites (ports, wires, settings) and erased.
     output(drive_torque, ground_speed) {
         auto surface_speed = state.omega * param.radius;              // (m/s)
         out.ws.speed  = state.omega;

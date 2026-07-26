@@ -1,0 +1,41 @@
+# ─────────────────────────────────────────────────────────────────────────────
+#  GENERATED — DO NOT EDIT.
+#  Unit manifest for: examples/drivetrain/Sim.generated.cpp
+#  Root: drivetrain.Corner (as `fl`)   Base step: 1 kHz
+#
+#  Units are checked by the DSL compiler at every declarative site and then
+#  ERASED — generated C++ is plain `double` throughout. This file is where the
+#  erased information goes. It is a real generator output, not documentation:
+#  it is the contract for anyone writing an external solver, feeding the root
+#  boundary, or overriding a setting from outside the model.
+#
+#  Every value named here is IN THE UNIT SHOWN. `-` means dimensionless.
+# ─────────────────────────────────────────────────────────────────────────────
+
+[state.continuous]        # slot | model path | unit  -- the solver's ABI
+x[0]      fl.whl.omega          rad/s
+xd[0]     fl.whl.omega'         rad/s^2
+
+[state.discrete]          # not in the state vector; lives in its node
+          fl.tc.cut             N*m
+
+[boundary.in]             # root inputs the host must supply
+          src.axle_torque       N*m
+          src.ground_speed      m/s
+
+[boundary.out]            # root outputs the host may read
+          fl.tc.torque_cut      N*m
+          fl.whl.ws.speed       rad/s
+          fl.whl.ws.torque      N*m
+          fl.whl.ws.slip        -
+
+[settings]                # elaborated values, post-conversion
+          fl.whl.inertia        kg*m^2      = 0.9
+          fl.whl.radius         m           = 0.31
+          fl.tc.slip_limit      -           = 0.10
+          fl.tc.gain            N*m         = 400.0
+
+[types]
+WheelState.speed              rad/s
+WheelState.torque             N*m
+WheelState.slip               -
