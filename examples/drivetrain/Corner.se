@@ -1,0 +1,36 @@
+package drivetrain;
+
+// Composite: no code, no states -- just child instances and wiring in `structure {}`.
+// Its own state is the union of its descendants'; it leaves no runtime trace at all.
+node Corner {
+    settings {
+        wheel_inertia (kg*m^2): double = 0.9;
+    }
+    inputs {
+        axle_torque  (N*m): double;
+        ground_speed (m/s): double;
+    }
+    outputs {
+        ws         : WheelState;             // republish the wheel record at the boundary
+        torque_cut (N*m): double;
+    }
+
+    structure {
+        node whl : Wheel {
+            inertia = param.wheel_inertia;   // declarative setting flow-down
+        };
+        node tc : TractionController {
+            rate       = 200.0;
+            slip_limit = 0.10;
+        };
+
+        self.axle_torque  --> whl.drive_torque;
+        self.ground_speed --> whl.ground_speed;
+
+        // the WheelState record travels one wire, fanned out to the controller
+        // and re-exposed at the composite boundary
+        whl.ws --> tc.ws, self.ws;
+
+        tc.torque_cut --> self.torque_cut;
+    }
+}

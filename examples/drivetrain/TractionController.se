@@ -1,0 +1,32 @@
+package drivetrain;
+
+// Registered discrete consumer: watches the record's slip, commands a torque cut.
+node TractionController {
+    settings {
+        rate       (Hz):  double = 200.0;   // integer decimation of the base step
+        slip_limit (-):   double = 0.10;
+        gain       (N*m): double = 400.0;   // torque cut per unit of excess slip
+    }
+    inputs {
+        ws: WheelState;                      // the whole record arrives on one wire
+    }
+    outputs {
+        torque_cut (N*m): double;
+    }
+    states {
+        discrete cut (N*m): double = 0.0;    // IC is declarative -- no init() needed
+    }
+
+    // update at the 200 Hz sample tick; `next.` makes it simultaneous, order-independent.
+    // `ws` is listed because the body reads it -- but on_step runs after outputs have
+    // propagated, so unlike output() this constrains nothing for the sort.
+    on_step(ws) {
+        auto excess = in.ws.slip - param.slip_limit;                 // dimensionless
+        next.cut = excess > 0.0 ? param.gain * excess : 0.0 * (N*m);
+    }
+
+    // no feedthrough -> sort root -> this is the registered loop-breaker
+    output() {
+        out.torque_cut = state.cut;
+    }
+}
