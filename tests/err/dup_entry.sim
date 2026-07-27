@@ -1,0 +1,14 @@
+// SE0260 duplicate entry, SE0261 unknown entry (with did-you-mean),
+// and the stray `;` warning after a block entry. §13.1
+sim Bad {
+    root:     tests.Vehicle;
+    step:     1 (ms);
+    step:     2 (ms);
+    duratoin: 10 (s);
+    solver:   rk4;
+
+    record: {
+        file:  "run.csv";
+        evrey: 10;
+    };
+}

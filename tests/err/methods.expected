@@ -1,0 +1,39 @@
+﻿error[SE0201]: expected `(` after `init`, found `{`
+  --> tests/err/methods.se:11:10
+   |
+11 |     init { }
+   |          ^ expected `(`
+   = note: every lifecycle method carries a parameter list; on `output()` that list IS the feedthrough declaration (§8.3)
+   = help: write `init() { ... }`
+
+error[SE0240]: expected a function body
+  --> tests/err/methods.se:18:41
+   |
+18 |     double declared_only(double v) const;
+   |                                         ^ found `;`
+   = note: a node-body item that is not a section or a lifecycle method is a verbatim helper function, which must be a definition (§11.4)
+   = help: put forward declarations, `#include`s and free functions in `declarations { ... }`
+
+warning[SE0221]: `on_setp` is not a lifecycle method; it will be copied verbatim as a helper function
+  --> tests/err/methods.se:27:5
+   |
+27 |     on_setp(u) { }
+   |     ^^^^^^^ did you mean `on_step`?
+   = note: the lifecycle methods are init, output, rates, on_step, final (§8.1)
+
+error[SE0241]: `init` takes no parameters
+  --> tests/err/methods.se:35:10
+   |
+35 |     init(u)     { }
+   |          ^
+   = note: `init()` runs before any signal has propagated, so it can read no inputs (§8.1)
+
+error[SE0242]: `final` takes at most one parameter
+  --> tests/err/methods.se:36:14
+   |
+36 |     final(a, b) { }
+   |              ^
+   = note: the single parameter is the read-only run context: reason, message, time (§10.3)
+   = help: write `final(ctx) { ... }` or `final() { ... }`
+
+4 errors, 1 warning emitted

@@ -1,0 +1,17 @@
+﻿=== tests/ok/Tricky.se ===
+model-file
+  package tests
+  node Tricky  [line 6]  kind=leaf
+    settings
+      gain (-): double = 1.0
+    outputs
+      y (-): double
+    states
+      continuous x (-): double ic=0.0
+    declarations @line 17 (169 bytes): "#include <string> // a brace in a line commen..."
+    init()
+      body @line 24 (639 bytes): "// } in a line comment /* } in a block commen..."
+    rates()
+      body @line 38 (44 bytes): "der.x = -param.gain * state.x;"
+    output()   [no feedthrough — sort root]
+      body @line 42 (30 bytes): "out.y = state.x;"

@@ -1,0 +1,16 @@
+// SE0205 missing unit, SE0206 malformed unit, SE0207 unknown scalar type,
+// SE0231 a record-typed setting. §4.1, §5.1, §5.2
+package tests;
+
+node Bad {
+    settings {
+        a: double;                  // no unit annotation, and `double` is not a record
+        b (m/): double = 1.0;       // dangling operator
+        c (m^1.5): double = 1.0;    // non-integer exponent
+        d (m): dobule = 1.0;        // typo in the scalar type
+        e (2*m): double = 1.0;      // only `1` may appear as a literal
+        f: Telemetry;               // settings are scalars
+    }
+    outputs { y (-): double; }
+    output() { out.y = 0.0; }
+}

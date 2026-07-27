@@ -1,0 +1,38 @@
+﻿=== tests/ok/Net.se ===
+model-file
+  package tests
+  node Net  [line 6]  kind=leaf
+    settings
+      port (-): int = 9000
+      rate (Hz): double = 100.0
+      deadband (-): double = 1.0e-6
+    inputs
+      tx (-): double
+    outputs
+      rx (-): double
+    states
+      discrete   packets (-): int ic=0
+    vars
+      last_rx (-): double
+    native
+      sock: `SOCKET`
+      buf: `std::array<char, 1024>`
+      dev: `std::unique_ptr<Device>`
+      ser: `Serial{"COM3", 115200}`
+    build
+      link "ws2_32" when windows
+      link "pthread" when linux
+      include_dir "vendor/asio/include"
+      define "ASIO_STANDALONE"
+      cflag "/bigobj" when windows
+    declarations @line 42 (107 bytes): "#include <array> #include <memory> namespace ..."
+    init()
+      body @line 50 (128 bytes): "sock = socket(AF_INET, SOCK_DGRAM, 0); var.la..."
+    on_step(tx)
+      body @line 56 (261 bytes): "sendto(sock, &in.tx, sizeof(double), 0, nullp..."
+    output()   [no feedthrough — sort root]
+      body @line 66 (35 bytes): "out.rx = var.last_rx;"
+    final(ctx)
+      body @line 70 (101 bytes): "log.info("closing after {} at t={}", ctx.mess..."
+    helper `double scale(double v) const`
+      body @line 76 (36 bytes): "return v * (1.0 - param.deadband);"

@@ -1,0 +1,36 @@
+﻿=== tests/ok/Vehicle.se ===
+model-file
+  package tests
+  node Vehicle  [line 6]  kind=composite
+    settings
+      total_mass (kg): double = 1500.0
+      ctl_rate (Hz): double = 100.0
+    inputs
+      throttle (-): double
+      road (m/s): double
+    outputs
+      speed (m/s): double
+      report: Telemetry
+    structure
+      node front : Axle
+        axle_mass = (param.total_mass / 2.0)
+        rate = param.ctl_rate
+      node rear : Axle
+        axle_mass = (param.total_mass / 2.0)
+      node mix : Mixer
+      self.throttle --> front.demand, rear.demand
+      self.road --> front.ground_speed
+      self.road --> rear.ground_speed
+      front.torque --> mix.a
+      rear.torque --> mix.b
+      mix.total --> self.speed
+      mix.report --> self.report
+  node Mixer  [line 45]  kind=leaf
+    inputs
+      a (N*m): double
+      b (N*m): double
+    outputs
+      total (N*m): double
+      report: Telemetry
+    output(a, b)   [feedthrough]
+      body @line 55 (113 bytes): "out.total = in.a + in.b; out.report.torque = ..."

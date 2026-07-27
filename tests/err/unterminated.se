@@ -1,0 +1,14 @@
+// SE0110 — an unterminated verbatim region, reported at the OPENING brace with
+// the depth reached, because the end of the file says nothing useful. §11.2
+//
+// Note the string literal: its `}` is skipped, so it does not balance anything.
+package tests;
+
+node Bad {
+    outputs { y (-): double; }
+
+    output() {
+        const char* s = "}";
+        if (true) {
+            out.y = 1.0;
+    }

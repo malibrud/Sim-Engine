@@ -1,0 +1,38 @@
+// The 2026-07-27 ruling: parens are required on every lifecycle method.
+// Also SE0241 (`init` takes no parameters), SE0242 (`final` takes at most one),
+// SE0240 (a helper must be a definition), and the lifecycle near-miss warning.
+// §8.1, §11.4
+package tests;
+
+node NoParens {
+    inputs  { u (-): double; }
+    outputs { y (-): double; }
+
+    init { }
+    output(u) { out.y = in.u; }
+}
+
+node HelperDeclaration {
+    outputs { y (-): double; }
+
+    double declared_only(double v) const;
+
+    output() { out.y = 0.0; }
+}
+
+node NearMiss {
+    inputs  { u (-): double; }
+    outputs { y (-): double; }
+
+    on_setp(u) { }
+    output(u)  { out.y = in.u; }
+}
+
+node BadArity {
+    inputs  { u (-): double; }
+    outputs { y (-): double; }
+
+    init(u)     { }
+    final(a, b) { }
+    output(u)   { out.y = in.u; }
+}

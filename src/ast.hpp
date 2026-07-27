@@ -1,0 +1,328 @@
+// ─────────────────────────────────────────────────────────────────────────────
+//  AST.  SPECIFICATION.md §17.
+//
+//  Stage 2 output: a faithful syntactic record with no name resolution, no unit
+//  evaluation and no elaboration (§1.3). Unit expressions and setting
+//  expressions are kept as trees rather than folded, because folding needs the
+//  unit-symbol table and the setting dependency graph — both stage 4.
+// ─────────────────────────────────────────────────────────────────────────────
+#ifndef SE_AST_HPP
+#define SE_AST_HPP
+
+#include <memory>
+#include <string>
+#include <vector>
+
+#include "diag.hpp"
+#include "lexer.hpp"
+
+namespace se {
+namespace ast {
+
+// A dotted name: `std.mech.Damper`, or a model path `front.left.mass`.
+struct Path {
+    std::vector<std::string> segs;
+    Loc loc;
+
+    std::string str() const {
+        std::string s;
+        for (std::size_t i = 0; i < segs.size(); ++i) {
+            if (i) s += '.';
+            s += segs[i];
+        }
+        return s;
+    }
+};
+
+// ─── Units (§4.1) ────────────────────────────────────────────────────────────
+
+struct UnitExpr;
+using UnitPtr = std::unique_ptr<UnitExpr>;
+
+struct UnitExpr {
+    enum class Kind {
+        Dimensionless,  // (-)
+        One,            // the literal 1, as in (1/(kg*m^2))
+        Symbol,         // kg, m, %, degC …
+        Mul,
+        Div,
+        Pow,
+    };
+
+    Kind kind = Kind::Dimensionless;
+    std::string symbol;          // Symbol
+    UnitPtr lhs, rhs;            // Mul / Div
+    UnitPtr base;                // Pow
+    long exp_num = 1;            // Pow — rational exponent, e.g. m^(1/2)
+    long exp_den = 1;
+    Loc loc;
+};
+
+// ─── Expressions (§7.1) ──────────────────────────────────────────────────────
+
+struct Expr;
+using ExprPtr = std::unique_ptr<Expr>;
+
+struct Expr {
+    enum class Kind {
+        Number,   // literal, with an optional unit suffix
+        Param,    // param.<name>
+        Call,     // f(args…)
+        Name,     // a named constant: pi, e, inf
+        Unary,    // + -
+        Binary,   // + - * / ^
+    };
+
+    Kind kind = Kind::Number;
+    Loc loc;
+
+    double number = 0.0;
+    std::string text;            // Number: source spelling; Param/Call/Name: the name
+    UnitPtr unit;                // Number: optional unit suffix
+    char op = 0;                 // Unary / Binary
+    ExprPtr lhs, rhs;            // Binary; Unary uses lhs
+    std::vector<ExprPtr> args;   // Call
+};
+
+// ─── Types (§5) ──────────────────────────────────────────────────────────────
+
+// A port, field or var type: either `(unit): scalar` or `: RecordName`.
+struct TypeRef {
+    bool is_scalar = false;
+    UnitPtr unit;              // scalar only
+    std::string scalar;        // "double" | "float" | "int" | "bool", as written
+    Path record;               // record only
+    Loc loc;
+};
+
+// ─── Declarations inside a node ──────────────────────────────────────────────
+
+struct FieldDecl {            // inputs / outputs / vars / record fields
+    std::string name;
+    TypeRef type;
+    Loc loc;
+};
+
+struct SettingDecl {          // §6.2
+    std::string name;
+    TypeRef type;
+    ExprPtr default_value;    // null when the setting is required
+    Loc loc;
+};
+
+struct StateDecl {            // §6.4
+    bool is_continuous = false;
+    std::string name;
+    TypeRef type;
+    ExprPtr initial;          // the declared IC
+    Loc kind_loc;
+    Loc loc;
+};
+
+struct NativeDecl {           // §6.7 — the type text is verbatim C++
+    std::string name;
+    std::string cpp_type;
+    Loc loc;
+    Loc type_loc;
+};
+
+struct BuildStmt {            // §12.1
+    std::string primitive;    // link | include_dir | define | cflag
+    std::string argument;
+    std::string when;         // platform atom, empty when unconditional
+    Loc loc;
+    Loc when_loc;
+};
+
+struct Method {               // §8.1
+    enum class Which { Init, Output, Rates, OnStep, Final };
+    Which which = Which::Init;
+    std::vector<std::string> params;   // the feedthrough set for output()
+    std::vector<Loc> param_locs;
+    Verbatim body;
+    Loc loc;
+
+    const char* name() const {
+        switch (which) {
+            case Which::Init:   return "init";
+            case Which::Output: return "output";
+            case Which::Rates:  return "rates";
+            case Which::OnStep: return "on_step";
+            case Which::Final:  return "final";
+        }
+        return "?";
+    }
+};
+
+struct Helper {               // §11.4 — verbatim private member function
+    Verbatim signature;
+    Verbatim body;
+    Loc loc;
+};
+
+// ─── Structure (§6.9) ────────────────────────────────────────────────────────
+
+struct Binding {              // setting = expression;
+    std::string name;
+    ExprPtr value;
+    Loc loc;
+};
+
+struct Instance {             // node whl : Wheel { … };
+    std::string name;
+    Path definition;
+    std::vector<Binding> bindings;
+    Loc loc;
+};
+
+struct Endpoint {             // self.port | instance.port | instance.rec.field
+    bool is_self = false;
+    std::vector<std::string> segs;   // excludes the `self` head
+    Loc loc;
+
+    std::string str() const {
+        std::string s = is_self ? "self" : "";
+        for (std::size_t i = 0; i < segs.size(); ++i) {
+            if (i || is_self) s += '.';
+            s += segs[i];
+        }
+        return s;
+    }
+};
+
+struct Wire {                 // source --> dest, dest, …;
+    Endpoint source;
+    std::vector<Endpoint> dests;
+    Loc loc;
+};
+
+struct Structure {
+    std::vector<Instance> instances;
+    std::vector<Wire> wires;
+};
+
+// Presence + location of an at-most-once section (§6, SE0220).
+struct SectionMark {
+    bool present = false;
+    Loc loc;
+};
+
+// ─── Definitions ─────────────────────────────────────────────────────────────
+
+struct TypeDef {              // §5.2
+    std::string name;
+    std::vector<FieldDecl> fields;
+    Loc loc;
+};
+
+struct NodeDef {              // §6
+    std::string name;
+    Loc loc;
+
+    SectionMark sec_settings, sec_inputs, sec_outputs, sec_states, sec_vars;
+    SectionMark sec_native, sec_declarations, sec_build, sec_structure;
+
+    std::vector<SettingDecl> settings;
+    std::vector<FieldDecl> inputs;
+    std::vector<FieldDecl> outputs;
+    std::vector<FieldDecl> vars;
+    std::vector<StateDecl> states;
+    std::vector<NativeDecl> natives;
+    std::vector<BuildStmt> build;
+    Verbatim declarations;
+    Structure structure;
+    std::vector<Method> methods;
+    std::vector<Helper> helpers;
+
+    // Kind inference (§6.1). Reported, not stored as a decision: stage 3 owns
+    // the leaf/composite conflict check.
+    bool has_code() const {
+        return !methods.empty() || !helpers.empty() || sec_states.present ||
+               sec_vars.present || sec_native.present || sec_declarations.present;
+    }
+    bool is_composite() const { return sec_structure.present; }
+};
+
+struct UseDecl {
+    Path path;
+    Loc loc;
+};
+
+// A `.se` file (§2.5).
+struct ModelFile {
+    Path package;
+    bool has_package = false;
+    std::vector<UseDecl> uses;
+    std::vector<TypeDef> types;
+    std::vector<NodeDef> nodes;
+    // A package manifest (`package.se`, §2.6) carries only a file-level build block.
+    std::vector<BuildStmt> build;
+    SectionMark sec_build;
+};
+
+// ─── The sim file (§13) ──────────────────────────────────────────────────────
+
+struct RecordBlock {
+    std::string file;
+    bool has_file = false;
+    long every = 0;
+    bool has_every = false;
+    std::vector<Path> signals;
+    Loc loc;
+};
+
+struct LogBlock {
+    std::string file;
+    bool has_file = false;
+    std::string level;
+    bool has_level = false;
+    std::vector<std::pair<Path, std::string>> levels;
+    Loc loc;
+};
+
+struct SimEntry {
+    enum class Kind {
+        Root,      // root: Vehicle { … };
+        Value,     // step: 1 (ms);   every: 10;
+        Word,      // solver: rk4;    mode: realtime;
+        Text,      // settings: "file.settings";
+        Record,
+        Log,
+    };
+
+    Kind kind = Kind::Value;
+    std::string key;
+    Loc key_loc;
+    Loc loc;
+
+    Path root;                       // Root
+    std::vector<Binding> bindings;   // Root
+    ExprPtr value;                   // Value
+    std::string word;                // Word
+    std::string text;                // Text
+    RecordBlock record;              // Record
+    LogBlock log;                    // Log
+};
+
+struct SimFile {
+    std::string name;
+    Loc loc;
+    std::vector<SimEntry> entries;
+};
+
+// ─── The settings source (§14) ───────────────────────────────────────────────
+
+struct Override {
+    Path path;
+    ExprPtr value;
+    Loc loc;
+};
+
+struct SettingsFile {
+    std::vector<Override> overrides;
+};
+
+}  // namespace ast
+}  // namespace se
+
+#endif  // SE_AST_HPP

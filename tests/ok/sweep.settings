@@ -1,0 +1,8 @@
+// §14 — the flat override surface. Same grammar inline or in a file.
+total_mass                 = 1800 (kg);
+front.axle_mass            =  900 (kg);
+front.left.mass            =  340 (kg);
+front.left.velocity        =    2 (m/s);   // a state's initial value
+front.left.tc.slip_limit   = 0.08;
+mix.gain                   = 2.0 * pi;
+rear.left.radius           = 315 (mm);

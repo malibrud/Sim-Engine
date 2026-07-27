@@ -85,7 +85,7 @@ struct Wheel {
     }
 
     void output(const In_output& in, Out& out) const {
-#line 36 "examples/drivetrain/Wheel.se"
+#line 38 "examples/drivetrain/Wheel.se"
         auto surface_speed = state.omega * param.radius;
         out.ws.speed  = state.omega;
         out.ws.torque = in.drive_torque;
@@ -128,7 +128,7 @@ struct TractionController {
     }
 
     void output(const In_output& in, Out& out) const {
-#line 30 "examples/drivetrain/TractionController.se"
+#line 32 "examples/drivetrain/TractionController.se"
         out.torque_cut = state.cut;
     }
 

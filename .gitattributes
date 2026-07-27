@@ -1,0 +1,16 @@
+# Line endings are pinned, not left to core.autocrlf.
+#
+# The parser test suite compares recorded output byte for byte, and that output
+# includes verbatim-region byte counts and diagnostic caret columns. If a clone
+# checked out CRLF, every one of those numbers would shift and the whole suite
+# would fail for a reason that has nothing to do with the parser.
+
+* text=auto eol=lf
+
+# cmd mis-parses an LF-only batch file, so this one must be CRLF.
+*.bat text eol=crlf
+
+*.png binary
+*.exe binary
+*.obj binary
+*.pdb binary

@@ -1,0 +1,12 @@
+// SE0230 — omitting the state kind is an error, never a default. §6.4
+package tests;
+
+node Bad {
+    outputs { y (m/s): double; }
+    states {
+        omega (rad/s): double = 0.0;
+        continuous ok (m): double = 1.0;
+    }
+    rates()  { der.ok = 1.0; }
+    output() { out.y = state.ok; }
+}

@@ -1,0 +1,37 @@
+// Every sim-file entry, in one file. §13.
+sim Full {
+    root: tests.Vehicle {
+        total_mass = 1800 (kg);
+        ctl_rate   = 100.0;
+    };
+
+    step:     0.5 (ms);
+    solver:   rk4;
+    duration: 10 (s);
+    mode:     realtime;
+    sync:     10 (ms);
+    window:   2 (s);
+
+    settings: "sweep.settings";
+
+    record: {
+        file:  "run.csv";
+        every: 20;
+        signals {
+            front.left.out.force;
+            front.left.state.velocity;
+            mix.total;                 // bare, legal when unambiguous
+            sim.utilization;
+            sim.overrun_pct;
+        }
+    }
+
+    log: {
+        file:  "run.log";
+        level: info;
+        levels {
+            front.left: debug;
+            mix:        trace;
+        }
+    }
+}

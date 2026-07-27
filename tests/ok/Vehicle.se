@@ -1,0 +1,60 @@
+// Composite coverage: nested instances, declarative flow-down, fan-out in both
+// spellings, `self` on both sides of the boundary, and a file-private helper
+// node. SPECIFICATION.md §2.3, §6.9.
+package tests;
+
+node Vehicle {
+    settings {
+        total_mass (kg): double = 1500.0;
+        ctl_rate   (Hz): double = 100.0;
+    }
+    inputs {
+        throttle (-):   double;
+        road     (m/s): double;
+    }
+    outputs {
+        speed  (m/s): double;
+        report: Telemetry;
+    }
+
+    structure {
+        node front : Axle {
+            axle_mass = param.total_mass / 2.0;
+            rate      = param.ctl_rate;
+        };
+        node rear : Axle {
+            axle_mass = param.total_mass / 2.0;
+        };
+        node mix : Mixer;
+
+        // Fan-out as a comma list…
+        self.throttle --> front.demand, rear.demand;
+        // …and as repeated lines: the two desugar identically.
+        self.road --> front.ground_speed;
+        self.road --> rear.ground_speed;
+
+        front.torque --> mix.a;
+        rear.torque  --> mix.b;
+
+        mix.total  --> self.speed;
+        mix.report --> self.report;
+    }
+}
+
+// File-private: not addressable by any package path, visible only in this file.
+node Mixer {
+    inputs {
+        a (N*m): double;
+        b (N*m): double;
+    }
+    outputs {
+        total (N*m): double;
+        report: Telemetry;
+    }
+
+    output(a, b) {
+        out.total = in.a + in.b;
+        out.report.torque = in.a + in.b;
+        out.report.ok     = true;
+    }
+}

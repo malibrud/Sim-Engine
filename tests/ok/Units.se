@@ -1,0 +1,41 @@
+// Unit-expression and elaboration-expression coverage. SPECIFICATION.md §4.1, §7.
+// Nothing here is unit-CHECKED yet — that is stage 4 — but every shape the
+// grammar admits must parse and round-trip.
+package tests;
+
+use std.mech.Damper;
+use std.mech;
+
+node Units {
+    settings {
+        // Derived settings: an expression over the same node's other settings.
+        total_mass  (kg):        double;
+        corner_mass (kg):        double = param.total_mass / 4.0;
+
+        // Unit shapes.
+        inertia     (kg*m^2):    double = 0.9;
+        inv_inertia (1/(kg*m^2)): double = 1.0;
+        jerk        (m/s^3):     double = 0.0;
+        visc        (kg/m/s):    double = 1.8e-5;
+        area_rt     (m^(1/2)):   double = 1.0;
+        decay       (s^-1):      double = 0.5;
+        ratio       (-):         double = 0.25;
+        duty        (%):         double = 40.0;
+        heading     (deg):       double = 90.0;
+
+        // A literal may carry its own unit and be converted at elaboration.
+        limit       (m/s):       double = 130 (km/h);
+
+        // The full expression language: precedence, builtins, constants.
+        omega       (rad/s):     double = 2.0 * pi * 50.0;
+        diag        (m):         double = hypot(3.0, 4.0);
+        scaled      (m):         double = -2.0^2 + max(1.0, 2.0) / (3.0 - 1.0);
+        rooted      (m):         double = sqrt(param.corner_mass / 4.0) * 1.0;
+        flat        (-):         double = 2.0^3.0^2.0;
+    }
+    outputs {
+        y (-): double;
+    }
+
+    output() { out.y = param.ratio; }
+}

@@ -1,0 +1,51 @@
+// ─────────────────────────────────────────────────────────────────────────────
+//  Experiment configuration for the drivetrain example.  SPECIFICATION.md §13.
+//
+//  Kept separate from the model on purpose: one model gets run many ways, and
+//  if this lived in the node, swapping experiments would mean editing the model.
+//
+//  Paths are RELATIVE TO THE ROOT and do not name the root itself, so the
+//  200 Hz controller's discrete state is `tc.cut`, not `<root>.tc.cut`.
+// ─────────────────────────────────────────────────────────────────────────────
+
+sim Drivetrain {
+    root: drivetrain.Corner {
+        wheel_inertia = 0.9 (kg*m^2);
+    };
+
+    step:     1 (ms);        // the global fixed base step
+    solver:   rk4;           // global, not per-node
+    duration: 5 (s);
+
+    mode:     realtime;
+    sync:     10 (ms);       // real-time frame: 10 base steps free-run, then spin
+    window:   1 (s);         // trailing window for the live metrics
+
+    // Same grammar as an inline settings string, just carried in a file.
+    settings: "drivetrain.settings";
+
+    record: {
+        file:  "drivetrain.csv";
+        every: 10;           // 100 Hz in the file, off a 1 kHz base step
+
+        signals {
+            // Internals are addressable directly — no pass-through outputs
+            // need to be invented just to observe a state.
+            whl.state.omega;
+            whl.out.ws.slip;
+            tc.state.cut;
+            tc.out.torque_cut;
+
+            // The engine's own real-time metrics land in the same table, which
+            // is what identifies WHICH manoeuvre blows the timing budget.
+            sim.utilization;
+            sim.overrun_pct;
+        }
+    }
+
+    log: {
+        file:  "drivetrain.log";
+        level: info;
+        levels { tc: debug; }
+    }
+}

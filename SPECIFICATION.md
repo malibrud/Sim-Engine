@@ -1,749 +1,2132 @@
-# sim-engine — Design Specification
+# The sim-engine Model Language
 
-**A continuous / system-dynamics simulation engine for C and C++.**
+**Specification, version 0.1 (draft) — 2026-07-27**
 
-Version 0.1.0 · Status: Draft · Normative API: [`include/sim.h`](include/sim.h)
-
----
-
-## 1. Purpose and scope
-
-`sim-engine` numerically integrates systems of ordinary differential equations
-(ODEs) over time. It targets the *continuous / system-dynamics* modeling
-paradigm: a model's state evolves according to time-derivative relationships,
-integrated forward by a numerical solver. Classic use cases include physical
-dynamics (mechanics, circuits, thermal), control systems, and system-dynamics
-stock-and-flow models (population, epidemiology, economics).
-
-The engine is written in C (C99) with a stable C ABI, and ships an optional
-thin C++ wrapper (§13) for ergonomic model authoring. The numeric core has no
-dependencies beyond the C standard library.
-
-### 1.1 Design goals
-
-1. **Correctness and reproducibility.** Bit-identical results for identical
-   inputs, integrator, and configuration — across runs, platforms sharing IEEE
-   754 double, and thread counts. Stochastic models are reproducible from a seed.
-2. **Separation of concerns.** *Models* declare dynamics; *integrators* advance
-   state; the *driver* orchestrates time, events, and I/O. These three are
-   independently testable and swappable.
-3. **Small, predictable hot path.** No allocation, no locking, and no dynamic
-   dispatch inside a step beyond the integrator vtable and the model callbacks.
-4. **Composability.** Small models compose into larger ones via typed ports and
-   connections, with automatic execution-order resolution.
-5. **Embeddability.** A flat C ABI with caller-owned memory, suitable for
-   linking into larger applications, real-time loops, or language bindings.
-
-### 1.2 Non-goals
-
-- Full differential-algebraic equation (DAE) solving with implicit constraints
-  (only ODEs with explicit algebraic *outputs* are in scope; see §4.2).
-- Partial differential equations / spatial discretization (out of scope; a PDE
-  reduces to an ODE system via the user's own method-of-lines and is then in
-  scope as an opaque state vector).
-- Symbolic model compilation or a modeling language (à la Modelica). Models are
-  authored as C callbacks or via the composition API (§9).
-- Automatic differentiation. Jacobians for stiff solvers are supplied by the
-  model or approximated by finite differences (§7.5).
+A plain-text language for describing hierarchical, node-based simulation models,
+lowered ahead of time to dependency-free C++17.
 
 ---
 
-## 2. Mathematical foundation
+## Table of contents
 
-### 2.1 State-space form
-
-A model is a first-order ODE system with algebraic outputs and optional event
-indicators:
-
-```
-    dx/dt = f(t, x, u)      state derivatives   (x ∈ ℝⁿˣ)
-    y     = g(t, x, u)      outputs             (y ∈ ℝⁿʸ)
-    z     = h(t, x, u)      event indicators    (z ∈ ℝⁿᶻ)
-```
-
-- `t` is simulation time, `x` the continuous state vector, `u` the input vector.
-- `f` **must** be a pure function of `(t, x, u)`: integrators evaluate it at
-  trial points that are *not* on the accepted trajectory, so it may carry no
-  hidden per-step state. Parameters and instance data live in the model's
-  opaque `ctx` and are constant across a step.
-- Higher-order systems are reduced to first order by state augmentation. A
-  second-order system `q̈ = a(t, q, q̇)` becomes `x = [q, q̇]`,
-  `f = [q̇, a(t, q, q̇)]`.
-
-### 2.2 System-dynamics mapping
-
-Stock-and-flow models map directly onto this form: **stocks** are states `x`,
-**flows** are the derivative terms in `f`, and **auxiliaries/converters** are
-intermediate quantities computed inside `f` (or exposed as outputs `y`). A stock
-with inflow `in` and outflow `out` contributes `dx_i/dt = in − out`.
-
-### 2.3 Hybrid dynamics (state and time events)
-
-Purely continuous integration cannot represent discontinuities (a ball bouncing,
-a switch flipping, a valve opening). The engine models these as **events**:
-
-- **State events** occur when an indicator `z_i(t, x, u)` crosses zero. The
-  driver detects the sign change over a step and localizes the crossing time
-  `t*` (§7.4). At `t*` the model's `handle_event` may apply a discontinuous
-  **reset** to `x` (e.g. negate a velocity). Between events the trajectory is
-  continuous and the solver's order assumptions hold.
-- **Time events** are scheduled instants (e.g. a controller sampling at 100 Hz).
-  They are modeled as forced step boundaries (the driver caps `h` so a step
-  lands exactly on the event time).
-
-This "integrate → detect → localize → reset → restart" cycle is the standard
-hybrid-system semantics; it keeps each continuous segment smooth so adaptive
-error control remains valid.
-
-### 2.4 Stochastic extension (SDEs)
-
-For stochastic models `dx = f(t,x,u) dt + σ(t,x,u) dW`, the engine supplies a
-counter-based RNG (§8) that generates Wiener increments deterministically from
-`(seed, stream_id, step_index)`. The Euler–Maruyama scheme is the recommended
-fixed-step method; adaptive control is *not* meaningful for the stochastic term
-and must be disabled (use a fixed-step integrator). SDE support is a convention
-layered on the deterministic core, not a distinct solver.
+1. [Scope and conformance](#1-scope-and-conformance)
+2. [Program structure](#2-program-structure)
+3. [Lexical structure](#3-lexical-structure)
+4. [Units](#4-units)
+5. [Types](#5-types)
+6. [Node definitions](#6-node-definitions)
+7. [The elaboration expression language](#7-the-elaboration-expression-language)
+8. [Lifecycle methods and execution semantics](#8-lifecycle-methods-and-execution-semantics)
+9. [Time model and scheduling](#9-time-model-and-scheduling)
+10. [Builtins](#10-builtins)
+11. [Verbatim C++ regions](#11-verbatim-c-regions)
+12. [Build metadata](#12-build-metadata)
+13. [The sim file](#13-the-sim-file)
+14. [The settings source](#14-the-settings-source)
+15. [Lowering to C++](#15-lowering-to-c)
+16. [Diagnostics](#16-diagnostics)
+17. [Grammar summary](#17-grammar-summary)
+18. [Appendix A — Unit symbols](#appendix-a--unit-symbols)
+19. [Appendix B — Reserved words](#appendix-b--reserved-words)
+20. [Appendix C — Known gaps and open issues](#appendix-c--known-gaps-and-open-issues)
 
 ---
 
-## 3. Architecture
+## 1. Scope and conformance
 
-Four layers, each depending only on those below it:
+### 1.1 What this document specifies
 
-```
-        ┌──────────────────────────────────────────────┐
-        │  Experiment layer                            │   parameter sweeps,
-        │  (scenarios, sweeps, batch orchestration)    │   ensembles, sensitivity
-        └──────────────────────────────────────────────┘
-        ┌──────────────────────────────────────────────┐
-        │  Driver / orchestration                      │   sim_run: time loop,
-        │  (time stepping, events, observers, inputs)  │   event detection, logging
-        └──────────────────────────────────────────────┘
-        ┌───────────────────────┬──────────────────────┐
-        │  Integrators          │  Composition         │   RK4, RK45(DP), backward
-        │  (sim_integrator)     │  (sim_composer)      │   Euler; port wiring + sort
-        └───────────────────────┴──────────────────────┘
-        ┌──────────────────────────────────────────────┐
-        │  Numeric core & model interface              │   sim_model, sim_ode_system,
-        │  (vectors, RNG, status, scalar config)       │   sim_rng, sim_real
-        └──────────────────────────────────────────────┘
-```
+This document specifies the **surface language** — three file kinds and their
+meaning:
 
-- **Numeric core** defines scalar types (`sim_real`, `sim_time`), the model
-  vtable, the ODE-system closure integrators consume, status codes, and the RNG.
-- **Integrators** implement a single `step()` contract (§6) and know nothing
-  about models, events, or I/O.
-- **Composition** turns a graph of submodels into one flat `sim_model`.
-- **Driver** (`sim_run`) owns the time loop, event handling, input evaluation,
-  and observer callbacks.
-- **Experiment layer** is thin, built entirely on top of `sim_run` (§10).
+| Kind | Extension | Contents |
+|---|---|---|
+| Model file | `.se` | Exactly one public `node` or `type` declaration, plus optional file-private helpers. |
+| Sim file | `.sim` | One `sim` declaration: the run/experiment configuration. |
+| Settings source | `.settings` | A flat list of path-addressed setting and initial-condition overrides. |
 
-The key architectural seam is `sim_ode_system` (§6.1): the driver binds the
-current inputs `u` into a flat `rhs(t, x) → dx/dt` closure, so integrators never
-see the model, and models never see the integrator.
+It also specifies the **shape of the lowering** (§15) to the extent that the
+generated code is a public contract — the state-vector layout, the unit manifest,
+and the accessor names that verbatim C++ bodies may rely on.
 
----
+### 1.2 Design invariants
 
-## 4. Model interface
+These hold everywhere in this document; a rule that appears to contradict one of
+them is a defect in this document.
 
-Defined by `sim_model` and `sim_model_vtable` in [`include/sim.h`](include/sim.h).
+- **I1 — The compiler never parses C++.** Wherever C++ appears it is a
+  *verbatim region*, delimited by bracket matching or by a terminator, copied
+  through untouched. There is no C++ front end, no libclang, and no subset
+  checker.
+- **I2 — Enforcement is by scoping and typing, not by analysis.** Purity,
+  feedthrough, and I/O confinement are enforced by *what the generator puts in
+  scope of a body* and by `const`, so a violating body is rejected by the C++
+  compiler, with `#line` directives pointing back to the `.se` source.
+- **I3 — Units are checked in the DSL and erased at the boundary.** Generated
+  C++ is plain `double`. Every declarative site (port, wire, setting, state,
+  record field, sim-file value) is dimensionally checked and converted at
+  elaboration; body arithmetic is not checked. The unit manifest (§15.6) carries
+  the erased information out.
+- **I4 — Everything is discrete at the base step.** One global fixed step, one
+  global solver, per-node rates as integer decimations. A "continuous" node is a
+  base-rate node that happens to have integrated states.
+- **I5 — Generated identifiers are the generator's business.** Users write only
+  model paths. Nothing at the language level constrains emitted names.
 
-### 4.1 Structure
+### 1.3 Conformance and stage boundaries
 
-```c
-typedef struct sim_model {
-    const char             *name;
-    sim_index               n_x, n_u, n_y, n_z;
-    bool                    direct_feedthrough;   /* does y depend on u? */
-    void                   *ctx;                   /* model-owned instance data */
-    const sim_model_vtable *vt;
-} sim_model;
-```
+A conforming implementation processes a program in these stages. This document
+marks rules with the earliest stage that can detect a violation, because the
+parser described in §17 and shipped in `src/` implements stages 1–2 only.
 
-Dimensions are fixed for the model's lifetime. `ctx` holds parameters and any
-persistent instance data; the engine treats it as opaque.
+| Stage | Name | Detects |
+|---|---|---|
+| 1 | **Lexical** | Bad characters, unterminated literals/comments, unbalanced verbatim regions. |
+| 2 | **Syntactic** | Grammar violations, misplaced sections, duplicate sections. |
+| 3 | **Resolution** | Unknown names, file/name mismatch, root collisions, duplicate members. |
+| 4 | **Elaboration** | Unit mismatches, required-setting omissions, setting cycles, non-divisor rates, instantiation. |
+| 5 | **Scheduling** | Feedthrough sort, algebraic loops, rate/active-set construction. |
+| 6 | **Emission** | Code, unit manifest, slot map, build script. |
 
-### 4.2 Callbacks and their contract
+Stages 3–6 are specified here but are **not** implemented by the current parser.
+Where this document says *"is an error"* without qualification, the stage column
+in §16.4 gives the detecting stage.
 
-| Callback           | Required        | Contract |
-|--------------------|-----------------|----------|
-| `init`             | optional        | Write `x0[0..n_x)`. Called once at `t_start`. NULL ⇒ state zero-initialized. |
-| `derivatives`      | **required**    | Write `dxdt[0..n_x)`. Pure in `(t,x,u)`. Called multiple times per step. |
-| `outputs`          | if `n_y>0`      | Write `y[0..n_y)`. If `direct_feedthrough` is false, may ignore `u`. |
-| `event_indicators` | if `n_z>0`      | Write `z[0..n_z)`. Continuous in `(t,x,u)`. |
-| `handle_event`     | if `n_z>0`      | May overwrite `x` (reset). Return `true` if it did (forces solver restart). |
-| `terminate`        | optional        | Cleanup. Called once after the run or on error. |
+### 1.4 Terminology
 
-**Purity rule.** `derivatives`, `outputs`, and `event_indicators` must not
-mutate observable state (including `ctx` fields that affect results). The engine
-relies on this to call `derivatives` at rejected/trial points. Caching that is
-transparent (memoization keyed on inputs) is permitted; anything else is a bug.
-
-**Ownership.** All array arguments are engine-owned scratch, valid only for the
-duration of the call. Callbacks must not retain pointers to them.
-
-**Direct feedthrough.** `direct_feedthrough == true` declares that `y` depends
-on `u` in the same instant (an algebraic path input→output). The composer uses
-this to order execution and detect algebraic loops (§9.3). A pure integrator
-block (output = a state) has no feedthrough and should set it false.
-
-### 4.3 Minimal model (illustrative)
-
-Exponential decay `ẋ = −k·x`, one state, no inputs/outputs/events:
-
-```c
-typedef struct { sim_real k; sim_real x0; } decay_params;
-
-static void decay_init(void *c, sim_time t0, sim_real *x0) {
-    (void)t0; x0[0] = ((decay_params*)c)->x0;
-}
-static void decay_deriv(void *c, sim_time t, const sim_real *x,
-                        const sim_real *u, sim_real *dx) {
-    (void)t; (void)u; dx[0] = -((decay_params*)c)->k * x[0];
-}
-static const sim_model_vtable DECAY_VT = { decay_init, decay_deriv, 0,0,0,0 };
-
-sim_model make_decay(decay_params *p) {
-    sim_model m = {0};
-    m.name = "decay"; m.n_x = 1; m.ctx = p; m.vt = &DECAY_VT;
-    return m;
-}
-```
-
-Full worked examples are in §11 and `examples/`.
+- **Definition** — a `node` or `type` declaration. Lowers to a C++ class/struct.
+- **Instance** — a `node name : Definition { … };` statement inside a
+  `structure` block. Lowers to an object (leaf) or to nothing (composite).
+- **Leaf** — a node with code. **Composite** — a node with children and wires.
+- **Port** — an entry in `inputs` or `outputs`.
+- **Elaboration** — the compile-time evaluation that folds settings, resolves
+  the hierarchy, and produces the flat runtime model.
+- **Base step** — the global fixed time step. **Tick** — one base step.
+- **Frame** — the real-time synchronisation interval (`sync`), an integer
+  multiple of the base step.
+- **Sample instant** — a tick on which a given node is active.
 
 ---
 
-## 5. Time, state, and the simulation loop
+## 2. Program structure
 
-### 5.1 The driver algorithm
+### 2.1 Files, roots, and packages
 
-`sim_run` implements the following loop. `x` is the accepted state, `t` the
-accepted time. `u` is re-evaluated wherever `f`, `g`, or `h` are needed.
+A **root** is a directory declared to the compiler from outside the language
+(command line or project manifest), exactly like a C++ include directory. There
+is no in-language root declaration and no environment variable — roots come from
+an explicit, checked-in list, so builds are reproducible.
 
-```
-initialize model → x, at t = t_start
-evaluate u(t_start); compute y; notify observer(t_start)
-h ← cfg.h
-while t < t_stop and no stop requested:
-    h ← clamp(h, h_min, h_max)
-    h ← min(h, t_stop − t)                      # never overshoot the end
-    h ← min(h, next_output_time − t)            # land on output samples
-    h ← min(h, next_time_event − t)             # land on scheduled events
-
-    bind u(t) into the ODE closure                                 # (§6.1)
-    status ← integrator.step(sys, t, h, x, x_trial, &err, &h_next) # (§6)
-
-    if adaptive and err > 1:                     # local error too large
-        h ← h_next                               # shrink and retry (no accept)
-        if h < h_min: return SIM_ERR_STEP_TOO_SMALL
-        continue
-
-    if cfg.detect_events:                        # (§7.4)
-        z0 ← h(t,   x,       u)
-        z1 ← h(t+h, x_trial, u)
-        if sign_change(z0, z1):
-            t*, x* ← localize_crossing(...)      # bracket + refine to event_tol
-            fired  ← which indicators crossed
-            reset? ← model.handle_event(t*, x*, u, fired)
-            t ← t*;  x ← x*
-            if reset?: integrator.reset()        # discard multistep history
-            notify observer(t*)                  # event sample
-            continue                             # restart from the event
-
-    t ← t + h;  x ← x_trial                      # accept the step
-    if adaptive: h ← h_next
-    if reached an output sample:
-        compute y ← g(t, x, u);  notify observer(t)
-
-notify observer(t_stop); call model.terminate; return result
-```
-
-Notes:
-
-- **Output decoupling.** The logging cadence (`output_dt`) is independent of the
-  integration step. With adaptive stepping the solver may take large or small
-  steps internally while the observer still sees a uniform time grid, because the
-  loop caps `h` to land exactly on each sample. `output_dt == 0` logs every
-  accepted step (useful for debugging step-size behavior).
-- **Non-finite guard.** After each step the driver checks `x_trial` for NaN/Inf
-  and returns `SIM_ERR_NONFINITE` rather than propagating garbage.
-- **Determinism.** The loop contains no wall-clock timing, no unordered
-  iteration, and no allocation. Given the same model, integrator, and `cfg`, the
-  exact sequence of `f`/`g`/`h` evaluations is fixed (§8.1).
-
-### 5.2 Working memory
-
-`sim_run` allocates one contiguous scratch arena at entry sized from the model
-dimensions and integrator requirements: state buffers (`x`, `x_trial`), input
-buffer `u`, output buffer `y`, two indicator buffers `z0`/`z1`, and the
-integrator's stage scratch. Nothing is allocated inside the loop. The arena is
-freed before return (including on error paths, after `terminate`).
-
----
-
-## 6. Integrators
-
-### 6.1 The ODE-system seam
-
-Integrators operate on a flat closure, never on models:
-
-```c
-typedef void (*sim_rhs_fn)(void *ctx, sim_time t, const sim_real *x, sim_real *dxdt);
-typedef struct sim_ode_system { sim_index n; sim_rhs_fn rhs; void *ctx; } sim_ode_system;
-```
-
-The driver constructs this by capturing the current input vector `u`: the
-closure's `ctx` bundles `{model, u}` and its `rhs` calls
-`model.vt->derivatives(model.ctx, t, x, u, dxdt)`. Because `u` is held fixed for
-the duration of a step, evaluating `f` at RK trial stages is well-defined.
-(Input *derivatives* within a step are not modeled; inputs are piecewise
-constant over a step and updated at step boundaries. Choose `h ≤ output_dt` when
-input smoothness matters.)
-
-### 6.2 The step contract
-
-```c
-sim_status step(sim_integrator *self, const sim_ode_system *sys,
-                sim_time t, sim_real h,
-                const sim_real *x_in, sim_real *x_out,
-                sim_real *err_out, sim_real *h_next);
-```
-
-- Advances `x_in` over `[t, t+h]` → `x_out` (must not alias `x_in`).
-- **Fixed-step** methods ignore tolerances; set `*err_out = 0`, `*h_next = h`.
-- **Adaptive** methods write to `*err_out` the tolerance-normalized RMS local
-  error estimate (see §6.4) and to `*h_next` the suggested next step. The driver
-  accepts the step iff `*err_out ≤ 1`.
-- Either out-pointer may be NULL (driver not requesting that information).
-
-### 6.3 Built-in methods
-
-| Factory                     | Method                     | Order | Adaptive | Best for |
-|-----------------------------|----------------------------|:-----:|:--------:|----------|
-| `sim_integrator_euler`      | Explicit (forward) Euler   | 1     | no       | teaching, very cheap, non-stiff |
-| `sim_integrator_heun`       | Heun / explicit trapezoid  | 2     | no       | cheap improvement over Euler |
-| `sim_integrator_rk4`        | Classic Runge–Kutta        | 4     | no       | smooth non-stiff, fixed grid (default) |
-| `sim_integrator_rk45`       | Dormand–Prince 5(4)        | 5(4)  | **yes**  | general non-stiff with error control |
-| `sim_integrator_beuler`     | Backward (implicit) Euler  | 1     | no       | stiff systems (Newton inner solve) |
-
-The default recommendation is **RK4** for smooth non-stiff models on a fixed grid
-and **RK45** when the dynamics have widely varying time scales but are non-stiff.
-For stiff systems (fast decaying modes forcing tiny explicit steps), use
-`beuler`, which is L-stable and unconditionally stable for linear decay.
-
-### 6.4 Adaptive step-size control (RK45)
-
-Dormand–Prince produces a 5th-order solution and an embedded 4th-order estimate
-from the same 7 stage evaluations (FSAL: the last stage is reused as the first
-of the next step, so effective cost is 6 evaluations/step). The local error per
-component is scaled by a mixed absolute/relative tolerance:
+Within a root, **the directory path is the package path**, and the package path
+is the C++ namespace path:
 
 ```
-sc_i  = atol + rtol · max(|x_in_i|, |x_out_i|)
-err   = sqrt( mean_i ( (x5_i − x4_i) / sc_i )² )        # tolerance-normalized RMS
+<root>/drivetrain/Wheel.se        ->  package drivetrain, node drivetrain.Wheel
+<root>/std/mech/Damper.se         ->  package std.mech, node std.mech.Damper
 ```
 
-The step is accepted iff `err ≤ 1`. The next step is proposed with the standard
-PI-free controller and safety factor:
+The **standard library is one root** shipped with the toolchain, with no special
+status: `std` is an ordinary package name, not reserved. Its "version" is
+whatever is on disk at that path; pinning is delegated to whatever already
+manages filesystem contents (vendoring, a submodule), not to a DSL-native
+package-version resolver.
+
+**Root collisions.** A package path that resolves in more than one root is an
+error (`SE0305`). A root may be marked `override` in the manifest, which permits
+it to shadow nodes at the same path in earlier roots. Shadowing is therefore
+always a declared, visible act — never silent search-order behaviour.
+
+### 2.2 The `package` declaration
+
+Every `.se` file begins with a `package` declaration:
 
 ```
-h_next = h · clamp( SAFETY · err^(−1/(p+1)),  MIN_SCALE,  MAX_SCALE )
+package drivetrain;
 ```
 
-with `SAFETY = 0.9`, `MIN_SCALE = 0.2`, `MAX_SCALE = 5.0`, `p = 4` (embedded
-order). Rejected steps shrink `h` and retry without advancing `t`. `h` is always
-clamped to `[h_min, h_max]`; hitting `h_min` on a rejection returns
-`SIM_ERR_STEP_TOO_SMALL`.
+It is **redundant with the file's location and checked against it**: the declared
+path must equal the file's directory path relative to the root that resolved it.
+A mismatch is an error (`SE0301`). The declaration exists so that a reader — or a
+grep — can see a file's package without reconstructing the root set; location
+remains the identity.
 
-### 6.5 Implicit method (backward Euler)
+`.sim` and `.settings` files have no `package` declaration. They are not library
+members and are named by filesystem path only.
 
-`x_{n+1} = x_n + h·f(t_{n+1}, x_{n+1})` is solved for `x_{n+1}` by a damped
-Newton iteration. The Jacobian `J = ∂f/∂x` is obtained by forward finite
-differences (perturbation `√eps · max(|x_i|, 1)`) unless the model supplies an
-analytic Jacobian via an extension hook (future: `jacobian` callback). The
-iteration stops when `‖Δx‖ ≤ newton_tol` or after a bounded iteration count; a
-non-convergence returns `SIM_ERR_EVENT_UNCONVERGED`-class failure via the step's
-status. Backward Euler is only order 1; it is intended for stability on stiff
-problems, not high accuracy.
+### 2.3 One public declaration per file
 
-### 6.6 Adding a custom integrator
-
-Implement the vtable and expose a factory returning a `sim_integrator*` whose
-first member is the vtable pointer. The struct may carry arbitrary scratch (stage
-buffers sized to `n`). Custom integrators compose with the driver and events
-identically to built-ins; multistep methods should honor `reset()` by discarding
-accumulated history (the driver calls it after every state reset).
-
----
-
-## 7. Events and discontinuities
-
-### 7.1 Why events
-
-Naively integrating across a discontinuity corrupts a solver's error estimate and
-order: the Taylor expansions underlying RK methods assume smoothness over the
-step. The engine therefore stops integration at each discontinuity, applies the
-model's reset, and restarts — so every integrated segment is smooth.
-
-### 7.2 State events
-
-Declared via `n_z > 0` and the `event_indicators` callback. An event of type `i`
-fires when `z_i` crosses zero. Indicators must be *continuous* in `(t, x, u)` so
-that a sign change reliably brackets a root. (A boolean "is contact" flag is a
-poor indicator; `z = height` is a good one.)
-
-### 7.3 Reset semantics
-
-At a localized event the driver calls `handle_event(t*, x*, u, fired)`. The model
-inspects `fired[i]` and may overwrite `x*` to encode the discontinuity (e.g.
-`v ← −e·v` for a bounce with restitution `e`). Returning `true` signals the state
-changed, prompting `integrator.reset()` and a fresh start from `(t*, x*)`. The
-event instant is reported to the observer as its own sample.
-
-### 7.4 Zero-crossing localization
-
-When `sign(z_i(t)) ≠ sign(z_i(t+h))` for some `i`, the driver has a bracket
-`[t, t+h]`. It refines the crossing time by **Illinois-modified regula falsi** on
-the interpolated indicator, re-integrating a trial step from the accepted `x` to
-each candidate time (dense output from the integrator is used when available;
-otherwise a fresh short step). Refinement stops when the bracket width
-`≤ event_tol` or `event_max_iter` is reached (then `SIM_ERR_EVENT_UNCONVERGED`).
-When several indicators cross in one step, the **earliest** crossing is handled
-first; the loop then restarts and re-detects the rest.
-
-### 7.5 Time events
-
-A model or the experiment layer registers scheduled times (e.g. periodic
-controller updates). The driver caps `h` so a step lands exactly on the next
-scheduled time, then processes it like a state event with a synthetic indicator.
-This gives sample-accurate discrete control interleaved with continuous dynamics.
-
----
-
-## 8. Determinism and reproducibility
-
-### 8.1 Deterministic execution
-
-Given identical `(model, integrator, cfg, input_fn)`:
-
-- The driver performs no wall-clock-dependent decisions and no unordered
-  traversal. Step acceptance depends only on the numeric error estimate.
-- Floating-point results are bit-identical on any platform using IEEE-754 double
-  with the same rounding mode, provided the compiler does not reassociate or
-  contract operations differently. Build with `-ffp-contract=off` (or the MSVC
-  `/fp:precise` equivalent) and avoid `-ffast-math` to guarantee cross-platform
-  bit-reproducibility. Within a single build, results are always reproducible.
-- Parallel parameter sweeps (§10) are embarrassingly parallel and independent;
-  each run's result is identical whether executed alone or alongside others.
-
-### 8.2 Stochastic reproducibility
-
-Randomness comes only from `sim_rng`, a **counter-based** generator (Philox-style
-mixing of a 64-bit key and counter). A substream is derived by
-`sim_rng_make(seed, stream_id)`. Because output is a stateless function of
-`(key, ctr)`, a model can reconstruct the exact same random draw for a given
-`(seed, stream_id, step_index)` regardless of evaluation order or thread. This is
-what makes stochastic runs reproducible *and* safely parallelizable — unlike a
-shared mutable PRNG whose sequence depends on interleaving.
-
-Recommended pattern for an SDE model: derive one stream per noise source at
-`init` from `cfg.seed`; index the counter by step number to produce the Wiener
-increment `ΔW = √h · N(0,1)` deterministically.
-
----
-
-## 9. Composition
-
-Small models compose into a larger one through `sim_composer`
-([`include/sim.h`](include/sim.h)). The result is an ordinary `sim_model` — the
-driver and integrators are unaware composition happened.
-
-### 9.1 Ports and connections
-
-Each submodel exposes `n_u` input ports and `n_y` output ports (indexed
-`0..n-1`). `sim_composer_connect(c, src, sp, dst, dp)` wires output port `sp` of
-subsystem `src` to input port `dp` of subsystem `dst`. Unconnected inputs are
-driven by the composite's exported inputs or default to zero. Exported inputs and
-outputs (via `sim_composer_export_input/output`) become the composite model's own
-`u`/`y`.
-
-### 9.2 Flattened state
-
-The composite's state vector is the concatenation of its submodels' states in
-registration order: `x = [x⁰ | x¹ | … ]`. `n_x` of the composite is the sum. The
-composite `derivatives` callback slices `x`, evaluates each submodel's inputs from
-the connection graph, calls each submodel's `derivatives`, and reassembles `dxdt`.
-There is no per-step allocation: the composer preallocates the port and slice
-buffers at build time.
-
-### 9.3 Execution order and algebraic loops
-
-Within one instant, a submodel with `direct_feedthrough` needs its inputs
-computed before its outputs. The composer builds a dependency graph over
-feedthrough paths and **topologically sorts** submodels so that every
-feedthrough input is available when needed. A cycle of feedthrough connections is
-an **algebraic loop** — a system of implicit algebraic equations the ODE engine
-does not solve — and `sim_composer_build` returns `SIM_ERR_ALGEBRAIC_LOOP`. The
-usual fix is to insert a state (integrator/delay) with no feedthrough to break
-the cycle, which is almost always physically correct. Purely
-non-feedthrough connections (output = a state) never form loops and impose no
-ordering constraint on `derivatives`.
-
-### 9.4 Build
-
-`sim_composer_build` validates the graph, performs the sort, allocates the flat
-buffers, and fills an `out_model` whose `ctx`/`vt` are owned by the composer.
-The composer must outlive any run of the built model; `sim_composer_free`
-releases everything.
-
----
-
-## 10. Experiment layer (parameter sweeps, ensembles)
-
-The experiment layer is a thin convenience over `sim_run`; it introduces no new
-core concepts.
-
-- **Single run.** Configure a `sim_model` + `sim_integrator` + `sim_config`, call
-  `sim_run`, collect results through an observer.
-- **Parameter sweep.** Vary fields of the model's `ctx` (parameters) across a
-  grid; run each combination. Each run is independent — the recommended pattern
-  is one `sim_model`/`ctx`/`integrator` triple per worker thread (they hold
-  mutable scratch and must not be shared across threads mid-run).
-- **Monte-Carlo ensemble.** Fix parameters, vary `cfg.seed` (or the per-run
-  `stream_id` offset); aggregate observer output across realizations.
-- **Sensitivity.** Finite-difference the quantity of interest with respect to a
-  parameter by running the model at `θ` and `θ+Δθ`.
-
-Because runs are deterministic and side-effect-free, the layer parallelizes with
-any thread pool; results do not depend on scheduling.
-
----
-
-## 11. Worked examples
-
-Each example is summarized here; runnable sources are under `examples/`. See
-§11.6 for the shared output/observer pattern.
-
-### 11.1 Exponential decay — the minimal model
-*(`examples/exponential_decay.c`)*
-
-`ẋ = −k·x`, `x(0) = x₀`. One state, closed-form solution `x(t) = x₀ e^{−kt}` for
-validation. Demonstrates the smallest possible model and the fixed-step RK4 path.
-Use it as the correctness canary: RK4 at `h = 0.01`, `k = 1` matches the analytic
-solution to ~1e-9 over `[0, 10]`.
-
-### 11.2 Lotka–Volterra predator–prey — coupled nonlinear system dynamics
-*(`examples/lotka_volterra.c`)*
+A `.se` file contains exactly one **public** declaration, whose name must equal
+the file's base name. Any further `node` or `type` declarations in the same file
+are **file-private**: visible to the rest of that file, invisible to every other
+file, and not addressable by any package path.
 
 ```
-    ẋ = α·x − β·x·y          (prey)
-    ẏ = δ·x·y − γ·y          (predator)
+// Wheel.se
+package drivetrain;
+
+node Wheel { … }          // public: the name matches the file
+node WheelFriction { … }  // file-private helper
 ```
 
-Two coupled states, no closed form, a conserved quantity
-`V = δx − γ ln x + βy − α ln y` that the integrator should keep nearly constant.
-Demonstrates: a multi-state system-dynamics model, and using the conserved
-quantity to compare integrators (Euler drifts and spirals; RK4/RK45 stay on the
-closed orbit). A classic stock-and-flow reading: two stocks (populations) with
-flows proportional to encounter rate `x·y`.
+A file with no declaration whose name matches its base name is an error
+(`SE0302`). Two public declarations cannot occur, because only one name can
+match.
 
-### 11.3 SIR epidemic — stock-and-flow with conservation
-*(inline below; also `examples/` as a variant)*
+### 2.4 `use` declarations
+
+`use` declarations follow `package` and precede all definitions.
 
 ```
-    Ṡ = −β·S·I / N
-    İ =  β·S·I / N − γ·I
-    Ṙ =  γ·I
+use std.mech.Damper;      // per-symbol: bare `Damper` in this file
+use std.mech;             // package alias: `mech.Damper` in this file
 ```
 
-Three stocks (Susceptible, Infected, Recovered) with `N = S+I+R` conserved. The
-basic reproduction number is `R₀ = β/γ`. This is the archetypal system-dynamics
-model: flows between compartments, an invariant (`Ṡ+İ+Ṙ = 0`) usable as a
-correctness check, and a parameter (`R₀`) whose value qualitatively changes the
-trajectory (epidemic vs. die-out). A natural sweep: vary `β` and observe peak
-infected and final epidemic size.
+- **Per-symbol import** binds the last segment as a bare name.
+- **Package alias import** binds the last segment as a package alias; members
+  are then named `alias.Member`.
+- **No wildcard imports.** `use std.mech.*` is rejected (`SE0210`) so that every
+  name's origin is traceable from the `use` block, and so a later stdlib
+  addition can never silently capture or collide with an existing name.
+- A fully-qualified name may always be used without any `use`.
+- Importing a name that collides with a file-private declaration, with another
+  import, or with a definition in the file is an error (`SE0303`).
 
-```c
-typedef struct { sim_real beta, gamma, N; sim_real S0, I0, R0; } sir_params;
-
-static void sir_init(void *c, sim_time t0, sim_real *x0) {
-    sir_params *p = c; (void)t0;
-    x0[0] = p->S0; x0[1] = p->I0; x0[2] = p->R0;
-}
-static void sir_deriv(void *c, sim_time t, const sim_real *x,
-                      const sim_real *u, sim_real *dx) {
-    sir_params *p = c; (void)t; (void)u;
-    sim_real S = x[0], I = x[1];
-    sim_real infect = p->beta * S * I / p->N;
-    sim_real recover = p->gamma * I;
-    dx[0] = -infect;
-    dx[1] =  infect - recover;
-    dx[2] =  recover;
-}
-static const sim_model_vtable SIR_VT = { sir_init, sir_deriv, 0, 0, 0, 0 };
-```
-
-### 11.4 Bouncing ball — state events and resets
-*(`examples/bouncing_ball.c`)*
+### 2.5 Declaration order
 
 ```
-    ḣ = v,   v̇ = −g          with event  z = h  (ground contact)
-    on event:  v ← −e·v,  h ← 0        (restitution e ∈ (0,1))
+compilation_unit := package_decl { use_decl } { definition }
 ```
 
-Two states `[h, v]`, one event indicator `z = h`. Demonstrates the full hybrid
-cycle: the indicator brackets ground contact, `handle_event` reflects and damps
-the velocity, and the solver restarts. Correct localization is visible as clean
-bounces whose peak heights decay geometrically by `e²`; without event handling,
-fixed-step integration lets the ball sink through the floor. A good stress test
-for `event_tol` and for the earliest-crossing rule as bounces bunch up (Zeno
-behavior — cap total events or stop when `|v|` at contact falls below a threshold).
+Within the definitions there is **no ordering requirement** — a node may
+reference a definition that appears later in the file, or in a package that
+imports it back. Resolution is whole-program (stage 3), not single-pass.
 
-### 11.5 Mass–spring–damper + PID — composition and control
-*(inline sketch; composition via `sim_composer`)*
+### 2.6 Package manifest files
 
-A plant `m·q̈ + c·q̇ + k·q = F` (state `[q, q̇]`, output `q`, **no** feedthrough)
-in closed loop with a PID controller (input = error `r − q`, output = force `F`,
-**with** feedthrough through the proportional term). Wiring:
+A file named `package.se` in a package directory is a **package manifest**. It
+declares no node or type; it may contain only a `package` declaration, `use`
+declarations, and a `build` block (§12). Its purpose is to let a package act as
+a **dependency bundle** — a named collection of build primitives that any model
+can pull in by depending on the package.
 
 ```
-   reference r ──► (+) ──► [ PID ] ──F──► [ Plant ] ──q──┬──► output
-                    ▲                                     │
-                    └─────────────── −q ◄─────────────────┘
-```
+// <root>/vendor/openssl/package.se
+package vendor.openssl;
 
-The PID's integral term is itself a state, so the closed loop has three states
-total. The proportional path is direct feedthrough (controller output depends on
-current error which depends on plant output), but the plant has no feedthrough
-(its output `q` is a state, independent of `F` in the same instant) — so the loop
-is **not** algebraic and the composer sorts it as `Plant.outputs → error →
-PID.outputs → derivatives`. This is the canonical demonstration of §9.3: physical
-plants break algebraic loops precisely because their measured outputs are states.
-
-### 11.6 Shared observer pattern
-
-Every example logs through a `sim_observer` that writes `t` and selected states
-to CSV (or accumulates into arrays for a sweep). Because the driver caps `h` to
-land on `output_dt` boundaries, the CSV has a uniform time grid regardless of the
-integrator's internal stepping:
-
-```c
-static sim_status csv_observer(void *ctx, sim_time t,
-                               const sim_real *x, const sim_real *y) {
-    FILE *f = ctx; (void)y;
-    fprintf(f, "%.9g,%.9g\n", t, x[0]);
-    return SIM_OK;
+build {
+    include_dir "third_party/openssl/include";
+    link "libssl"    when windows;
+    link "libcrypto" when windows;
+    link "ssl"       when linux;
+    link "crypto"    when linux;
 }
 ```
 
----
-
-## 12. Error handling and diagnostics
-
-- Every driver-visible failure is a `sim_status`; `sim_run` returns it in
-  `sim_result.status` alongside step/event/evaluation counters for diagnosis.
-- `sim_status_str` maps codes to human-readable strings.
-- The non-finite guard (§5.1) converts silent NaN propagation into an explicit
-  `SIM_ERR_NONFINITE`, reported at the first step that produced it — invaluable
-  for catching a divide-by-zero in `derivatives`.
-- `SIM_STOP_REQUESTED` from an observer or `handle_event` is a *clean* early
-  termination, not an error: `sim_result` still reports the state reached.
-- Counters (`steps_accepted`, `steps_rejected`, `rhs_evals`) expose solver
-  behavior: a high rejection ratio signals tolerances too tight or unhandled
-  stiffness; a rejection ratio near zero with visible error signals tolerances
-  too loose.
+`package.se` is the only `.se` file exempt from §2.3.
 
 ---
 
-## 13. C++ layer (optional)
+## 3. Lexical structure
 
-A header-only C++ wrapper provides RAII and templated model authoring without
-changing the ABI:
+### 3.1 Source text
 
-- `sim::Model` — a CRTP base so a model is a class with `derivatives(...)`,
-  `outputs(...)` methods; the wrapper generates the vtable and forwards `this`
-  as `ctx`. Eliminates the boilerplate casts seen in §4.3.
-- `sim::Integrator` — an RAII owner of `sim_integrator*` (calls `destroy` in its
-  destructor).
-- `sim::run(model, integrator, config, observer)` — accepts a
-  `std::function`/lambda observer.
+A source file is a sequence of bytes interpreted as UTF-8. Outside comments,
+string literals, and verbatim regions, only the ASCII subset is significant; a
+non-ASCII byte elsewhere is an error (`SE0101`).
 
-The wrapper is strictly additive: it emits the same C structs and calls
-`sim_run`, so C++-authored models and C-authored models interoperate and compose.
+Line terminators are LF, CRLF, or CR; all three count as one line break. A file
+need not end with a line break.
+
+Horizontal whitespace is space and tab. **The language is not
+whitespace-significant**; line breaks are ordinary whitespace and never
+terminate a statement. Statements are terminated by `;` or by a closing brace.
+
+### 3.2 Comments
+
+```
+// to end of line
+/* block, does not nest */
+```
+
+An unterminated block comment is an error (`SE0102`). Comments inside verbatim
+regions belong to the verbatim text and are copied through, but are still
+recognised as comments for the purpose of bracket matching (§11.2).
+
+### 3.3 Identifiers
+
+```
+identifier := ( letter | '_' ) { letter | digit | '_' }
+letter     := 'A'…'Z' | 'a'…'z'
+digit      := '0'…'9'
+```
+
+Identifiers are case-sensitive, with no length limit. A leading underscore is
+permitted but discouraged in port and setting names, since those names appear in
+recorded CSV headers and in the unit manifest.
+
+### 3.4 Keywords
+
+Only these words are **reserved** everywhere:
+
+```
+package  use  type  node  self
+settings inputs outputs states vars native structure declarations build
+continuous discrete
+init output rates on_step final
+sim
+```
+
+Everything else that reads like a keyword in this document is **contextual** —
+recognised by position, and usable as an ordinary identifier elsewhere. That
+includes:
+
+- the build primitives `link`, `include_dir`, `define`, `cflag`, the tag keyword
+  `when`, and the platform atoms — contextual inside `build`;
+- every sim-file key (`root`, `step`, `solver`, `duration`, `mode`, `sync`,
+  `window`, `record`, `log`, `file`, `every`, `signals`, `level`, `levels`) —
+  contextual inside `sim`;
+- the accessor prefixes (`param`, `in`, `out`, `state`, `der`, `next`, `var`)
+  and the builtin namespaces (`log`, `sim`) — these live in **C++ scope inside
+  verbatim bodies**, not in the DSL's token stream, so they are not DSL keywords
+  at all. They are, however, unavailable as member names (§6.11).
+
+Keeping this set small is deliberate: adding a sim-file key or a build primitive
+must never invalidate an existing model that used that word as a port name.
+
+### 3.5 Number literals
+
+```
+number   := integer | decimal
+integer  := digit { digit }
+decimal  := digit { digit } '.' { digit } [ exponent ]
+          | '.' digit { digit } [ exponent ]
+          | digit { digit } exponent
+exponent := ( 'e' | 'E' ) [ '+' | '-' ] digit { digit }
+```
+
+There are no type suffixes, no digit separators, no hexadecimal, and no octal. A
+literal has no inherent type: it is converted to the declared type of the site it
+initialises, and rejected if that conversion is lossy for an integer target
+(`SE0402`).
+
+Numbers inside verbatim C++ regions are C++'s business and are not lexed by these
+rules — with one exception noted in §11.2, where digit separators interact with
+character-literal scanning.
+
+### 3.6 String literals
+
+```
+string := '"' { char | escape } '"'
+escape := '\' ( '"' | '\' | 'n' | 'r' | 't' | '0' )
+```
+
+A string literal may not span a line break; an unterminated literal is an error
+(`SE0103`). An unrecognised escape is an error (`SE0104`) rather than being
+passed through, so that adding escapes later is not a silent behaviour change.
+
+### 3.7 Punctuation and operators
+
+```
+{  }  (  )  ;  ,  :  .  =  -->  +  -  *  /  ^  %
+```
+
+`-->` is a single token. The lexer is maximal-munch, so `-->` always wins over
+`-` `-` `>`; a lone `>` is not a token in this language and is an error
+(`SE0105`) outside verbatim regions. `%` occurs only as a unit symbol (§4.1).
+
+### 3.8 Verbatim regions
+
+Two constructs introduce text the lexer does not tokenise:
+
+| Construct | Extent | § |
+|---|---|---|
+| Lifecycle method body, helper function, `declarations { … }` | Balanced braces | §11.2 |
+| `native` member type text | To the terminating `;` | §11.3 |
+
+Verbatim regions are scanned, not lexed: the scanner tracks nesting and line
+numbers but produces a single token carrying the region's text and its start
+position.
 
 ---
 
-## 14. Performance and threading
+## 4. Units
 
-- **Hot path.** No allocation, no locking, no I/O inside the step. Cost per
-  accepted step is `(stages × n)` flops for the RK combination plus `stages`
-  model `derivatives` calls; the model dominates for nontrivial `f`.
-- **Memory layout.** State, stage, and scratch vectors are contiguous
-  `sim_real[n]` arrays for cache efficiency and straightforward SIMD by the
-  compiler; the engine imposes no AoS/SoA choice on the model's own data.
-- **Threading model.** A `sim_model` (with its mutable `ctx` scratch) and a
-  `sim_integrator` (with stage buffers) are **not** thread-safe for concurrent
-  use within one run. Parallelism is *across* runs: give each worker its own
-  model/integrator instances (§10). The core takes no locks.
-- **Real-time use.** Fixed-step integrators (`euler`, `heun`, `rk4`, `beuler`)
-  have deterministic per-step cost and no allocation after `sim_run` entry,
-  suitable for soft-real-time loops; adaptive methods have variable per-step cost
-  and are unsuitable for hard-real-time deadlines.
+Units are **semantic, first-class, and mandatory** on every scalar declaration.
+They are checked by full dimensional analysis at every declarative site, with
+automatic conversion, and then erased (I3).
+
+### 4.1 Syntax
+
+A unit annotation is a parenthesised unit expression:
+
+```
+unit         := '(' unit_expr ')'
+unit_expr    := '-'                                  // dimensionless
+              | unit_term { ( '*' | '/' ) unit_term }
+unit_term    := unit_factor [ '^' unit_exponent ]
+unit_factor  := '1' | unit_symbol | '(' unit_expr ')'
+unit_exponent:= [ '-' ] integer
+              | '(' [ '-' ] integer [ '/' integer ] ')'
+unit_symbol  := identifier | '%'
+```
+
+`*` and `/` are left-associative and of equal precedence, so `(kg/m/s)` is
+kg·m⁻¹·s⁻¹. Use parentheses for anything else: `(1/(kg*m^2))`.
+
+Examples, all from working models:
+
+```
+(m)  (kg)  (s)  (rad/s)  (m/s^2)  (N*m)  (kg*m^2)  (1/(kg*m^2))  (-)  (%)
+(km/h)  (deg)  (Hz)  (m^(1/2))
+```
+
+### 4.2 Dimensions and equivalence
+
+A unit expression evaluates to a **dimension** — a rational exponent vector over
+the seven SI base dimensions — together with a **scale factor** and, for a few
+units, an **offset**. Two units are *compatible* iff their dimension vectors are
+equal. `(-)`, `(1)`, and `(%)` are all dimensionless; `(%)` carries scale 1/100.
+
+Compatible units convert automatically, and the conversion folds to a
+compile-time constant. `(m/s)` → `(km/h)` multiplies by 3.6 at elaboration and
+costs nothing at run time. Incompatible units are a hard error (`SE0410`) with
+both dimensions spelled out.
+
+**Offset units** (`degC`, `degF`) are accepted only where a conversion is
+unambiguous — as the declared unit of a setting, state, port, or field, and as
+the unit of a literal. They are rejected inside a compound unit expression
+(`SE0411`), because `(degC/s)` is ambiguous between a temperature and a
+temperature *difference*.
+
+### 4.3 Where units are checked
+
+Every one of these is a declarative site, checked at stage 4:
+
+1. A setting default expression against the setting's declared unit.
+2. A setting binding at instantiation against the child setting's unit.
+3. A state default against the state's unit.
+4. A wire: the producing port's unit against the consuming port's — per field,
+   for records.
+5. A sim-file or `.settings` value against its target's unit.
+6. A recorded signal's unit, for the CSV header and the manifest.
+
+**Derivative units are derived, never declared.** `continuous omega (rad/s)`
+implies `der.omega` is `(rad/s^2)`. Declaring a unit for a derivative is a syntax
+error — there is no place in the grammar to put one.
+
+### 4.4 What is *not* checked
+
+Arithmetic inside a verbatim C++ body is not dimension-checked. This is a
+deliberate, accepted cost:
+
+- In-body checking was the sole job a units library would have had in the
+  generated code, and it gets bypassed in practice. Real leaf bodies call
+  `<cmath>`, lookup tables, Eigen, vendor SDKs, and pasted legacy code, all of
+  which speak `double`. Empirical fits — a Pacejka tyre model, say — have no
+  honest dimensions at all. The pattern degenerates to *strip → compute →
+  re-attach*, where the only surviving check is whether you spelled the same
+  unit symbol twice.
+- The value curve is inverted: typing pays most on the one-line physics leaf
+  where you were least likely to err, and nothing in the long body where the
+  bugs actually live.
+
+The compensations are real generator outputs, not documentation: the **unit
+manifest** (§15.6) and a trailing unit comment on every emitted declaration.
+
+The choice is **reversible**. The DSL retains full unit information, so
+re-introducing typed bodies later is a codegen change plus a header — not a
+redesign.
+
+### 4.5 Known limitation: angle
+
+`(deg)` and `(rad)` are dimensionally identical (both dimensionless), so
+dimensional analysis **cannot** catch a radians/degrees mix-up — a common,
+expensive real-world bug. Treating angle as a distinct base dimension would catch
+it but is physically wrong and breaks identities like (m/s) = (m)·(rad/s). This
+is unresolved; see Appendix C.
 
 ---
 
-## 15. Conformance and validation
+## 5. Types
 
-An implementation conforms to this specification if:
+### 5.1 Scalar types
 
-1. It exposes the ABI in [`include/sim.h`](include/sim.h) with the documented
-   semantics for every callback and driver behavior.
-2. **Order verification.** For a smooth linear test problem, each fixed-step
-   integrator exhibits its stated order `p`: halving `h` reduces global error by
-   ~`2^p` (Euler ≈2×, Heun ≈4×, RK4 ≈16×). RK45 holds global error near the
-   requested tolerance across a range of `rtol`.
-3. **Conservation.** For Lotka–Volterra (§11.2) and SIR (§11.3), the respective
-   invariants are preserved to within the integrator's expected error over the
-   run.
-4. **Event correctness.** For the bouncing ball (§11.4), successive peak heights
-   decay by `e²` and contact times match the analytic sequence to within
-   `event_tol`.
-5. **Determinism.** Repeated runs are bit-identical; a stochastic run reproduces
-   exactly from its seed; a parallel sweep matches a serial sweep element-for-
-   element.
+The scalar type set is closed:
 
-A conformance test suite exercising 1–5 is the recommended acceptance gate for
-any change to the numeric core.
+| DSL type | C++ type | Notes |
+|---|---|---|
+| `double` | `double` | The only type permitted for a `continuous` state. |
+| `float` | `float` | |
+| `int` | `int` | |
+| `bool` | `bool` | Must be declared `(-)`. |
+
+A scalar declaration is always `name (unit): type;` — the unit is not optional,
+and `(-)` is how you spell dimensionless. Requiring it makes an omission a syntax
+error rather than an unnoticed dimensionless default.
+
+### 5.2 Record types
+
+A `type` declaration defines a record that travels over a wire as one value:
+
+```
+// WheelState.se
+package drivetrain;
+
+type WheelState {
+    speed  (rad/s): double;   // wheel angular velocity
+    torque (N*m):   double;   // net torque applied this step
+    slip   (-):     double;   // longitudinal slip ratio
+}
+```
+
+- A record field line is **syntactically identical to a scalar port line**, so a
+  port is either `name (unit): ctype;` or `name: TypeName;`. One grammar, two
+  shapes.
+- Fields may themselves be records; a cycle in the field graph is an error
+  (`SE0310`).
+- Records lower to a plain C++ struct with one member per field, each annotated
+  with its unit as a comment and listed in the manifest's `[types]` section.
+- Records may appear as `inputs`, `outputs`, and `vars`. They may **not** be
+  `settings` (settings are scalars, because the flow-down expression language is
+  scalar) or `states` (the solver ABI is a flat `double` vector).
+
+### 5.3 What a wire carries
+
+A wire carries **the whole record**. Whether a wire may ever carry a single
+field —
+
+```
+whl.ws.speed --> tc.u;     // reserved, not currently legal
+```
+
+— is deliberately still open. The grammar in §17 accepts a multi-segment endpoint
+path so that the eventual decision is not a grammar change; stage 3 currently
+rejects any endpoint with more than one segment after the instance (`SE0311`).
 
 ---
 
-## 16. Glossary
+## 6. Node definitions
 
-| Term | Meaning |
-|------|---------|
-| **State** `x` | Continuous variables integrated over time (stocks). |
-| **Derivative** `f` | Rate of change of state; the model's core dynamics (flows). |
-| **Output** `y` | Algebraic function of state/inputs, for observation or wiring. |
-| **Input** `u` | External signal into a model (from a source or a connection). |
-| **Event indicator** `z` | Continuous function whose zero-crossing triggers an event. |
-| **Reset** | Discontinuous change to state applied at an event. |
-| **Direct feedthrough** | Output depends on input in the same instant. |
-| **Algebraic loop** | A cycle of feedthrough paths with no intervening state. |
-| **Stiff** | Dynamics with fast-decaying modes that force tiny explicit steps. |
-| **Substream** | An independent, seed-derived RNG sequence for reproducibility. |
-| **FSAL** | "First Same As Last": reuse of the final RK stage as the next first. |
+```
+node Wheel {
+    settings { … }
+    inputs   { … }
+    outputs  { … }
+    states   { … }
+    vars     { … }
+    native   { … }
+    declarations { … }
+    build    { … }
+    structure { … }
+
+    init()      { … }
+    output(…)   { … }
+    rates(…)    { … }
+    on_step(…)  { … }
+    final(…)    { … }
+
+    double helper(double x) const { … }   // verbatim private member
+}
+```
+
+Sections may appear in any order. Each may appear **at most once**; a repeat is
+an error (`SE0220`) rather than being merged, so that a section's contents are
+always contiguous and reviewable in one place.
+
+### 6.1 Leaf or composite, never both
+
+There is exactly one `node` concept, and its kind is **inferred**:
+
+- A node with any lifecycle method, helper function, `states`, `vars`, `native`,
+  or `declarations` is a **leaf**.
+- A node with a `structure` block is a **composite**.
+- A node with both is an error (`SE0320`).
+- A node with neither is a **stub**: legal, and useful as a placeholder, but it
+  must have no outputs, since nothing could compute them.
+
+A composite **declares no states and no code**. Its state is the union of its
+descendants'. That falls directly out of the design intent — a group node "just
+groups and aggregates" and should never do real work — and it is what lets the
+composite leave no runtime trace at all (§15.2).
+
+There is no separate `model` keyword. A composite *is* a node, which is exactly
+what gives arbitrary-depth hierarchy: today's model is tomorrow's subsystem with
+no edit.
+
+An explicit kind assertion is permitted as a **checked assertion only**, never as
+a declaration that changes meaning.
+
+### 6.2 `settings`
+
+```
+settings {
+    inertia     (kg*m^2): double;                           // required
+    radius      (m):      double = 0.31;                    // default
+    corner_mass (kg):     double = param.total_mass / 4.0;  // derived
+}
+```
+
+- A setting with **no default is required**: every instantiation must bind it,
+  checked statically at stage 4 (`SE0420`).
+- A default is an expression in the elaboration language (§7). It may reference
+  **other settings of the same node** via `param.*`, which makes settings a
+  dependency graph requiring a topological sort; a cycle is an error (`SE0421`).
+- Derived settings behave the way a reader expects: overriding `total_mass`
+  recomputes `corner_mass`; overriding `corner_mass` pins it.
+- Settings are **fixed at elaboration**. There is no two-phase init, no runtime
+  reparameterisation, and no way for a parent to reach into a child at run time.
+
+**Reserved setting: `rate`.** A node may declare
+
+```
+settings { rate (Hz): double = 200.0; }
+```
+
+`rate` is an ordinary setting in every respect — declared, defaulted, bound at
+instantiation, flowed down — except that the scheduler consumes it (§9.2) and it
+produces **no runtime member**. If declared, it must have unit `(Hz)` and type
+`double` (`SE0422`). A node that does not declare `rate` runs at the base step.
+
+### 6.3 `inputs` and `outputs`
+
+```
+inputs {
+    drive_torque (N*m): double;      // scalar port
+    ws:                 WheelState;  // record port
+}
+outputs {
+    torque_cut (N*m): double;
+}
+```
+
+Ports have no default and no initialiser: an input's value comes from its wire,
+an output's from `output()`.
+
+- **Fan-out is allowed**; **fan-in is forbidden** (§6.9.2).
+- An unconnected input is an error at stage 4 (`SE0430`) — there is no implicit
+  zero. An unconnected *output* is fine; it is simply unread.
+- Port order matters only for readability. Nothing positional exists.
+
+### 6.4 `states`
+
+**One `states` section holds both kinds, and the kind keyword is mandatory.**
+
+```
+states {
+    continuous omega (rad/s): double = 0.0;
+    discrete   cut   (N*m):   double = 0.0;
+    discrete   ticks (-):     int    = 0;
+}
+```
+
+Omitting `continuous`/`discrete` is an error (`SE0230`), not a default. There is
+deliberately **no preferred state kind**: a default would privilege one, and the
+two differ genuinely in write mechanism, in schedule, and in their relationship
+to the solver.
+
+| | write accessor | written in | in the solver state vector |
+|---|---|---|---|
+| `continuous` | `der.<name>` | `rates()` | **yes** |
+| `discrete` | `next.<name>` | `on_step()` | no |
+
+- The **write accessor is symmetric and separately enforced.** The generated
+  `Der` struct carries only continuous fields and the `Next` struct only discrete
+  ones, so `der.ticks` and `next.omega` are "no such member" compile errors with
+  no body parsing whatsoever (I2).
+- **`next.` means simultaneous update.** A direct `state.x = …` mutation would be
+  *sequential*, making results depend on statement order inside `on_step()`. With
+  `next.`, every discrete state reads the old value and writes the new one, which
+  is what the state-space form x⁺ = h(t,x,u) actually says. The lowering uses a
+  separate `Next` buffer plus a generated `commit()`.
+- Only `double` may be `continuous` (`SE0431`); the state vector is a flat
+  `double` array.
+- **The declared default is the initial condition.** There is no separate
+  `initial` section — ICs ride the one override channel (§13.4). `init()` is the
+  escape hatch for a computed or equilibrium IC.
+- Discrete states earn their place over `vars` precisely via that IC channel: a
+  declarative default plus a sim-file override, which `vars` never had.
+
+### 6.5 `vars`
+
+```
+vars { inertia_inv (1/(kg*m^2)): double; }
+```
+
+Per-instance persistent storage that is **not state**: private C++ members,
+outside the solver vector and outside the override channel.
+
+- **Readable in every method; writable only in `init()` and `on_step()`.**
+- A `var` needs no default; it is zero-initialised and is expected to be computed
+  in `init()`.
+- Records are permitted as `vars`.
+
+The write restriction is the same rule as everywhere else in §8: `output()` and
+`rates()` are evaluated four times per RK4 step at trial states the trajectory
+never visits. A peak detector written as
+
+```
+output() { var.max_v = max(var.max_v, state.velocity); }   // rejected
+```
+
+would report a maximum that never physically happened and that changes with the
+solver. Confining writes to `on_step()` makes that unrepresentable.
+
+### 6.6 `declarations`
+
+```
+declarations {
+    #include <cmath>
+    #include "vendor/tyre_model.h"
+    namespace { constexpr double kEps = 1e-9; }
+}
+```
+
+Verbatim C++ emitted at **file scope, before the class**, wrapped in a generated
+include guard so it lands exactly once regardless of how many times the node is
+instantiated. This is the home for `#include`s, free functions, file-local
+constants, and helper types.
+
+A node with a `declarations` block is a leaf (§6.1).
+
+### 6.7 `native`
+
+Opaque C++ members the DSL cannot type — sockets, device objects, vendor SDK
+state:
+
+```
+native {
+    sock: SOCKET;
+    dev:  std::unique_ptr<Device>;
+    port: Serial{"COM3", 115200};    // RAII: ctor at construction
+}
+```
+
+- **Its own section, not a `vars` escape hatch.** Natives are not quantities:
+  they have no unit, are not recordable, never enter the state vector, and are
+  outside the override channel. A separate section keeps every rule about `vars`
+  exception-free instead of growing an "unless it's opaque" carve-out.
+- **The type text is a verbatim region scanned to the terminating `;`** (§11.3),
+  so there is no quoting, no `>>` ambiguity, and no C++ parsing (I1).
+- An optional C++ initialiser — brace, paren, or `=` form — makes RAII work with
+  no `final()` boilerplate.
+- **Bodies refer to natives by their bare name** (`sendto(sock, …)`, not
+  `native.sock`), because native C++ should feel natural. This does not unwind
+  the accessor design of §6.10: the prefixes exist because one name can be both
+  a state and an output, and a native has no such twin.
+- **Natives are in scope only in `init()`, `on_step()`, and `final()`.** In
+  `output()` and `rates()` the generator simply does not emit the alias, so the
+  name is undeclared and the C++ compiler says so, with `#line` pointing at the
+  `.se` line. The reason is in §8.4. Note that `const` cannot do this job: a
+  `const SOCKET` is still perfectly usable by `recv()`, so the purity mechanism
+  that works for `double` members leaks entirely for handles, and scoping is what
+  plugs it.
+
+A node with a `native` section is a leaf.
+
+### 6.8 `build`
+
+Build metadata is declared first-class; see §12.
+
+### 6.9 `structure`
+
+A composite's children and wiring:
+
+```
+structure {
+    node whl : Wheel {
+        inertia = param.wheel_inertia;   // declarative flow-down
+    };
+    node tc : TractionController {
+        rate       = 200.0;
+        slip_limit = 0.10;
+    };
+
+    self.axle_torque  --> whl.drive_torque;
+    self.ground_speed --> whl.ground_speed;
+
+    whl.ws --> tc.ws, self.ws;           // fan-out; one record on one wire
+
+    tc.torque_cut --> self.torque_cut;
+}
+```
+
+#### 6.9.1 Instances
+
+```
+instance := 'node' identifier ':' qualified_name [ '{' { binding } '}' ] ';'
+binding  := identifier '=' expression ';'
+```
+
+- The trailing `;` after the closing brace is **required** — it terminates the
+  statement the same way a port declaration's does, and it makes recovery after a
+  malformed binding list unambiguous.
+- Bindings are **declarative** (§7): each right-hand side is a side-effect-free
+  expression over literals, the enclosing node's `param.*`, arithmetic, and
+  builtin math, evaluated at elaboration and unit-checked.
+- **No cross-instance references.** `mass = fl.mass` is illegal (`SE0440`).
+  Flow-down goes strictly parent → child.
+- Binding an unknown setting, or binding one twice, is an error (`SE0441`).
+
+Why declarative and not imperative: under an imperative scheme, every group node
+would need hand-written C++ solely to pass a number down, which contradicts §6.1
+— a group node does no work. Declarative flow-down also keeps settings fixed at
+elaboration, needs no two-phase init, and makes required settings statically
+checkable.
+
+#### 6.9.2 Wires
+
+```
+wire     := endpoint '-->' endpoint { ',' endpoint } ';'
+endpoint := ( 'self' | identifier ) '.' identifier { '.' identifier }
+```
+
+- `-->` is the connection token; `;` terminates.
+- **A composite wires its own ports with `self.`** — `self.throttle --> eng.throttle`
+  and `drv.speed --> self.speed`. Bare names would collide with child instance
+  names.
+- **Fan-out** has two equivalent spellings — repeated lines, or a comma list on
+  one line. They desugar identically.
+- **Fan-in is forbidden.** Two sources into one input is an error (`SE0442`);
+  insert an explicit `Sum` node. This is what makes the single-writer wire
+  lowering sound (§15.3).
+- **Wires are untyped in the syntax.** There is no type annotation on a
+  connection; the type is a property of the ports and is checked, with unit
+  conversion inserted, at stage 4.
+- Direction is always source → destination. An output-to-output or
+  input-to-input wire is an error (`SE0443`), except through `self`, where
+  `self.<input>` is a source and `self.<output>` is a destination — the boundary's
+  polarity is inverted from the inside, as it must be.
+
+### 6.10 Accessors
+
+Inside a verbatim body, node data is reached through **namespaced accessors**:
+
+| Accessor | Readable in | Writable in |
+|---|---|---|
+| `param.<name>` | every method | never |
+| `in.<name>` | methods that declare it | never |
+| `out.<name>` | — | `output()` |
+| `state.<name>` | every method | `init()` |
+| `der.<name>` | — | `rates()` |
+| `next.<name>` | — | `on_step()` |
+| `var.<name>` | every method | `init()`, `on_step()` |
+| bare name (`native`) | `init`, `on_step`, `final` | same |
+
+The prefixes are not decoration. They exist because **one name can legitimately
+be both a state and an output** — `velocity` as an integrated state and as a
+published output is the single most common node shape in this domain — so bare
+names would be ambiguous exactly where clarity matters most.
+
+These tokens **survive verbatim into the generated C++** and are resolved there as
+struct member accesses. That is a direct consequence of I1: the compiler cannot
+rewrite `in.drive_torque` into a mangled name because it never parses the body,
+so objects with exactly these names must be in scope. Which in turn is what rules
+out a naive "one giant class, every wire and state a member" flattening — it would
+put everything in scope of every body and destroy both enforcement mechanisms.
+
+### 6.11 Name collisions
+
+Within one node, these share a namespace and must be mutually distinct: settings,
+inputs, outputs, vars, natives, and instance names. **States are in a separate
+namespace from outputs, and only from outputs** — a state and an output may share
+a name; everything else collides (`SE0330`).
+
+A member may not be named `param`, `in`, `out`, `state`, `der`, `next`, `var`,
+`log`, or `sim`, since the generated code puts objects by those names in scope of
+bodies (`SE0331`).
+
+### 6.12 Consistency rules
+
+Typo safety comes from these rules rather than from a marker keyword on
+functions:
+
+| If the node has… | it must define… | else |
+|---|---|---|
+| `outputs` | `output()` | `SE0340` |
+| any `continuous` state | `rates()` | `SE0341` |
+| any `discrete` state | `on_step()` | `SE0342` |
+
+The converse is also checked: `rates()` in a node with no continuous states
+(`SE0343`) and `output()` in a node with no outputs (`SE0344`) are errors, since
+neither could do anything.
+
+`init()` and `final()` are always optional. Note that these rules are per-kind,
+not blanket: a purely continuous node needs no `on_step()`, and a purely
+algebraic node needs no `rates()`.
 
 ---
 
-## 17. Open questions / future work
+## 7. The elaboration expression language
 
-- **Analytic Jacobian hook** for `beuler` and future implicit multistep (BDF)
-  methods, to replace finite-difference Jacobians on stiff, large-`n` systems.
-- **Dense output** (continuous interpolant) as a first-class part of the
-  integrator vtable, improving event localization and off-grid sampling.
-- **DAE support** (index-1) for models with genuine algebraic constraints, which
-  currently must be reformulated as ODEs.
-- **Unit / dimension metadata** on ports for connect-time checking.
-- **Checkpointing** the driver arena for save/restore and rollback beyond the
-  single-step event restart.
+A small, total, side-effect-free expression language, evaluated once at
+elaboration. It appears in exactly four places: setting defaults, setting
+bindings at instantiation, state defaults, and sim-file / `.settings` values.
+
+### 7.1 Grammar
+
+```
+expression     := additive
+additive       := multiplicative { ( '+' | '-' ) multiplicative }
+multiplicative := unary { ( '*' | '/' ) unary }
+unary          := ( '+' | '-' ) unary | power
+power          := primary [ '^' unary ]              // right-associative
+primary        := number [ unit ]
+                | 'param' '.' identifier
+                | identifier '(' [ expression { ',' expression } ] ')'
+                | identifier                          // named constant
+                | '(' expression ')'
+```
+
+Precedence, loosest to tightest: `+ -` · `* /` · unary `+ -` · `^`. So `-2^2` is
+−4 and `2^3^2` is 2⁹, matching ordinary mathematical convention.
+
+### 7.2 Values and units
+
+Every value is a real number with a dimension.
+
+- A literal with a unit suffix — `1500 (kg)` — has that unit.
+- A **bare literal takes the unit of the site it initialises**. `radius = 0.31`
+  where `radius` is `(m)` means 0.31 m. That keeps the common case clean; write
+  the unit when you want the conversion, as in `speed_limit = 130 (km/h)` binding
+  a `(m/s)` setting.
+- Arithmetic combines dimensions: `*` and `/` add and subtract exponent vectors;
+  `+` and `-` require compatible dimensions and convert the right operand to the
+  left's unit; `^` requires an integer or rational literal exponent and
+  multiplies the exponent vector.
+- The final value is converted to the target's declared unit, or rejected
+  (`SE0410`).
+
+### 7.3 Builtin functions and constants
+
+| | |
+|---|---|
+| Constants | `pi`, `e`, `inf` |
+| Arithmetic | `abs`, `min`, `max`, `sign`, `floor`, `ceil`, `round`, `mod` |
+| Powers | `sqrt`, `cbrt`, `pow`, `exp`, `log`, `log2`, `log10`, `hypot` |
+| Trigonometry | `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2` |
+
+Trigonometric arguments must be dimensionless (radians); `asin`/`acos`/`atan`
+return dimensionless values. `sqrt` halves the exponent vector and requires the
+result to be rational. `min`, `max`, `hypot`, `atan2`, and `mod` require
+compatible arguments. `log*` and `exp` require dimensionless arguments. Anything
+else is `SE0412`.
+
+Evaluation is in `double`. Division by zero, a domain error, or a non-finite
+result is an elaboration error (`SE0413`) — the language is total by rejection,
+not by producing NaN.
+
+### 7.4 What is deliberately absent
+
+No conditionals, no comparisons, no string operations, no user-defined functions,
+no references to run-time signals, and no references to other instances. The
+language stays small so that (a) elaboration is guaranteed to terminate, (b)
+settings can be topologically sorted, and (c) every value is a compile-time
+constant that folds into the generated code.
+
+A declarative `stop_when:` condition in the sim file is parked precisely because
+it would need run-time signals here, which is a much larger change than it looks
+(Appendix C).
+
+---
+
+## 8. Lifecycle methods and execution semantics
+
+This is the load-bearing part of the design.
+
+### 8.1 The five methods
+
+| Method | Equation | Purity | When it runs |
+|---|---|---|---|
+| `init()` | — | mutating | Once, at run start, in elaboration order. |
+| `output()` | y = g(t, x, u) | **pure** | Whenever signals propagate — many times per step. |
+| `rates()` | ẋ = f(t, x, u) | **pure** | Every minor step (4× per RK4 step). |
+| `on_step()` | x⁺ = h(t, x, u) | mutating | Once per accepted step, at the node's sample instants. |
+| `final(ctx)` | — | mutating | Once at run end, in reverse init order. |
+
+Write permissions, exactly:
+
+- `init()` writes `state` (the IC escape hatch) and `var`; may touch natives; may log.
+- `output()` writes `out` only.
+- `rates()` writes `der` only.
+- `on_step()` writes `next` and `var`; may touch natives; may log.
+- `final(ctx)` writes nothing model-visible; may touch natives; may log.
+
+`on_step` is named for the `on_` prefix reading as "fires at a specific moment" —
+`update()` says nothing about when, and `commit()` describes the mechanism rather
+than the event.
+
+### 8.2 Why `output()` and `rates()` are separate
+
+They cannot be merged, and this is not a stylistic point: **the split is the only
+reason feedback loops are simulable.** A node with no feedthrough has an
+`output()` that needs only `state`, so it can be called *before its inputs are
+known* — which is exactly what unwedges a closed loop. If `rates()` also set
+outputs, every node would look like a feedthrough node and loop-breaking would be
+destroyed everywhere in the model.
+
+### 8.3 Feedthrough is declared by method signature
+
+```
+output(cmd)      { out.force = state.force + param.kff * in.cmd; }  // feedthrough on cmd
+output()         { out.velocity = state.velocity; }                 // breaks loops
+rates(cmd, load) { … }                                              // constrains nothing
+on_step(ws)      { … }                                              // constrains nothing
+```
+
+- **A method's parameter list is exactly the set of inputs it reads.** The names
+  are bare (not `in.cmd`), because the list can only contain inputs.
+- Naming an input not declared in `inputs` is an error (`SE0350`); naming one
+  twice is `SE0351`.
+- This lowers to a signature that **literally omits** the undeclared inputs
+  (§15.4), so the C++ compiler enforces it: a stale-value read becomes a compile
+  error, not a silently wrong number. No runtime debug proxy is needed, and the
+  question "what value should an undeclared input have?" never arises.
+- **Granularity is per-port, not per-node.** Node-level marking produces *false*
+  algebraic loops whenever a node has one feedthrough input and one rates-only
+  input.
+- **"Algebraic" and "feedthrough" are orthogonal.** A node can have states *and*
+  feedthrough — a PID, or any state-space block with D ≠ 0 — so feedthrough
+  cannot be derived from the leaf/composite inference.
+- Only `output()`'s list constrains ordering. `rates()` and `on_step()` run after
+  outputs have propagated, so their lists are documentation plus enforcement.
+
+### 8.4 Why mutation is confined
+
+`output()` and `rates()` are evaluated **four times per RK4 step, at trial states
+the trajectory never visits**. Any side effect there fires four times, at values
+that are not on the solution. That single fact is the reason for three separate
+restrictions, which are really one restriction wearing three hats:
+
+- `var` writes → `init()`/`on_step()` only (§6.5).
+- `log.*` → `init()`/`on_step()`/`final()` only (§10.1).
+- `native` handles in scope → `init()`/`on_step()`/`final()` only (§6.7).
+
+A `sendto()` in `output()` would put four packets on the wire per step, at values
+the model never actually took, silently. Confining mutation keeps results
+solver-independent and reproducible.
+
+### 8.5 The sort
+
+Build a graph over the nodes active on the current tick:
+
+> **edge M → N** iff M sources one of N's **feedthrough** inputs.
+
+- `output()` runs in **topological order** of that graph.
+- `rates()` may run in **any** order once outputs have propagated.
+- A node whose `In_output` is empty is a **sort root** and needs no predecessor.
+  Registered discrete nodes, unit delays, and integrators are all sort roots by
+  the same single mechanism, not three special cases.
+
+### 8.6 Algebraic loops: rejected, not solved
+
+A cycle in the §8.5 graph is an implicit equation z = f(z) with no valid
+ordering. It is **rejected** (`SE0510`).
+
+Why reject rather than tear-and-Newton:
+
+- Most algebraic loops are **modelling mistakes**. A solver that silently
+  converges on a number produces an answer for a model the author did not mean to
+  write.
+- Iteration to convergence has no statable worst-case execution time, which is
+  incompatible with the real-time target (§9.4).
+
+Adding a solver later is a **pure relaxation** — no model valid today would break
+— and the strongly-connected-component analysis is shared with the diagnostic, so
+nothing is wasted.
+
+**The budget goes into the diagnostic instead.** Because feedthrough lives in a
+method signature, the error can name the cycle, name each node's offending
+parameter with file and line, and state the exact fix:
+
+```
+error[SE0510]: algebraic loop through 3 nodes
+  --> Loop.se:14:21
+   |
+14 |         ctl.cmd --> act.u;
+   |                     ^^^^^ act.output(u) reads u
+   = cycle: plant.y -> ctl.e -> ctl.cmd -> act.u -> act.f -> plant.f -> plant.y
+   = note: ctl.output(e) declares feedthrough on `e`      [Controller.se:22]
+   = note: act.output(u) declares feedthrough on `u`      [Actuator.se:18]
+   = help: drop `u` from `act.output(u)` and latch it in on_step(), or
+           insert a unit delay / integrator anywhere in the cycle
+```
+
+Beating "Algebraic loop detected involving block X" is an explicit goal.
+
+Note that a loop solver **cannot** be a library node: it must re-evaluate an
+entire SCC iteratively, which requires engine support.
+
+---
+
+## 9. Time model and scheduling
+
+### 9.1 One global fixed base step
+
+```
+step: 1 (ms);
+```
+
+A single global fixed step, set in the sim file. This is the highest-leverage
+constraint in the design:
+
+- Every node's rate is an **integer decimation** of the base step: a 100 Hz
+  controller on a 1 kHz base fires every 10th tick. Sample instants land exactly,
+  by construction.
+- It **eliminates most of Simulink's sample-time machinery**: no step-size
+  negotiation, no forcing a variable-step solver to hit sample instants, no
+  zero-crossing search for sample hits, and **no fractional resampling ever**.
+- It unifies the model: everything is discrete at the base rate, and one
+  scheduler serves the whole model.
+
+It also retroactively justifies rejecting algebraic loops (§8.6) — a Newton solve
+has no statable worst-case execution time.
+
+### 9.2 Rates
+
+`rate` is a reserved setting (§6.2) set at instantiation, flowed down through the
+expression language, and constant from elaboration onward. A 100 Hz PID and a
+50 Hz PID are the same definition with different instances.
+
+The decimation is `base_rate / rate`. A rate that is not an integer divisor of
+the base rate is an elaboration error:
+
+```
+error[SE0450]: rate 60 Hz is not an integer divisor of the 1 kHz base step
+  --> Vehicle.se:31:22
+   = note: 1000 / 60 = 16.667; nearest legal rates are 62.5 Hz and 58.82 Hz
+```
+
+**Rate propagation/inference was dropped**, and that is a real simplification. A
+purely algebraic node — `Gain`, `Sum` — has **no rate at all**. It is
+re-evaluated in every tick's `output()` pass from whatever its inputs currently
+hold. Fed by a 100 Hz held signal, its output effectively changes at 100 Hz; fed
+by two rates, it changes whenever either input does. All well-defined, no aliasing
+introduced, and no rate to assign — which dissolves the ambiguity that inference
+existed to resolve.
+
+### 9.3 Discrete outputs and rate transitions
+
+Discrete outputs are **zero-order held** between sample instants: `output()` is
+evaluated at the node's sample ticks and the value persists until the next one.
+
+**No explicit rate-transition blocks exist or are needed.** Simulink's Rate
+Transition block exists because *its* multitasking execution order is not
+guaranteed; here (1) all rates are harmonic integer decimations and (2) there is a
+single deterministic schedule with a topological sort, so transitions are
+deterministic by construction.
+
+How discrete interacts with the §8.5 sort:
+
+- The sort runs **per tick over the nodes active on that tick** — base-rate nodes
+  always, a slow node only on its sample ticks.
+- A slow node **not** sampling this tick contributes its held output as a
+  **constant: a sort root with no edge.** So a fast consumer reading a slow signal
+  never creates an inter-tick ordering constraint.
+- A held output returns the **same value across all RK4 trial substeps**, so the
+  multiple-evaluation hazard of §8.4 never touches discrete nodes at all.
+
+Two idioms, both expressed with the existing signature mechanism:
+
+```
+// Registered (the default idiom): one sample of latency, sort root, loop-breaker.
+// Physically honest — a real digital controller has exactly this latency.
+on_step(err) { var.cmd = param.kp * in.err; }
+output()     { out.cmd = var.cmd; }
+
+// Direct (Mealy): zero added latency, but a feedthrough node subject to
+// ordering, and able to form an algebraic loop.
+output(err)  { out.cmd = param.kp * in.err; }
+```
+
+### 9.4 The real-time frame
+
+Real-time execution introduces a **third integer quantity** alongside the base
+step and the rate decimations:
+
+```
+step: 1 (ms);
+sync: 10 (ms);     // must be an integer multiple of step
+```
+
+The execution model is two-clock: a dedicated thread **free-runs every base step
+in the frame as fast as it can, then busy-waits on the high-resolution timer**
+until the frame boundary. At 1 ms `step` and 10 ms `sync`, that is ten steps flat
+out, then spin.
+
+- `sync` not being an integer multiple of `step` is an elaboration error
+  (`SE0451`) — the same error class as a non-divisor rate.
+- An **overrun** is a batch that missed its frame boundary. The next batch then
+  starts immediately with no spin, so **sim time drifts behind wall time**.
+- **Every base step always runs.** Dropping steps to catch up was rejected: it
+  would punch a hole in a fixed-step integration, advancing state by one `dt`
+  while wall time advanced by several. Drift is the honest failure mode; a
+  corrupted trajectory is not.
+- **Overrun is instrumented, not policed** — no abort escalation and no policy
+  key. See §13.6 for the metrics.
+
+### 9.5 The solver
+
+The solver is **global, not per-node** (`solver: rk4;`). Mixing integrators
+across one state vector was deliberately kept closed. Normative values are
+`euler`, `rk2`, and `rk4`; the menu beyond that is an open question.
+
+### 9.6 The tick
+
+One base tick, normatively:
+
+1. Determine the active set — base-rate nodes, plus nodes whose decimation
+   divides the tick index.
+2. **Minor steps.** For each solver stage: propagate `output()` in topological
+   order over the active set, then call `rates()` on every node with continuous
+   states, in any order. Held outputs are constants throughout.
+3. **Accept the step.** Advance `x` by the solver's combination of stage rates,
+   and advance time.
+4. **Propagate outputs** once more at the accepted state.
+5. **`on_step()`** on every active node that has discrete states or writes
+   `var`, then `commit()` the `next` buffers.
+6. **Record** (§13.5) if this tick is a recording tick.
+7. If `mode: realtime` and this tick closes a frame, spin to the frame boundary
+   and update the metrics.
+
+---
+
+## 10. Builtins
+
+Two namespaces are injected into bodies. Neither is a DSL keyword (§3.4); both
+are names the generator puts in C++ scope, and *withholds* where they are
+illegal.
+
+### 10.1 `log.*`
+
+```
+log.trace(fmt, args…)   log.debug(…)   log.info(…)   log.warn(…)   log.error(…)
+```
+
+- `{}` positional formatting. The engine **auto-tags** every record with sim
+  time, node path, and level — those are never arguments.
+- **Restricted to `init()`, `on_step()`, and `final()`** for the reason in §8.4.
+- **Escape hatch:** `log.trace` alone is permitted in `rates()` and `output()`.
+  It is tagged with the substep index and suppressed unless a verbose flag is
+  set, so the four-evaluations-per-step hazard is visible in the output rather
+  than hidden.
+- Logging is **always observational**. It never affects control flow and never
+  halts the run.
+
+### 10.2 `sim.stop` and `sim.abort`
+
+```
+sim.stop("target speed reached");             // clean end
+log.error("CAN bus timeout after {} ms", t);  // then:
+sim.abort("CAN bus timeout");                 // fault end
+```
+
+- Callable from `init()` and `on_step()` — the mutating, I/O-capable methods.
+- **Halting is the `sim.*` family's job.** Overloading `log.fatal` with control
+  flow was rejected: a logging call that sometimes ends the program is exactly
+  the hidden side effect the purity rules fight everywhere else. A fault site
+  writes two honest, greppable lines instead of one overloaded one.
+- This mirrors the recording (quantitative) / logging (qualitative) split, and it
+  gives `final()` a **single uniform source** of termination reasons with a clean
+  severity axis; log level stays orthogonal metadata.
+
+Note that `sim.*` being a *recordable* namespace in the sim file (§13.6) does
+**not** make those metrics readable from node code. The broader "`sim.*` as
+ambient context" design — `sim.time` readable in `on_step()`, and so on — is
+deliberately not opened, to avoid inheriting the "which fields are live when"
+question as a side effect.
+
+### 10.3 The run context
+
+`final` may take one parameter, a read-only run-context handle:
+
+```
+final(ctx) {
+    log.info("run ended: {} at t={} s", ctx.message, ctx.time);
+    closesocket(sock);
+}
+final() { closesocket(sock); }    // a node that does not care
+```
+
+| Field | Meaning |
+|---|---|
+| `ctx.reason` | `completed` (duration expiry) · `stopped` (`sim.stop`) · `aborted` (`sim.abort`) · `error` (C++ exception or unrecoverable fault) |
+| `ctx.message` | The string passed to `sim.stop`/`sim.abort`; empty for `completed` |
+| `ctx.time` | Final sim time |
+
+It is a **parameter, not a global**, for the same reason feedthrough rides
+`output()`'s signature: the outcome is only knowable at teardown, and a parameter
+says exactly that.
+
+`final()` runs on normal and error termination alike, in reverse init order, but
+**only for nodes whose `init()` completed** — a node that never initialised cannot
+be asked to tear down. RAII on C++ members is the quiet default for nodes that
+write no `final()` at all.
+
+---
+
+## 11. Verbatim C++ regions
+
+### 11.1 What is verbatim, and what the generator owns
+
+Verbatim: lifecycle method bodies, helper function definitions, `declarations`
+blocks, and `native` type text. Everything else — signatures, accessor structs,
+class shape, member order, initialisation — is generated.
+
+**All data members go through DSL sections** (`states`, `vars`, `native`). A
+verbatim `cpp_members { … }` block was considered and rejected: the compiler must
+own the full class layout to check collisions against generated accessors, to
+order initialisation, and to make future checkpointing and introspection
+possible.
+
+The deeper reason the language is shaped this way — DSL-generates-C++ rather than
+decorated C++ with a reflection pass — is **who owns file scope**. Free-form
+decorated C++ leaves would force either a libclang front end or the abandonment
+of unity builds, because leaf globals, statics, and includes escaping to file
+scope are exactly what breaks jumbo builds. Tool-owned file scope avoids both,
+for free. A *restricted* decorated-C++ subset was rejected too: it relocates the
+parsing problem into subset enforcement rather than removing it.
+
+### 11.2 Brace-matched regions
+
+A brace-matched verbatim region begins at the `{` that opens it and ends at the
+matching `}`. The scanner tracks depth while **skipping over** these constructs,
+inside which braces are not counted:
+
+| Construct | Ends at |
+|---|---|
+| `//` comment | End of line |
+| `/* … */` comment | `*/` |
+| `"…"` string | Unescaped `"`; `\` escapes the next character |
+| `'…'` character | Unescaped `'`; `\` escapes the next character |
+| `R"delim(…)delim"` raw string | The matching `)delim"` |
+
+Two traps a conforming scanner must handle, both of which produce silently-wrong
+region boundaries if missed:
+
+1. **Digit separators.** In `1'000'000` the `'` is not a character literal. A `'`
+   opens a character literal only when the preceding non-whitespace character is
+   not a digit, letter, or `_`. Getting this wrong swallows the rest of the
+   function.
+2. **Raw strings.** `R"(unbalanced { brace)"` is legal C++ and must not affect
+   depth. The delimiter is the character sequence between `R"` and `(`, up to 16
+   characters.
+
+An unterminated region — end of file at depth > 0 — is `SE0110`, reported at the
+**opening** brace's position, with a note giving the depth reached.
+
+`#line` directives are emitted so that C++ compiler diagnostics point back into
+the `.se` file. Note that the generator injects lines into a body's preamble
+(native aliases, §6.7), which **shifts body line numbers**: the `#line` value
+must account for the injected count, or every C++ error in that method points a
+line or two off.
+
+### 11.3 The `native` type region
+
+A `native` declaration's type text runs from after the `:` to the terminating
+`;`. The scanner skips the same constructs as §11.2 and additionally ignores a
+`;` that occurs inside balanced `()`, `[]`, or `{}`. Angle brackets are **not**
+tracked — `std::map<int, std::vector<double>>` contains no `;`, so template
+argument lists never need to be understood, which is what keeps the `>>`
+ambiguity out of the language entirely (I1).
+
+Leading and trailing whitespace is trimmed; interior text is copied byte for
+byte.
+
+### 11.4 Helper functions
+
+Any node-body item that is not a section keyword and not a lifecycle name is a
+**helper function**: verbatim C++ copied into the class as a private member.
+
+The scanner finds its extent without parsing C++: from the item's first token,
+scan forward to the first `{` **not** inside a comment, literal, or bracket pair,
+then brace-match (§11.2). Consequently:
+
+- A helper must be a **definition**, not a declaration. A `;` encountered at
+  bracket depth 0 before any `{` is `SE0240` — "expected a function body";
+  forward declarations belong in `declarations`.
+- A helper's name is not known to the compiler, which never parses the signature,
+  so a helper cannot be checked against §6.11 and cannot be called from another
+  node. Collisions with generated names surface as C++ errors, mapped back by
+  `#line`.
+
+The text is copied as-is, so a helper's own purity is the author's
+responsibility. A non-`const` helper called from `output()` fails to compile,
+which is the intended outcome.
+
+---
+
+## 12. Build metadata
+
+Nodes and packages declare their own build requirements first-class; the compiler
+**aggregates them at elaboration and emits build commands alongside the code**, so
+the output is buildable as emitted. CMake was explicitly rejected as a permanent
+public contract; taking the generated sources into your own build system remains a
+supported first-class path.
+
+### 12.1 Primitives
+
+```
+build {
+    link        "ws2_32"  when windows;
+    link        "pthread" when linux;
+    include_dir "vendor/asio/include";
+    define      "ASIO_STANDALONE";
+    cflag       "/bigobj" when windows;
+}
+```
+
+The vocabulary is **concrete build primitives**, not logical dependencies. The
+compiler aggregates and forwards them; it never invokes an external resolver, so
+there is no mandatory pkg-config or CMake `find_package`. A logical
+`depends "openssl"` with compiler-side resolution was rejected precisely because
+it would force such a backend.
+
+| Primitive | Argument |
+|---|---|
+| `link` | Library name or path, as the linker expects it |
+| `include_dir` | Path, relative to the declaring file's root |
+| `define` | `NAME` or `NAME=value` |
+| `cflag` | Verbatim compiler flag |
+
+Duplicate primitives are aggregated and de-duplicated; order of first appearance
+is preserved.
+
+### 12.2 Platform conditionals
+
+Any primitive may carry a `when <platform>` tag. Flat, local, and greppable.
+Platform *blocks* remain available later as pure sugar. Reusing the §7 expression
+language for this was rejected — it over-couples static build metadata to the
+elaboration evaluator.
+
+The platform atom vocabulary is **not yet pinned** (Appendix C). An implementation
+must accept at least `windows`, `linux`, and `macos`, and must report an unknown
+atom rather than silently ignoring the declaration (`SE0250`).
+
+### 12.3 Bundles
+
+A dependency is **just a package that declares primitives** (§2.6), reusing the
+"stdlib is only a root" spine. Ergonomic reuse on top of the primitives, not a new
+concept.
+
+### 12.4 The emitted build
+
+The emitted build is a **direct reference build script** — no Ninja, no CMake, no
+external build tool:
+
+- **Generate-code and build-it are separable steps.** The compiler's contract is
+  *generate code*; building it into a running simulation is an optional second
+  stage.
+- The script is a **full-build reference only**. It never tracks changes and
+  never builds incrementally or in parallel.
+- That is not an omission. **The unity build is the intended build model** — all
+  sources `#include`d into a single translation unit. There are no separate object
+  files, so incremental tracking is a category that does not exist rather than a
+  feature skipped. It also matches the rest of the design: concrete classes, no
+  virtuals, one flat generated call sequence.
+
+---
+
+## 13. The sim file
+
+The experiment configuration lives in **its own file**, keyword `sim`:
+
+```
+sim Demo {
+    root:     Vehicle { total_mass = 1500 (kg); };
+    step:     1 (ms);
+    solver:   rk4;
+    duration: 10 (s);
+    mode:     realtime;
+    sync:     10 (ms);
+    window:   1 (s);
+
+    settings: "vehicle_heavy.settings";
+
+    record: {
+        file:  "run.csv";
+        every: 10;
+        signals {
+            plant.out.velocity;
+            plant.state.position;
+            front.left.out.force;
+            sim.utilization;
+            sim.overrun_pct;
+        }
+    }
+
+    log: {
+        file:  "run.log";
+        level: info;
+        levels { front.left: debug; }
+    }
+}
+```
+
+**Why separate from the model:** one model gets run many ways — 1 ms real-time on
+target versus 0.1 ms batch offline, a 10-second manoeuvre versus a 10-minute soak.
+If configuration lived in the node, swapping experiments would mean editing the
+model, and the model would stop being the thing under test.
+
+### 13.1 Entries
+
+| Entry | Form | Default |
+|---|---|---|
+| `root:` | `qualified_name [ '{' bindings '}' ] ';'` | required |
+| `step:` | time expression | required |
+| `solver:` | `euler` · `rk2` · `rk4` | `rk4` |
+| `duration:` | time expression | required |
+| `mode:` | `batch` · `realtime` | `batch` |
+| `sync:` | time expression, an integer multiple of `step` | required iff `realtime` |
+| `window:` | time expression | `1 (s)` |
+| `settings:` | string — a `.settings` path | none |
+| `record:` | block, §13.5 | no recording |
+| `log:` | block, §13.7 | console only |
+
+Each entry may appear at most once (`SE0260`). Block-valued entries (`record:`,
+`log:`) take **no trailing semicolon**; scalar entries require one.
+
+The `root` entry is what makes a model runnable: it names the single top-level
+node to instantiate, and may bind its settings exactly as an instance in a
+`structure` block does.
+
+### 13.2 Path addressing
+
+**Path addressing is the keystone** shared by setting overrides, initial
+conditions, and recording: a **dotted path from the root**, of
+instance-instance-…-name form.
+
+```
+front.left.mass              // a setting three levels down
+plant.out.velocity           // a qualified signal
+sim.overrun_pct              // an engine metric
+```
+
+The separator is the same `.` used for port access, and namespaces are
+deliberately not visually distinguished — one addressing scheme, learned once.
+
+### 13.3 Settings inflow
+
+Resolution order, **last writer wins**:
+
+1. Definition default (§6.2)
+2. Flow-down expression at instantiation (§6.9.1)
+3. The sim file's `root` block
+4. The external `.settings` source (§14)
+
+Overrides **may reach any depth**, not just the root:
+
+```
+front.left.mass = 340 (kg);
+```
+
+The cost is explicit and is the user's to own: **a deep override detaches from the
+flow-down.** Set `total_mass` and `front.left.mass` and that corner no longer
+equals total/4. A possible mitigation — warning when a deep override lands on a
+setting that a flow-down expression also drives — is noted but not required.
+
+An override may target a **setting or a state**, never an **output** (outputs are
+computed). The resolver therefore only has to disambiguate setting-versus-state
+(`SE0460`).
+
+### 13.4 Initial conditions
+
+There is **no `initial:` section**, deliberately. Initial conditions are
+declarative state defaults in the model (§6.4), and overriding one from outside
+rides the **same settings channel, addressed by path**:
+
+```
+total_mass          = 1800 (kg);    // a setting
+front.left.velocity =    2 (m/s);   // a state's initial value
+```
+
+Layering: declared state default → `init()` code → external override.
+
+### 13.5 Recording
+
+Recording is **quantitative**: an aligned numeric time-series table, distinct from
+logging in every respect.
+
+```
+record: {
+    file:  "run.csv";
+    every: 10;                     // decimate: every 10th base tick
+    signals { plant.out.velocity; plant.state.position; }
+}
+```
+
+- **Signals are qualified paths** — `plant.out.velocity`, `plant.state.position` —
+  reusing the `out.` / `state.` accessors. A bare `plant.velocity` is legal **when
+  unambiguous**, and produces a loud error naming both candidates when it is not
+  (`SE0461`), since a node may legitimately have a state and an output with the
+  same name (§6.11).
+- Recording internals directly was chosen over outputs-only recording, which
+  would force boilerplate pass-through outputs just to observe a state.
+- **Records at the base step by default**; the first column is `time (s)`.
+  `every: N` decimates the file.
+- A signal slower than the recording rate is **held (ZOH)** — which is its actual
+  physical value, since that is precisely what downstream nodes see.
+- The header carries units: `plant.out.velocity [m/s]`.
+- Wildcards (`plant.out.*`) are not in this version; see Appendix C.
+
+### 13.6 Real-time instrumentation
+
+Two metrics, both dimensionless percentages reported on 0–100 with a `%` unit —
+self-documenting in a CSV header, and `-` in the manifest either way:
+
+| Metric | Meaning |
+|---|---|
+| `sim.overrun_pct` | Percentage of frames that overran. **A rate, not a count.** |
+| `sim.utilization` | Percentage of the frame spent computing rather than spinning. |
+
+- Both are computed over a **rolling window** (`window:`, default 1 s), not
+  cumulatively. A since-start percentage is a lagging indicator: a fault starting
+  twenty minutes into a run is buried under a long clean history — exactly the
+  case a live value must catch. The window sets resolution: 10 ms frames over 1 s
+  is 100 frames, so 1% steps.
+- **Both are recordable signals**, addressable as `sim.*` paths in `signals`, so
+  they land in the CSV beside model signals. That is what identifies *which*
+  manoeuvre blows the timing budget, not merely that something did. Per-frame
+  values recorded at base rate are held, which §13.5's rule already covers at no
+  extra cost.
+- A **whole-run cumulative summary** is emitted at teardown, free off the same
+  counters.
+
+### 13.7 Logging
+
+Logging is **qualitative**: asynchronous, unaligned text and events.
+
+```
+log: {
+    file:  "run.log";
+    level: info;                     // global threshold
+    levels { front.left: debug; }    // per-node-path overrides
+}
+```
+
+Levels are `trace`, `debug`, `info`, `warn`, `error`. The console always receives
+`warn` and above regardless of the configured threshold. The file format is plain
+text; a structured alternative is an open question.
+
+---
+
+## 14. The settings source
+
+The external settings source is a flat list of path-addressed bindings:
+
+```
+// vehicle_heavy.settings
+total_mass          = 1800 (kg);
+front.left.mass     =  340 (kg);
+front.left.velocity =    2 (m/s);   // a state's initial value
+rear.tc.slip_limit  = 0.08;
+```
+
+```
+settings_source  := { binding }
+binding          := path '=' expression ';'
+path             := identifier { '.' identifier }
+```
+
+**File and string are one grammar, two carriers.** The same text may be passed
+inline — as a command-line flag or through an API call — with no separate syntax.
+Every value is unit-checked against its target (§4.3).
+
+Comments follow §3.2. There is no `package`, no nesting, and no conditionals:
+this is deliberately the flattest possible surface, because it is the layer that
+gets generated by scripts and sweeps.
+
+---
+
+## 15. Lowering to C++
+
+Normative to the extent stated. A worked, hand-verified example lives in
+[`examples/drivetrain/`](examples/drivetrain/) — four `.se` sources, a `.sim`
+file, the generated C++, the unit manifest, and the runtime header. It compiles
+with `cl /std:c++17 /EHsc`, with no third-party packages and no include path
+outside the repository.
+
+### 15.1 The constraint that decides everything
+
+The compiler never parses C++ (I1) — it bracket-matches. Therefore it **cannot
+rewrite** `in.drive_torque` into a mangled name. The tokens `param.`, `in.`,
+`out.`, `state.`, `der.`, `next.`, and `var.` survive verbatim into emitted
+bodies, which means **objects with exactly those names must be in scope**. Every
+other lowering decision follows from that.
+
+### 15.2 Composites flatten; leaves stay classes
+
+One `Sim` class holds leaf *instances* as members. **Composites leave no runtime
+trace at all** — their settings fold to literals at elaboration and their
+hierarchy becomes name prefixes on generated members. Leaves stay classes so each
+compiles once regardless of instance count.
+
+### 15.3 A wire is not its own variable
+
+A wire **coincides with the producer's `Out` storage**, owned by `Sim`. So
+`whl.ws --> tc.ws, self.ws` becomes two readers of `fl_whl_out.ws`: fan-out is
+free and nothing is copied. Fan-in being forbidden (§6.9.2) is exactly what makes
+single-writer storage sound.
+
+**ZOH falls out for free.** A 200 Hz node's `Out` is not written on the other nine
+base ticks, so the held value is simply the variable still sitting there. No hold
+buffer exists.
+
+### 15.4 Enforcement falls out of the lowering
+
+Not from an analyser:
+
+- **Purity is `const` on the method.** `output()` and `rates()` are const
+  members, so a body physically cannot write `state`, `var`, or `param`. The
+  writable thing is an out-parameter.
+- **Feedthrough is a struct field set.** One `In_<method>` view struct per
+  method, holding exactly the inputs that method's DSL signature listed. Reading
+  an undeclared input is "no such member". An **empty** `In_output` is the sort
+  root and the loop-breaker.
+- **I/O confinement is name withholding.** Native aliases and `log.*` are emitted
+  into the preamble of the methods where they are legal, and simply are not
+  declared elsewhere.
+
+```cpp
+struct Wheel {
+    struct Param { double inertia;    /* kg*m^2 */  double radius; /* m */ };
+    struct Var   { double inertia_inv; };            // 1/(kg*m^2)
+    struct State { state_ref omega; };               // rad/s
+    struct Der   { state_ref omega; };               // rad/s^2
+    struct Out   { WheelState ws; };
+
+    struct In_rates  { double drive_torque; };
+    struct In_output { double drive_torque; double ground_speed; };
+
+    Param param; State state; Var var;
+
+    void init();                                              // mutating
+    void rates (const In_rates&  in, Der& der) const;         // pure
+    void output(const In_output& in, Out& out) const;         // pure
+};
+```
+
+### 15.5 The state vector
+
+```cpp
+static constexpr std::size_t n_states = 1;
+std::array<double, n_states> x{};
+std::array<double, n_states> xd{};
+```
+
+- **One flat `double` array**, so an external solver integrates it directly.
+- **Only `continuous` states.** Discrete states live in their node and never reach
+  the solver.
+- **Slot convention:** `x[i]` holds the value *in that state's declared unit*.
+  That is a contract with the external solver, so the generator emits a **slot
+  map**.
+- Named states are non-template **`state_ref` proxies holding a `double*`**. The
+  proxy exists because generated `State` and `Der` structs must be
+  default-constructible before `bind_states()` runs, and a `double&` member can be
+  neither default-constructed nor rebound. `operator double()` means every
+  operator, every `<cmath>` function, and every third-party API just works.
+- `state_ref` lives in a fixed engine runtime header — about twenty lines, with no
+  includes at all.
+- **There is no `gather_x`/`scatter_x`.** The vector *is* the storage, so there is
+  no second copy to desynchronise. A solver that owns its own vector (CVODE,
+  odeint) does one `memcpy` each way per evaluation: the proxies buy a clean
+  *layout*, not zero copying.
+- `der` and `next` are **`Sim`-owned scratch, not node data**. `der` is evaluated
+  4× per RK4 step at trial states and discarded; `next` is the simultaneous-update
+  buffer. `states` and `vars` remain the only DSL storage sections.
+
+### 15.6 The unit manifest
+
+Because units are erased (I3), the manifest is a **load-bearing generator
+output**, not documentation. It is the contract for anyone writing an external
+solver, feeding the root boundary, or overriding a setting from outside:
+
+```
+[state.continuous]        # slot | model path | unit  -- the solver's ABI
+x[0]      fl.whl.omega          rad/s
+xd[0]     fl.whl.omega'         rad/s^2
+
+[state.discrete]          # not in the state vector; lives in its node
+          fl.tc.cut             N*m
+
+[boundary.in]             # root inputs the host must supply
+          src.axle_torque       N*m
+
+[boundary.out]            # root outputs the host may read
+          fl.whl.ws.speed       rad/s
+
+[settings]                # elaborated values, post-conversion
+          fl.whl.inertia        kg*m^2      = 0.9
+
+[types]
+WheelState.speed              rad/s
+```
+
+### 15.7 Dispatch
+
+**Concrete generated classes: no `INode` base and no virtuals.** The scheduler is
+generated code — a flat sequence of direct member calls in elaboration order.
+Recorder and inspector machinery is generated per model too, since the compiler
+knows every signal's address and unit at codegen time. Everything a vtable would
+buy is already guaranteed at generation time.
+
+---
+
+## 16. Diagnostics
+
+### 16.1 Format
+
+```
+error[SE0230]: state `omega` must be declared `continuous` or `discrete`
+  --> examples/drivetrain/Wheel.se:17:5
+   |
+17 |     omega (rad/s): double = 0.0;
+   |     ^^^^^ expected `continuous` or `discrete` before the state name
+   = note: there is deliberately no default state kind — the two differ in
+           write accessor (`der.` vs `next.`), in schedule, and in whether
+           they enter the solver's state vector
+   = help: write `continuous omega (rad/s): double = 0.0;`
+```
+
+Required elements: severity and code, a one-line message, a `file:line:column`
+location, and a caret span. Notes and helps are optional but strongly encouraged;
+the language's whole diagnostic strategy is to spend the budget here (§8.6).
+
+### 16.2 Severity and exit status
+
+`error` (no output produced), `warning` (output still produced), `note`/`help`
+(attachments only). Exit status is 0 with no errors, 1 with at least one error,
+and 2 for a driver failure such as an unreadable file.
+
+### 16.3 Recovery
+
+The parser must not stop at the first error. Recovery is by **synchronisation on
+statement and section boundaries**: on an error inside a declaration, skip to the
+next `;` or to the closing `}` of the enclosing block, whichever comes first, then
+resume. A verbatim region is skipped whole, never resynchronised into. An
+implementation must cap cascading diagnostics rather than emit an unbounded stream
+from one bad brace.
+
+### 16.4 Catalogue
+
+Codes are stable. `SE01xx` lexical, `SE02xx` syntactic, `SE03xx` resolution,
+`SE04xx` elaboration, `SE05xx` scheduling, `SE06xx` emission.
+
+| Code | Stage | Message |
+|---|---|---|
+| `SE0101` | 1 | Illegal character outside a verbatim region |
+| `SE0102` | 1 | Unterminated block comment |
+| `SE0103` | 1 | Unterminated string literal |
+| `SE0104` | 1 | Unrecognised escape sequence |
+| `SE0105` | 1 | Unexpected character (`>` outside `-->`) |
+| `SE0106` | 1 | Malformed number literal |
+| `SE0110` | 1 | Unterminated verbatim region (unbalanced braces) |
+| `SE0111` | 1 | Unterminated raw string literal in a verbatim region |
+| `SE0112` | 1 | Unterminated `native` type text (no `;`) |
+| `SE0201` | 2 | Expected one token; found another |
+| `SE0202` | 2 | Missing `package` declaration |
+| `SE0203` | 2 | `use` declaration after a definition |
+| `SE0204` | 2 | Expected a definition (`node` or `type`) |
+| `SE0205` | 2 | Expected a unit annotation |
+| `SE0206` | 2 | Malformed unit expression |
+| `SE0207` | 2 | Unknown scalar type |
+| `SE0208` | 2 | Expected `;` |
+| `SE0209` | 2 | Unbalanced braces at end of file |
+| `SE0210` | 2 | Wildcard import is not supported |
+| `SE0211` | 2 | Expected a wire, an instance, or `}` in `structure` |
+| `SE0212` | 2 | Wire endpoint must be `self.<port>` or `<instance>.<port>` |
+| `SE0213` | 2 | Expected `-->` |
+| `SE0220` | 2 | Duplicate section in a node |
+| `SE0221` | 2 | Unknown section name |
+| `SE0230` | 2 | State kind (`continuous`/`discrete`) omitted |
+| `SE0231` | 2 | A setting may not be a record type |
+| `SE0232` | 2 | A state may not be a record type |
+| `SE0233` | 2 | A `native` member may not carry a unit |
+| `SE0240` | 2 | Helper function has no body |
+| `SE0241` | 2 | `init` takes no parameters |
+| `SE0242` | 2 | `final` takes at most one parameter |
+| `SE0250` | 2 | Unknown platform atom in `when` |
+| `SE0251` | 2 | Unknown build primitive |
+| `SE0260` | 2 | Duplicate entry in `sim` |
+| `SE0261` | 2 | Unknown entry in `sim` |
+| `SE0262` | 2 | Missing required `sim` entry |
+| `SE0263` | 2 | `sync` requires `mode: realtime` |
+| `SE0301` | 3 | `package` declaration disagrees with the file's location |
+| `SE0302` | 3 | No public declaration matching the file name |
+| `SE0303` | 3 | Imported name collides |
+| `SE0304` | 3 | Unresolved name |
+| `SE0305` | 3 | Package path resolves in more than one root |
+| `SE0310` | 3 | Cycle in record field types |
+| `SE0311` | 3 | Field-level wire endpoints are not supported |
+| `SE0320` | 3 | Node has both code and a `structure` block |
+| `SE0330` | 3 | Duplicate member name in a node |
+| `SE0331` | 3 | Member name shadows a generated accessor |
+| `SE0340` | 3 | `outputs` declared but no `output()` |
+| `SE0341` | 3 | Continuous state declared but no `rates()` |
+| `SE0342` | 3 | Discrete state declared but no `on_step()` |
+| `SE0343` | 3 | `rates()` in a node with no continuous states |
+| `SE0344` | 3 | `output()` in a node with no outputs |
+| `SE0350` | 3 | Method parameter is not a declared input |
+| `SE0351` | 3 | Duplicate method parameter |
+| `SE0402` | 4 | Lossy literal conversion to an integer target |
+| `SE0410` | 4 | Incompatible units |
+| `SE0411` | 4 | Offset unit in a compound unit expression |
+| `SE0412` | 4 | Builtin function argument has the wrong dimension |
+| `SE0413` | 4 | Non-finite or domain-error result at elaboration |
+| `SE0414` | 4 | Unknown unit symbol |
+| `SE0420` | 4 | Required setting not bound |
+| `SE0421` | 4 | Cycle among derived settings |
+| `SE0422` | 4 | Reserved setting `rate` has the wrong unit or type |
+| `SE0430` | 4 | Unconnected input |
+| `SE0431` | 4 | A `continuous` state must be `double` |
+| `SE0440` | 4 | Cross-instance reference in a setting binding |
+| `SE0441` | 4 | Unknown or duplicated setting binding |
+| `SE0442` | 4 | Fan-in: two sources into one input |
+| `SE0443` | 4 | Wire direction is invalid |
+| `SE0450` | 4 | Rate is not an integer divisor of the base rate |
+| `SE0451` | 4 | `sync` is not an integer multiple of `step` |
+| `SE0460` | 4 | Override target is ambiguous, or is an output |
+| `SE0461` | 4 | Recorded signal path is ambiguous |
+| `SE0510` | 5 | Algebraic loop |
+| `SE0511` | 5 | Node is unreachable from the root |
+
+---
+
+## 17. Grammar summary
+
+EBNF for all three file kinds. `{ x }` is zero or more, `[ x ]` optional, `|`
+alternation. Terminals are quoted. `VERBATIM_BLOCK`, `VERBATIM_SIGNATURE`, and
+`VERBATIM_TO_SEMI` are the scanned regions of §11.
+
+```ebnf
+(* ─── model file ─────────────────────────────────────────────────────── *)
+
+model_file      = package_decl { use_decl } { definition } EOF ;
+
+package_decl    = "package" qualified_name ";" ;
+use_decl        = "use" qualified_name ";" ;
+qualified_name  = IDENT { "." IDENT } ;
+
+definition      = type_def | node_def ;
+
+(* ─── record types ───────────────────────────────────────────────────── *)
+
+type_def        = "type" IDENT "{" { field_decl } "}" ;
+field_decl      = IDENT unit ":" scalar_type ";"
+                | IDENT ":" qualified_name ";" ;
+
+(* ─── nodes ──────────────────────────────────────────────────────────── *)
+
+node_def        = "node" IDENT "{" { node_item } "}" ;
+
+node_item       = settings_sec | inputs_sec | outputs_sec | states_sec
+                | vars_sec | native_sec | declarations_sec | build_sec
+                | structure_sec
+                | lifecycle_method
+                | helper_function ;
+
+settings_sec    = "settings" "{" { setting_decl } "}" ;
+setting_decl    = IDENT unit ":" scalar_type [ "=" expression ] ";" ;
+
+inputs_sec      = "inputs"  "{" { port_decl } "}" ;
+outputs_sec     = "outputs" "{" { port_decl } "}" ;
+port_decl       = IDENT unit ":" scalar_type ";"
+                | IDENT ":" qualified_name ";" ;
+
+states_sec      = "states" "{" { state_decl } "}" ;
+state_decl      = state_kind IDENT unit ":" scalar_type [ "=" expression ] ";" ;
+state_kind      = "continuous" | "discrete" ;
+
+vars_sec        = "vars" "{" { port_decl } "}" ;
+
+native_sec      = "native" "{" { native_decl } "}" ;
+native_decl     = IDENT ":" VERBATIM_TO_SEMI ";" ;
+
+declarations_sec= "declarations" VERBATIM_BLOCK ;
+
+build_sec       = "build" "{" { build_stmt } "}" ;
+build_stmt      = build_primitive STRING [ "when" IDENT ] ";" ;
+build_primitive = "link" | "include_dir" | "define" | "cflag" ;
+
+(* ─── structure ──────────────────────────────────────────────────────── *)
+
+structure_sec   = "structure" "{" { structure_item } "}" ;
+structure_item  = instance_decl | wire_stmt ;
+
+instance_decl   = "node" IDENT ":" qualified_name
+                  [ "{" { setting_binding } "}" ] ";" ;
+setting_binding = IDENT "=" expression ";" ;
+
+wire_stmt       = endpoint "-->" endpoint { "," endpoint } ";" ;
+endpoint        = endpoint_head "." IDENT { "." IDENT } ;
+endpoint_head   = "self" | IDENT ;
+
+(* ─── methods ────────────────────────────────────────────────────────── *)
+
+lifecycle_method= "init"    "(" ")"                VERBATIM_BLOCK
+                | "final"   "(" [ IDENT ] ")"      VERBATIM_BLOCK
+                | "output"  "(" [ ident_list ] ")" VERBATIM_BLOCK
+                | "rates"   "(" [ ident_list ] ")" VERBATIM_BLOCK
+                | "on_step" "(" [ ident_list ] ")" VERBATIM_BLOCK ;
+ident_list      = IDENT { "," IDENT } ;
+
+(* A helper is any other item: verbatim C++ up to its opening brace,
+   then a brace-matched body. See §11.4. *)
+helper_function = VERBATIM_SIGNATURE VERBATIM_BLOCK ;
+
+(* ─── units ──────────────────────────────────────────────────────────── *)
+
+unit            = "(" unit_expr ")" ;
+unit_expr       = "-" | unit_term { ( "*" | "/" ) unit_term } ;
+unit_term       = unit_factor [ "^" unit_exponent ] ;
+unit_factor     = "1" | unit_symbol | "(" unit_expr ")" ;
+unit_symbol     = IDENT | "%" ;
+unit_exponent   = [ "-" ] INT | "(" [ "-" ] INT [ "/" INT ] ")" ;
+
+scalar_type     = "double" | "float" | "int" | "bool" ;
+
+(* ─── expressions ────────────────────────────────────────────────────── *)
+
+expression      = additive ;
+additive        = multiplicative { ( "+" | "-" ) multiplicative } ;
+multiplicative  = unary { ( "*" | "/" ) unary } ;
+unary           = ( "+" | "-" ) unary | power ;
+power           = primary [ "^" unary ] ;
+primary         = NUMBER [ unit ]
+                | "param" "." IDENT
+                | IDENT "(" [ expression { "," expression } ] ")"
+                | IDENT
+                | "(" expression ")" ;
+
+(* ─── sim file ───────────────────────────────────────────────────────── *)
+
+sim_file        = "sim" IDENT "{" { sim_item } "}" EOF ;
+
+sim_item        = root_entry | scalar_entry | record_entry | log_entry ;
+
+root_entry      = "root" ":" qualified_name
+                  [ "{" { setting_binding } "}" ] ";" ;
+scalar_entry    = IDENT ":" ( expression | IDENT | STRING ) ";" ;
+
+record_entry    = "record" ":" "{" { record_item } "}" ;
+record_item     = "file"  ":" STRING ";"
+                | "every" ":" NUMBER ";"
+                | "signals" "{" { signal_path ";" } "}" ;
+signal_path     = IDENT { "." IDENT } ;
+
+log_entry       = "log" ":" "{" { log_item } "}" ;
+log_item        = "file"  ":" STRING ";"
+                | "level" ":" IDENT ";"
+                | "levels" "{" { signal_path ":" IDENT ";" } "}" ;
+
+(* ─── settings source ────────────────────────────────────────────────── *)
+
+settings_file   = { override_binding } EOF ;
+override_binding= signal_path "=" expression ";" ;
+```
+
+Two places where the grammar is deliberately looser than the semantics, so that a
+future decision is not a grammar change: `endpoint` accepts a multi-segment path
+(§5.3), and `scalar_entry` accepts any key, so an unknown sim-file key becomes a
+good semantic diagnostic rather than a parse failure.
+
+---
+
+## Appendix A — Unit symbols
+
+An implementation must accept these. Symbol resolution is **exact match first,
+then longest prefix plus exact unit**, so `min` is the minute (never
+milli-something) and `Pa` is the pascal (never peta-`a`).
+
+**Base:** `m` `kg` `s` `A` `K` `mol` `cd`
+
+**Derived:** `rad` `sr` `Hz` `N` `Pa` `J` `W` `C` `V` `F` `ohm` `S` `Wb` `T` `H`
+`lm` `lx` `Bq` `Gy` `Sv` `kat`
+
+**Accepted non-SI:** `g` `deg` `min` `h` `d` `L` `t` `bar` `atm` `rpm` `%`
+`degC` `degF` `in` `ft` `mi` `lb` `hp` `psi`
+
+**Prefixes:** `y` `z` `a` `f` `p` `n` `u` `m` `c` `d` `da` `h` `k` `M` `G` `T`
+`P` `E` `Z` `Y`
+
+The dimensionless unit is spelled `(-)`; `(1)` is equivalent. `(%)` is
+dimensionless with scale 1/100. Note that `kg` is the base unit but the prefix
+attaches to `g`, so `(mg)` is a milligram, as expected.
+
+An unknown symbol is `SE0414`, and the diagnostic must suggest near matches —
+`(sec)` should point at `(s)`.
+
+## Appendix B — Reserved words
+
+```
+build       continuous  declarations  discrete  final   init      inputs
+native      node        on_step       output    outputs package   rates
+self        settings    sim           states    structure  type   use
+vars
+```
+
+`param`, `in`, `out`, `state`, `der`, `next`, `var`, `log`, and `sim` are
+additionally unavailable as member names (§6.11), because the generated code puts
+objects by those names in scope of bodies.
+
+Everything else — including every sim-file key, every build primitive, `when`, and
+every platform atom — is contextual and remains usable as an identifier.
+
+## Appendix C — Known gaps and open issues
+
+Recorded so that their absence is visibly deliberate.
+
+**Design questions genuinely open:**
+
+1. **`(deg)` versus `(rad)`** (§4.5). Dimensionally identical, so dimensional
+   analysis cannot catch the mix-up, and it is a common expensive bug. Treating
+   angle as a distinct dimension would catch it but is unphysical.
+2. **Read-only `native` access in `output()`** (§6.7). A preloaded lookup table or
+   interpolation map is genuinely pure and genuinely wants to be read there, but
+   the `init`/`on_step`/`final` confinement excludes it. A real need with no
+   mechanism yet.
+3. **Field-level wires** (§5.3) — `whl.ws.speed --> tc.u`. The grammar admits it;
+   the semantics currently reject it.
+4. **Platform atom vocabulary** (§12.2) — the exact set, and how extensible it is.
+5. **The fixed-step solver menu** (§9.5) beyond `euler`/`rk2`/`rk4`.
+6. **`name:` display metadata** — an optional human-readable label distinct from
+   the type identifier. Never ruled on; currently absent.
+7. **Log file format** (§13.7) — plain text versus structured JSONL.
+
+**Deliberately deferred, each a pure extension:**
+
+8. **Algebraic loop solving** (tearing plus Newton, §8.6) — deferred, not
+   rejected. Adding it is a relaxation, and the SCC analysis is already needed for
+   the diagnostic.
+9. **Declarative `stop_when:`** in the sim file — needs run-time signals in the
+   §7 expression language, which is a much larger change than it appears. Add it
+   only when experiment-level, model-author-oblivious stop conditions are genuinely
+   needed.
+10. **Chronic-overrun termination** (§9.4) — offered and explicitly not taken;
+    overrun is instrumented, not policed. Would route through `sim.abort` →
+    `final(ctx)` and would want a new `ctx.reason` value rather than overloading
+    `aborted`, which means "a node called `sim.abort`".
+11. **Recording wildcards** (§13.5) — `plant.out.*`, or `**` to recurse.
+12. **`output(*)`** — "reads every input", for wide `Sum`-style nodes. Tangles with
+    variadic ports, which is its own unopened topic.
+13. **Self-pulling dependencies** (§12) — a package able to fetch its own source.
+    Composes cleanly with the unity build: pull source, `#include` it into the
+    single translation unit, no separate link step.
+14. **Real constructors and destructors on leaves** instead of `init()`/`final()`.
+15. **Downsample aliasing warning** — a fast→slow connection inserts no
+    anti-alias filter; the engine could warn.
+16. **First-order hold** on upsample instead of ZOH. Rare in this domain.
+
+**Implementation hazards, called out because they fail silently:**
+
+17. **`#line` accounting for injected `native` alias lines** (§11.2). Get the
+    offset wrong and every C++ error in that method points a line or two off.
+    Two concrete cases already observed in `examples/drivetrain/`:
+    - Editing a `.se` body shifts every later body, so hand-maintained `#line`
+      values rot silently. Nothing detects it; only a real diagnostic reveals it.
+    - A `#line` block set for one body stays in effect over the **generated**
+      code that follows it, so a warning about a generated *signature* — an
+      unreferenced `in` on an empty `In_output`, say — is attributed to the
+      previous method's body. The generator must reset `#line` (to the node's
+      declaration line, or to the generated file itself) after each verbatim
+      region, not only before one.
+18. **Digit separators and raw strings** in verbatim scanning (§11.2).

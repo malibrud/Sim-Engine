@@ -1,0 +1,16 @@
+﻿error[SE0210]: wildcard import is not supported
+ --> tests/err/imports.se:4:14
+  |
+4 | use std.mech.*;
+  |              ^ remove the `.*`
+  = note: every name's origin must be traceable from the `use` block (§2.4)
+  = help: import the symbols you need (`use std.mech.Damper;`) or alias the package (`use std.mech;`)
+
+error[SE0203]: `use` declaration after a definition
+  --> tests/err/imports.se:11:1
+   |
+11 | use std.ctrl.PID;
+   | ^^^ move this above the definitions
+   = note: declaration order is `package`, then all `use`s, then the definitions (§2.5)
+
+2 errors emitted

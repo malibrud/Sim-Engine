@@ -1,0 +1,25 @@
+// ─────────────────────────────────────────────────────────────────────────────
+//  External settings source.  SPECIFICATION.md §14.
+//
+//  The flattest possible surface, because this is the layer scripts and
+//  parameter sweeps generate. Last writer in the §13.3 chain, so these win over
+//  the definition defaults, the flow-down expressions, and the sim file.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// A root setting. Overriding it re-runs the flow-down into whl.inertia.
+wheel_inertia = 0.95 (kg*m^2);
+
+// A deep override. Note the documented cost (§13.3): this DETACHES whl.inertia
+// from the flow-down above, so the wheel no longer tracks wheel_inertia.
+whl.inertia   = 1.05 (kg*m^2);
+
+// Unit conversion at a declarative site: declared (m), written in millimetres.
+whl.radius    = 315 (mm);
+
+// Dimensionless, so no unit is needed.
+tc.slip_limit = 0.08;
+
+// A state's initial value rides the SAME channel — there is no `initial:`
+// section anywhere in the language.
+whl.omega     = 5.0 (rad/s);
+tc.cut        = 0 (N*m);

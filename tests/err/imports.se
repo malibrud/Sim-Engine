@@ -1,0 +1,11 @@
+// SE0210 wildcard import, SE0203 a `use` after a definition. §2.4, §2.5
+package tests;
+
+use std.mech.*;
+
+node Fine {
+    outputs { y (-): double; }
+    output() { out.y = 0.0; }
+}
+
+use std.ctrl.PID;

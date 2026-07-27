@@ -1,0 +1,12 @@
+// A package manifest (§2.6): the only `.se` file that declares no node or type.
+// This is how a dependency becomes "just a package that declares primitives".
+package tests;
+
+build {
+    include_dir "third_party/openssl/include";
+    link "libssl"    when windows;
+    link "libcrypto" when windows;
+    link "ssl"       when linux;
+    link "crypto"    when linux;
+    define "OPENSSL_NO_DEPRECATED";
+}

@@ -1,0 +1,10 @@
+﻿=== tests/ok/Telemetry.se ===
+model-file
+  package tests
+  type Telemetry  [line 4]
+    torque (N*m): double
+    ok (-): bool
+    stamp: Sample
+  type Sample  [line 11]
+    t (s): double
+    n (-): int

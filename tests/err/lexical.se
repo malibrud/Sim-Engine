@@ -1,0 +1,19 @@
+// Stage-1 diagnostics: SE0105 a lone `>`, SE0103 an unterminated string,
+// SE0104 a bad escape, SE0106 a malformed number, SE0102 a runaway comment. §3
+package tests;
+
+node Bad {
+    settings {
+        a (-): double = 1e;
+        b (-): double = 2.0;
+    }
+    outputs { y (-): double; }
+    build {
+        define "unterminated
+        link "bad\escape";
+    }
+    structure {
+        self.a > b.c;
+    }
+    /* this comment never ends
+}

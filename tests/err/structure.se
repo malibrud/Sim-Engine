@@ -1,0 +1,31 @@
+// SE0211 children and wires outside `structure`, SE0208 the required `;` after
+// an instance, SE0212 an endpoint that names no port. §6.9
+package tests;
+
+node Loose {
+    inputs  { u (-): double; }
+    outputs { y (-): double; }
+
+    node inner : Gain { k = 2.0; };
+    self.u --> inner.u;
+}
+
+node MissingSemi {
+    inputs  { u (-): double; }
+    outputs { y (-): double; }
+
+    structure {
+        node g : Gain { k = 2.0; }
+    }
+}
+
+node BadEndpoint {
+    inputs  { u (-): double; }
+    outputs { y (-): double; }
+
+    structure {
+        node g : Gain { k = 2.0; };
+        self.u --> g;
+        g.y --> self;
+    }
+}

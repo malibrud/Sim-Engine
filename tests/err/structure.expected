@@ -1,0 +1,30 @@
+﻿error[SE0211]: child instance outside a `structure` block
+ --> tests/err/structure.se:9:5
+  |
+9 |     node inner : Gain { k = 2.0; };
+  |     ^^^^ `node` here declares a child instance
+  = note: a composite's children and wires live in `structure { ... }` (§6.9)
+  = help: wrap the instances and wires in `structure { ... }`
+
+error[SE0208]: expected `;` after the instance declaration
+  --> tests/err/structure.se:19:5
+   |
+19 |     }
+   |     ^ expected `;`
+   = note: the `;` after the closing brace is required: it terminates the statement, as a port declaration's does (§6.9.1)
+
+error[SE0212]: wire endpoint `g` does not name a port
+  --> tests/err/structure.se:28:20
+   |
+28 |         self.u --> g;
+   |                    ^ expected `.<port>` here
+   = note: an endpoint is `self.<port>` or `<instance>.<port>`; a composite wires its own ports with `self.` because bare names would collide with child instance names (§6.9.2)
+
+error[SE0212]: wire endpoint `self` does not name a port
+  --> tests/err/structure.se:29:17
+   |
+29 |         g.y --> self;
+   |                 ^^^^ expected `.<port>` here
+   = note: an endpoint is `self.<port>` or `<instance>.<port>`; a composite wires its own ports with `self.` because bare names would collide with child instance names (§6.9.2)
+
+4 errors emitted

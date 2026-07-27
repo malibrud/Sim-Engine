@@ -1,0 +1,45 @@
+// The verbatim-scanning traps of SPECIFICATION.md §11.2. Every construct below
+// contains a brace or a quote that must NOT affect bracket matching. If this
+// file parses to one node with three methods, the scanner is correct.
+package tests;
+
+node Tricky {
+    settings {
+        gain (-): double = 1.0;
+    }
+    outputs {
+        y (-): double;
+    }
+    states {
+        continuous x (-): double = 0.0;
+    }
+
+    declarations {
+        #include <string>
+        // a brace in a line comment: {
+        /* and in a block comment: } */
+        namespace { constexpr char kCloseBrace[] = "}"; }
+    }
+
+    init() {
+        // } in a line comment
+        /* } in a block comment */
+        const char* s = "a } inside a string literal";
+        const char c  = '}';                 // a brace as a character literal
+        const char q  = '\'';                // an escaped quote
+        long big      = 1'000'000;           // digit separators, NOT a literal
+        long bigger   = 1'000'000'000;
+        const char* raw  = R"(unbalanced { brace, and a " quote)";
+        const char* raw2 = R"delim(contains )" which does not end it)delim";
+        state.x = 0.0;
+        (void)s; (void)c; (void)q; (void)big; (void)bigger; (void)raw; (void)raw2;
+    }
+
+    rates() {
+        der.x = -param.gain * state.x;
+    }
+
+    output() {
+        out.y = state.x;
+    }
+}

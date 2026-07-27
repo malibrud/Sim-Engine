@@ -1,0 +1,77 @@
+// Exercises the sections the drivetrain example never reaches: `native`,
+// `declarations`, `build`, a verbatim helper function, and `final(ctx)`.
+// SPECIFICATION.md §6.6, §6.7, §6.8, §10.3, §11.4, §12.
+package tests;
+
+node Net {
+    settings {
+        port      (-):  int    = 9000;
+        rate      (Hz): double = 100.0;
+        deadband  (-):  double = 1.0e-6;
+    }
+    inputs {
+        tx (-): double;
+    }
+    outputs {
+        rx (-): double;
+    }
+    states {
+        discrete packets (-): int = 0;
+    }
+    vars {
+        last_rx (-): double;
+    }
+
+    // Opaque C++ handles. The type text is verbatim, scanned to the `;`, so a
+    // comma inside template arguments and a `;`-free initialiser both just work.
+    native {
+        sock: SOCKET;
+        buf:  std::array<char, 1024>;
+        dev:  std::unique_ptr<Device>;
+        ser:  Serial{"COM3", 115200};
+    }
+
+    build {
+        link        "ws2_32"  when windows;
+        link        "pthread" when linux;
+        include_dir "vendor/asio/include";
+        define      "ASIO_STANDALONE";
+        cflag       "/bigobj" when windows;
+    }
+
+    declarations {
+        #include <array>
+        #include <memory>
+        namespace { constexpr int kMaxRetry = 3; }
+    }
+
+    // Natives use their BARE name, and are in scope only here, in on_step and
+    // in final -- never in output() or rates().
+    init() {
+        sock = socket(AF_INET, SOCK_DGRAM, 0);
+        var.last_rx = 0.0;
+        log.info("listening on {}", param.port);
+    }
+
+    on_step(tx) {
+        sendto(sock, &in.tx, sizeof(double), 0, nullptr, 0);
+        const int n = recv(sock, buf.data(), buf.size(), 0);
+        if (n > 0) {
+            var.last_rx = scale(static_cast<double>(n));
+            next.packets = state.packets + 1;
+        }
+    }
+
+    // Registered: no feedthrough, so this is a sort root and breaks loops.
+    output() {
+        out.rx = var.last_rx;
+    }
+
+    final(ctx) {
+        log.info("closing after {} at t={}", ctx.message, ctx.time);
+        closesocket(sock);
+    }
+
+    // A verbatim private member. The compiler never parses this signature.
+    double scale(double v) const { return v * (1.0 - param.deadband); }
+}

@@ -1,0 +1,15 @@
+﻿error[SE0110]: unterminated verbatim region
+  --> tests/err/unterminated.se:10:14
+   |
+10 |     output() {
+   |              ^ opened here
+   = note: reached end of file still 1 brace deep
+   = note: braces inside comments, string, character and raw string literals are not counted (§11.2)
+
+error[SE0201]: expected `}` to close the node body, found end of file
+  --> tests/err/unterminated.se:15:1
+   |
+15 | 
+   | ^ expected `}`
+
+2 errors emitted

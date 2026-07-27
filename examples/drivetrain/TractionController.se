@@ -22,7 +22,9 @@ node TractionController {
     // propagated, so unlike output() this constrains nothing for the sort.
     on_step(ws) {
         auto excess = in.ws.slip - param.slip_limit;                 // dimensionless
-        next.cut = excess > 0.0 ? param.gain * excess : 0.0 * (N*m);
+        // plain double: units are checked at declarative sites and erased, so a
+        // zero is just a zero -- no `0.0 * (N*m)` literal ceremony.
+        next.cut = excess > 0.0 ? param.gain * excess : 0.0;
     }
 
     // no feedthrough -> sort root -> this is the registered loop-breaker

@@ -1,0 +1,28 @@
+﻿=== tests/ok/Units.se ===
+model-file
+  package tests
+  use std.mech.Damper
+  use std.mech
+  node Units  [line 9]  kind=leaf
+    settings
+      total_mass (kg): double  [required]
+      corner_mass (kg): double = (param.total_mass / 4.0)
+      inertia (kg*m^2): double = 0.9
+      inv_inertia (1/(kg*m^2)): double = 1.0
+      jerk (m/s^3): double = 0.0
+      visc (kg/m/s): double = 1.8e-5
+      area_rt (m^(1/2)): double = 1.0
+      decay (s^-1): double = 0.5
+      ratio (-): double = 0.25
+      duty (%): double = 40.0
+      heading (deg): double = 90.0
+      limit (m/s): double = 130 (km/h)
+      omega (rad/s): double = ((2.0 * pi) * 50.0)
+      diag (m): double = hypot(3.0, 4.0)
+      scaled (m): double = (-(2.0 ^ 2) + (max(1.0, 2.0) / (3.0 - 1.0)))
+      rooted (m): double = (sqrt((param.corner_mass / 4.0)) * 1.0)
+      flat (-): double = (2.0 ^ (3.0 ^ 2.0))
+    outputs
+      y (-): double
+    output()   [no feedthrough — sort root]
+      body @line 40 (22 bytes): "out.y = param.ratio;"

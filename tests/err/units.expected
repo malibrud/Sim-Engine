@@ -1,0 +1,45 @@
+﻿error[SE0205]: missing unit annotation before `double`
+ --> tests/err/units.se:7:12
+  |
+7 |         a: double;                  // no unit annotation, and `double` is not a record
+  |            ^^^^^^ expected `(unit):` here
+  = note: the unit is not optional on a scalar declaration; `(-)` spells dimensionless (§5.1)
+  = help: write `setting (-): double;` if it really is dimensionless
+
+error[SE0206]: malformed unit expression: expected a unit symbol, found `)`
+ --> tests/err/units.se:8:14
+  |
+8 |         b (m/): double = 1.0;       // dangling operator
+  |              ^ expected a unit symbol
+  = note: a unit is `1`, a symbol, or a parenthesised unit expression, combined with `*`, `/` and `^` (§4.1)
+
+error[SE0206]: unit exponent must be an integer
+ --> tests/err/units.se:9:14
+  |
+9 |         c (m^1.5): double = 1.0;    // non-integer exponent
+  |              ^^^
+  = note: rational exponents are written `m^(1/2)` (§4.1)
+
+error[SE0207]: unknown scalar type `dobule`
+  --> tests/err/units.se:10:16
+   |
+10 |         d (m): dobule = 1.0;        // typo in the scalar type
+   |                ^^^^^^
+   = help: did you mean `double`?
+   = note: the scalar type set is closed: `double`, `float`, `int`, `bool` (§5.1)
+
+error[SE0206]: only the literal `1` may appear in a unit expression
+  --> tests/err/units.se:11:12
+   |
+11 |         e (2*m): double = 1.0;      // only `1` may appear as a literal
+   |            ^ found `2`
+   = note: `1` is the identity unit, as in `(1/(kg*m^2))` (§4.1)
+
+error[SE0231]: a setting may not be a record type
+  --> tests/err/units.se:12:12
+   |
+12 |         f: Telemetry;               // settings are scalars
+   |            ^^^^^^^^^
+   = note: settings are scalars: the flow-down expression language is scalar (§5.2)
+
+6 errors emitted

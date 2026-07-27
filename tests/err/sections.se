@@ -1,0 +1,13 @@
+// SE0220 duplicate section, SE0221 unknown section (with did-you-mean). §6
+package tests;
+
+node Bad {
+    settings { a (-): double = 1.0; }
+    inputs   { u (-): double; }
+    settings { b (-): double = 2.0; }
+
+    state { x (-): double = 0.0; }
+
+    outputs { y (-): double; }
+    output(u) { out.y = in.u; }
+}

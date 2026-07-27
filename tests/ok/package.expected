@@ -1,0 +1,10 @@
+﻿=== tests/ok/package.se ===
+model-file
+  package tests
+  build (package manifest)
+    include_dir "third_party/openssl/include"
+    link "libssl" when windows
+    link "libcrypto" when windows
+    link "ssl" when linux
+    link "crypto" when linux
+    define "OPENSSL_NO_DEPRECATED"

@@ -20,7 +20,7 @@ node Wheel {
         inertia_inv (1/(kg*m^2)): double;
     }
 
-    init {
+    init() {
         var.inertia_inv = 1.0 / param.inertia;
     }
 
