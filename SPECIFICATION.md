@@ -76,8 +76,7 @@ them is a defect in this document.
 ### 1.3 Conformance and stage boundaries
 
 A conforming implementation processes a program in these stages. This document
-marks rules with the earliest stage that can detect a violation, because the
-parser described in §17 and shipped in `src/` implements stages 1–2 only.
+marks rules with the earliest stage that can detect a violation.
 
 | Stage | Name | Detects |
 |---|---|---|
@@ -88,9 +87,9 @@ parser described in §17 and shipped in `src/` implements stages 1–2 only.
 | 5 | **Scheduling** | Feedthrough sort, algebraic loops, rate/active-set construction. |
 | 6 | **Emission** | Code, unit manifest, slot map, build script. |
 
-Stages 3–6 are specified here but are **not** implemented by the current parser.
-Where this document says *"is an error"* without qualification, the stage column
-in §16.4 gives the detecting stage.
+All six stages are implemented in `src/`, one source file per stage from stage 3
+on. Where this document says *"is an error"* without qualification, the stage
+column in §16.4 gives the detecting stage.
 
 ### 1.4 Terminology
 
@@ -636,8 +635,13 @@ to the solver.
 - **`next.` means simultaneous update.** A direct `state.x = …` mutation would be
   *sequential*, making results depend on statement order inside `on_step()`. With
   `next.`, every discrete state reads the old value and writes the new one, which
-  is what the state-space form x⁺ = h(t,x,u) actually says. The lowering uses a
-  separate `Next` buffer plus a generated `commit()`.
+  is what the state-space form x⁺ = h(t,x,u) actually says. The lowering gives
+  the whole model one discrete block and one buffer of the same shape (§15.5):
+  every `on_step()` reads `dis` and writes `nxt`, and the tick ends with a single
+  `dis = nxt`. Simultaneity is therefore a property of the **model**, not of each
+  node in turn, and there is no per-node `commit()`. A node that did not sample
+  this tick left its slice of `nxt` equal to `dis`, so the whole-block assignment
+  is a no-op for it.
 - Only `double` may be `continuous` (`SE0431`); the state vector is a flat
   `double` array.
 - **The declared default is the initial condition.** There is no separate
@@ -950,6 +954,13 @@ Write permissions, exactly:
 - `rates()` writes `der` only.
 - `on_step()` writes `next` and `var`; may touch natives; may log.
 - `final(ctx)` writes nothing model-visible; may touch natives; may log.
+
+"Mutating" above describes what the method may change in the *model*, not the
+constness of the generated C++ member. All four of `output`, `rates`, `on_step`
+and `final` lower to `const` members, and each receives what it may write as an
+out-parameter — `out`, `der`, `next`, `var`. Only `init()` is non-const, because
+it writes its own storage directly. See §15.4: that uniformity is what makes the
+write permissions above compile-time facts rather than documented conventions.
 
 `on_step` is named for the `on_` prefix reading as "fires at a specific moment" —
 `update()` says nothing about when, and `commit()` describes the mechanism rather
@@ -1416,6 +1427,13 @@ external build tool:
 - **Generate-code and build-it are separable steps.** The compiler's contract is
   *generate code*; building it into a running simulation is an optional second
   stage.
+- **The model is a header; the driver is its own translation unit.** The script
+  compiles `<name>.main.cpp`, which contains nothing but `main()` and an
+  `#include` of `<name>.generated.hpp`. A host program that wants to drive the
+  root boundary itself includes the header and supplies its own `main()`,
+  without editing a file stamped DO NOT EDIT; the driver can be suppressed
+  entirely. Both the driver and a host use the same `init()` / `done()` /
+  `tick()` / `finish()` calls, so neither can drift from the other.
 - The script is a **full-build reference only**. It never tracks changes and
   never builds incrementally or in parallel.
 - That is not an omission. **The unity build is the intended build model** — all
@@ -1477,7 +1495,7 @@ model, and the model would stop being the thing under test.
 | `duration:` | time expression | required |
 | `mode:` | `batch` · `realtime` | `batch` |
 | `sync:` | time expression, an integer multiple of `step` | required iff `realtime` |
-| `window:` | time expression | `1 (s)` |
+| `window:` | time expression, at least `sync`; `realtime` only | `1 (s)` |
 | `settings:` | string — a `.settings` path | none |
 | `record:` | block, §13.5 | no recording |
 | `log:` | block, §13.7 | console only |
@@ -1583,6 +1601,16 @@ self-documenting in a CSV header, and `-` in the manifest either way:
   twenty minutes into a run is buried under a long clean history — exactly the
   case a live value must catch. The window sets resolution: 10 ms frames over 1 s
   is 100 frames, so 1% steps.
+- The window is **a whole number of frames**, `round(window / sync)`. Rounding is
+  the honest behaviour — unlike `sync / step`, where §9.4 demands an exact
+  multiple because sample instants have to land — but rounding to *zero* is not:
+  the metrics would then report the latest frame rather than a rolling average,
+  which is a different quantity under the same name. A `window` shorter than one
+  frame is therefore an error (`SE0264`), not a silent collapse to one frame.
+- `window:` only means anything in real time, so giving it under `mode: batch` is
+  an error (`SE0263`) rather than a value that is read and ignored. Recording
+  `sim.*` in a batch run would otherwise produce a column of zeros with nothing
+  said.
 - **Both are recordable signals**, addressable as `sim.*` paths in `signals`, so
   they land in the CSV beside model signals. That is what identifies *which*
   manoeuvre blows the timing budget, not merely that something did. Per-frame
@@ -1663,41 +1691,72 @@ compiles once regardless of instance count.
 ### 15.3 A wire is not its own variable
 
 A wire **coincides with the producer's `Out` storage**, owned by `Sim`. So
-`whl.ws --> tc.ws, self.ws` becomes two readers of `fl_whl_out.ws`: fan-out is
+`whl.ws --> tc.ws, self.ws` becomes two readers of `sig.whl.ws`: fan-out is
 free and nothing is copied. Fan-in being forbidden (§6.9.2) is exactly what makes
 single-writer storage sound.
+
+That storage lives in the **signal block** (§15.5), not as a loose member, so the
+whole signal set has one address, one size, and one offset table.
 
 **ZOH falls out for free.** A 200 Hz node's `Out` is not written on the other nine
 base ticks, so the held value is simply the variable still sitting there. No hold
 buffer exists.
 
+**A record crosses a wire by reference, a scalar by value.** An `In_` view holds
+`const WheelState&` for a record port and a plain `double` for a scalar one.
+That is the ordinary C++ convention, and it also decides where a unit conversion
+lives: only a scalar port can convert (a record wire requires identical types),
+and the scalar is a copy, so the conversion folds into it. Nothing else in the
+generated code ever needs conversion machinery.
+
 ### 15.4 Enforcement falls out of the lowering
 
 Not from an analyser:
 
-- **Purity is `const` on the method.** `output()` and `rates()` are const
-  members, so a body physically cannot write `state`, `var`, or `param`. The
-  writable thing is an out-parameter.
+There are exactly three mechanisms, and **none of them is a name that shadows
+another name**. That was tried and is not sound: a `const State&` alias declared
+in a method's preamble hides the member for unqualified lookup, so `state.x = …`
+fails, but `this->state.x = …` still compiles. A guarantee with a one-token
+escape hatch is not a guarantee, so the storage itself carries the constness.
+
+- **Purity is `const` on the method, and the writable thing is an
+  out-parameter.** `output()`, `rates()`, `on_step()` and `final()` are all const
+  members, so no body can write `state`, `var` or `param` through `this`. What a
+  method may write, it receives: `Out& out`, `Der& der`, `Store& next`, `Var&
+  var`. This is one rule, applied uniformly, and it is why `on_step()` can write
+  a `var` (§6.5) while still reaching a state only through `next.` (§6.4).
+- **Settings are `const` by construction.** `param` is a `const Param` member,
+  initialised when the leaf is constructed, because settings are fixed at
+  elaboration (§6.2) and there is no moment at which writing one would be
+  meaningful. No spelling of it is assignable, in any method.
+- **`init()` is the one non-const method**, since §6.4 makes it the escape hatch
+  for a computed initial condition and §6.5 lets it compute a `var`. It needs no
+  protection for `param`, which is const anyway.
 - **Feedthrough is a struct field set.** One `In_<method>` view struct per
   method, holding exactly the inputs that method's DSL signature listed. Reading
   an undeclared input is "no such member". An **empty** `In_output` is the sort
   root and the loop-breaker.
-- **I/O confinement is name withholding.** Native aliases and `log.*` are emitted
-  into the preamble of the methods where they are legal, and simply are not
-  declared elsewhere.
+- **I/O confinement is name withholding.** Native aliases and the full `log`
+  object are emitted into the preamble of the methods where they are legal, and
+  simply are not declared elsewhere. Natives are `mutable`, which gives up
+  nothing: §6.7 already establishes that `const` never protected a handle,
+  because a `const SOCKET` is still perfectly usable by `recv()`.
 
 ```cpp
 struct Wheel {
-    struct Param { double inertia;    /* kg*m^2 */  double radius; /* m */ };
-    struct Var   { double inertia_inv; };            // 1/(kg*m^2)
-    struct State { state_ref omega; };               // rad/s
-    struct Der   { state_ref omega; };               // rad/s^2
-    struct Out   { WheelState ws; };
+    struct Param     { double inertia;    /* kg*m^2 */  double radius; /* m */ };
+    struct Var       { double inertia_inv{}; };          // 1/(kg*m^2)
+    struct State     { state_ref omega; };               // a view into Sim::x
+    struct Der       { state_ref omega; };               // a view into Sim::xd
+    struct Out       { WheelState ws{}; };
+    struct In_rates  { double drive_torque{}; };
+    struct In_output { double drive_torque{}; double ground_speed{}; };
 
-    struct In_rates  { double drive_torque; };
-    struct In_output { double drive_torque; double ground_speed; };
-
-    Param param; State state; Var var;
+    const Param           param;          // set at construction; never writable
+    const char* const     se_path_;
+    State                 state;
+    Var                   var{};
+    const se_rt::TraceLog log{se_path_};  // log.trace only (§10.1)
 
     void init();                                              // mutating
     void rates (const In_rates&  in, Der& der) const;         // pure
@@ -1705,34 +1764,70 @@ struct Wheel {
 };
 ```
 
-### 15.5 The state vector
+A consequence worth stating, because it is the property a reader of generated
+code most wants: **`output()` and `rates()` need no preamble at all.** The
+trace-only `log` is a member, and everything else they may touch is already
+const through `this`, so between their braces there is nothing but the verbatim
+body.
+
+### 15.5 The three blocks
+
+A leaf owns almost nothing. Its state and its outputs live in model-wide blocks
+that `Sim` owns, and the leaf holds views into them:
 
 ```cpp
 static constexpr std::size_t n_states = 1;
-std::array<double, n_states> x{};
+std::array<double, n_states> x{};    // continuous state — the solver's ABI
 std::array<double, n_states> xd{};
+
+struct Signals {                     // every wire value + the root boundary
+    struct In { double axle_torque{}; double ground_speed{}; } in;
+    Wheel::Out              whl;
+    TractionController::Out tc;
+};
+Signals sig{};
+
+struct Discrete { TractionController::Store tc; };
+Discrete dis{};                      // every discrete state, as committed
+Discrete nxt{};                      // the x⁺ = h(t,x,u) buffer
 ```
 
-- **One flat `double` array**, so an external solver integrates it directly.
-- **Only `continuous` states.** Discrete states live in their node and never reach
-  the solver.
-- **Slot convention:** `x[i]` holds the value *in that state's declared unit*.
-  That is a contract with the external solver, so the generator emits a **slot
-  map**.
-- Named states are non-template **`state_ref` proxies holding a `double*`**. The
-  proxy exists because generated `State` and `Der` structs must be
-  default-constructible before `bind_states()` runs, and a `double&` member can be
-  neither default-constructed nor rebound. `operator double()` means every
-  operator, every `<cmath>` function, and every third-party API just works.
-- `state_ref` lives in a fixed engine runtime header — about twenty lines, with no
-  includes at all.
-- **There is no `gather_x`/`scatter_x`.** The vector *is* the storage, so there is
-  no second copy to desynchronise. A solver that owns its own vector (CVODE,
+**Why blocks rather than loose members.** `x` was always a block, for a stated
+reason — an external solver integrates it directly. The same argument reaches
+further than the solver: an inspector, a shared-memory host, a replay recorder
+or a co-simulation peer wants an address, a size, and a table. Given those, none
+of them needs a line of generated accessor code. **`x` + `sig` + `dis` is a
+complete checkpoint of the model.**
+
+- **`x` is one flat `double` array** holding only `continuous` states, so an
+  external solver integrates it directly. `x[i]` holds the value *in that
+  state's declared unit* — a contract, hence the slot map.
+- **`sig` and `dis` are generated structs, not arrays**, because a port may be
+  `int`, `bool` or a record, and the block has to hold each faithfully. Their
+  offsets therefore come from `offsetof` in the generated header, not from the
+  DSL compiler: padding is the C++ compiler's business and a guessed table would
+  be worse than none (§15.6).
+- **A named state is a `value_ref<T>` proxy holding a `T*`.** The proxy exists
+  because generated `State` and `Der` structs must be default-constructible
+  before `bind()` runs, and a `T&` member can be neither default-constructed nor
+  rebound. `operator T()` means every operator, every `<cmath>` function and
+  every third-party API just works. It is a template only because a continuous
+  state is always `double` while a discrete one may not be; that does not
+  disturb the default-constructibility argument, which holds per instantiation.
+  `using state_ref = value_ref<double>;` is the continuous case.
+- **Constness propagates because `State` is held by value.** In a const method
+  `state` is a `const State`, so `state.omega` is a `const value_ref` and
+  `operator=` is not callable. A `T&` or `T*` member would leak, which is the
+  whole reason the proxy exists rather than a raw reference.
+- **There is no `gather_x`/`scatter_x`.** The vector *is* the storage, so there
+  is no second copy to desynchronise. A solver that owns its own vector (CVODE,
   odeint) does one `memcpy` each way per evaluation: the proxies buy a clean
   *layout*, not zero copying.
-- `der` and `next` are **`Sim`-owned scratch, not node data**. `der` is evaluated
-  4× per RK4 step at trial states and discarded; `next` is the simultaneous-update
-  buffer. `states` and `vars` remain the only DSL storage sections.
+- `der` is **`Sim`-owned scratch, not node data** — evaluated once per solver
+  stage at trial states the trajectory never visits, then discarded. `states`
+  and `vars` remain the only DSL storage sections; `vars` stay inside the node,
+  because §6.5 makes them private per-instance storage outside the override
+  channel and therefore outside the model's addressable surface.
 
 ### 15.6 The unit manifest
 
@@ -1742,24 +1837,47 @@ solver, feeding the root boundary, or overriding a setting from outside:
 
 ```
 [state.continuous]        # slot | model path | unit  -- the solver's ABI
-x[0]      fl.whl.omega          rad/s
-xd[0]     fl.whl.omega'         rad/s^2
+x[0]      whl.omega             rad/s
+xd[0]     whl.omega'            rad/s^2
 
-[state.discrete]          # not in the state vector; lives in its node
-          fl.tc.cut             N*m
+[state.discrete]          # Sim::dis; offsets from Sim::discrete_map()
+          tc.cut                N*m         double
 
-[boundary.in]             # root inputs the host must supply
-          src.axle_torque       N*m
+[signals]                 # Sim::sig; offsets from Sim::signal_map()
+          in.axle_torque        N*m         double
+          whl.ws.speed          rad/s       double
+
+[boundary.in]             # root inputs the host must drive, as sig.in.*
+          in.axle_torque        N*m
 
 [boundary.out]            # root outputs the host may read
-          fl.whl.ws.speed       rad/s
+          whl.ws.speed          rad/s
 
 [settings]                # elaborated values, post-conversion
-          fl.whl.inertia        kg*m^2      = 0.9
+          whl.inertia           kg*m^2      = 0.9
 
 [types]
-WheelState.speed              rad/s
+drivetrain.WheelState.speed     rad/s
 ```
+
+Paths are **root-relative** (§13.2): the `root:` entry names a definition, not an
+instance, so there is no prefix for the root itself.
+
+**Byte offsets are not in the manifest, deliberately.** Padding is decided by the
+C++ compiler, so a table written by `sec` would be a guess, and a wrong offset
+table is worse than none. The manifest names, units and types each slot; the
+generated header exposes the offsets, built with `offsetof` where they are
+actually known:
+
+```cpp
+static const se_rt::Slot* signal_map(std::size_t& count);
+static const se_rt::Slot* discrete_map(std::size_t& count);
+// struct Slot { const char* path; std::size_t offset, size;
+//               const char* type; const char* unit; };
+```
+
+Both the manifest section and the table are generated from one list, so they
+cannot drift apart.
 
 ### 15.7 Dispatch
 
@@ -1849,7 +1967,8 @@ Codes are stable. `SE01xx` lexical, `SE02xx` syntactic, `SE03xx` resolution,
 | `SE0260` | 2 | Duplicate entry in `sim` |
 | `SE0261` | 2 | Unknown entry in `sim` |
 | `SE0262` | 2 | Missing required `sim` entry |
-| `SE0263` | 2 | `sync` requires `mode: realtime` |
+| `SE0263` | 2 | `sync` or `window` requires `mode: realtime` |
+| `SE0264` | 4 | Bad value for a `sim` entry (solver, mode, log level, `window` shorter than one frame) |
 | `SE0301` | 3 | `package` declaration disagrees with the file's location |
 | `SE0302` | 3 | No public declaration matching the file name |
 | `SE0303` | 3 | Imported name collides |
@@ -1857,6 +1976,7 @@ Codes are stable. `SE01xx` lexical, `SE02xx` syntactic, `SE03xx` resolution,
 | `SE0305` | 3 | Package path resolves in more than one root |
 | `SE0310` | 3 | Cycle in record field types |
 | `SE0311` | 3 | Field-level wire endpoints are not supported |
+| `SE0312` | 4 | Recursive instantiation: a node transitively contains itself |
 | `SE0320` | 3 | Node has both code and a `structure` block |
 | `SE0330` | 3 | Duplicate member name in a node |
 | `SE0331` | 3 | Member name shadows a generated accessor |
@@ -2120,13 +2240,20 @@ Recorded so that their absence is visibly deliberate.
 
 17. **`#line` accounting for injected `native` alias lines** (§11.2). Get the
     offset wrong and every C++ error in that method points a line or two off.
-    Two concrete cases already observed in `examples/drivetrain/`:
+    Two concrete cases were observed in `examples/drivetrain/`. Both are now
+    handled by the emitter, and both stay recorded here because they fail
+    *silently* — no test goes red for either, so a future rewrite would
+    reintroduce them unnoticed.
     - Editing a `.se` body shifts every later body, so hand-maintained `#line`
       values rot silently. Nothing detects it; only a real diagnostic reveals it.
+      The emitter sidesteps the arithmetic entirely: it writes the whole
+      preamble first and the directive last, immediately before the body text,
+      so the injected line count never enters the calculation.
     - A `#line` block set for one body stays in effect over the **generated**
       code that follows it, so a warning about a generated *signature* — an
       unreferenced `in` on an empty `In_output`, say — is attributed to the
       previous method's body. The generator must reset `#line` (to the node's
       declaration line, or to the generated file itself) after each verbatim
-      region, not only before one.
+      region, not only before one — which is why the emitter's output buffer
+      tracks its own line number.
 18. **Digit separators and raw strings** in verbatim scanning (§11.2).

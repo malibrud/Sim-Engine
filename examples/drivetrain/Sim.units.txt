@@ -1,5 +1,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
-#  GENERATED — DO NOT EDIT.
+#  Illustrative, hand-written to match Sim.generated.cpp — see that file's
+#  header. The real emitter writes root-relative paths (`whl.omega`), not the
+#  `fl.` prefix used here.
 #  Unit manifest for: examples/drivetrain/Sim.generated.cpp
 #  Root: drivetrain.Corner (as `fl`)   Base step: 1 kHz
 #

@@ -1,0 +1,12 @@
+﻿error[SE0510]: algebraic loop through 2 nodes
+  --> tests/emit/lib/loop/Loop.se:29:5
+   |
+29 |     output(r, fb) { out.cmd = param.kp * (in.r - in.fb); }
+   |     ^^^^^^ in this feedthrough set
+   = note: cycle: ctl.cmd -> act.u -> act.f -> ctl.fb
+   = note: act.output(u) declares feedthrough on `u`  [tests/emit/lib/loop/Loop.se:37]
+   = note: ctl.output(fb) declares feedthrough on `fb`  [tests/emit/lib/loop/Loop.se:29]
+   = help: drop `u` from `act.output(u)` and latch it in `on_step()`, or insert a unit delay / integrator anywhere in the cycle
+   = note: an algebraic loop is an implicit equation z = f(z) with no valid ordering; it is rejected rather than solved, because most are modelling mistakes and iteration has no statable worst-case execution time (§8.6)
+
+1 error emitted

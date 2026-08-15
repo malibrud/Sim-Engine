@@ -1,0 +1,38 @@
+package decay;
+
+// The smallest model that checks arithmetic rather than shape: first-order
+// decay, whose closed form x(t) = x0 * exp(-k*t) the test runner compares the
+// recorded CSV against. It is also the leaf-as-root case — a root node need
+// not be a composite, and then §13.2's root-relative paths have no prefix at
+// all, so a signal is addressed simply as `x`.
+node Decay {
+    settings {
+        k        (1/s): double = 2.0;
+        x0       (-):   double = 1.0;
+        // A derived setting, so the topological sort of §6.2 is exercised too:
+        // overriding k recomputes this, overriding it directly pins it.
+        half_life (s):  double = log(2.0) / param.k;
+    }
+    outputs {
+        value     (-): double;
+        remaining (s): double;
+    }
+    states {
+        continuous x (-): double = 1.0;
+    }
+
+    init() {
+        log.info("decaying from {} with k = {} /s, half-life {} s",
+                 param.x0, param.k, param.half_life);
+        state.x = param.x0;
+    }
+
+    rates() {
+        der.x = -param.k * state.x;
+    }
+
+    output() {
+        out.value     = state.x;
+        out.remaining = param.half_life;
+    }
+}

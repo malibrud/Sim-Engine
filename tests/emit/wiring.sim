@@ -1,0 +1,5 @@
+sim Wiring {
+    root:     wiring.Wiring;
+    step:     1 (ms);
+    duration: 1 (s);
+}

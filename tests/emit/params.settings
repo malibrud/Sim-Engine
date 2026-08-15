@@ -1,0 +1,6 @@
+// An override that lands on nothing (SE0460) — the silent-typo case, which is
+// the worst possible failure for the layer that parameter sweeps generate.
+needy.masss = 400 (kg);
+
+// An override whose value is dimensionally wrong for its target (SE0410).
+total_mass  = 12 (m);

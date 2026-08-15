@@ -1,0 +1,51 @@
+package checks;
+
+// Stage-3 consistency rules (§6.11, §6.12) and unit-symbol resolution
+// (Appendix A). Each offender is a file-private node, instantiated so that
+// resolution actually reaches it.
+node Checks {
+    outputs { y (-): double; }
+
+    structure {
+        node a : BadUnit  {};
+        node b : BadState {};
+        node c : NoOutput {};
+        node d : BadParam {};
+        node e : Both     {};
+
+        a.z --> self.y;
+    }
+}
+
+node BadUnit {
+    // SE0414 — `sec` is not a unit; the diagnostic must point at `(s)`.
+    settings { period (sec): double = 1.0; }
+    outputs  { z (-): double; }
+    output() { out.z = param.period; }
+}
+
+node BadState {
+    // SE0431 — the solver's ABI is a flat `double` array.
+    states  { continuous n (-): int = 0; }
+    rates() { der.n = 0.0; }
+}
+
+node NoOutput {
+    // SE0340 — nothing else could compute an output.
+    outputs { z (-): double; }
+    states  { discrete k (-): int = 0; }
+    on_step() { next.k = 1; }
+}
+
+node BadParam {
+    // SE0350 — the parameter list is exactly the set of inputs the method reads.
+    inputs   { u (-): double; }
+    outputs  { z (-): double; }
+    output(nope) { out.z = 0.0; }
+}
+
+node Both {
+    // SE0320 — leaf or composite, never both.
+    vars { t (-): double; }
+    structure { node inner : BadUnit {}; }
+}

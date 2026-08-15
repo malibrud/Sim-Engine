@@ -1,0 +1,497 @@
+// ─────────────────────────────────────────────────────────────────────────────
+//  The fixed engine runtime headers, embedded so that `sec` is self-contained.
+//
+//  These are NEVER generated: they do not vary with the model, the same text
+//  serves a 3-state model and a 30,000-state one. They are written out beside
+//  the generated code so the emitted directory compiles on its own, with no
+//  include path outside itself and no third-party package (§15.5).
+//
+//  Editing them here changes every future emission. They are ordinary C++,
+//  parked in raw string literals only because a compiler that has to find its
+//  own data files at run time is a compiler that breaks when it is moved.
+// ─────────────────────────────────────────────────────────────────────────────
+#include "emit.hpp"
+
+namespace se {
+
+const char* state_ref_hpp() {
+    return R"SERT(// ─────────────────────────────────────────────────────────────────────────────
+//  state_ref.hpp — FIXED ENGINE RUNTIME HEADER
+//
+//  Hand-written, ships with the engine, NEVER generated. It does not vary with
+//  the model: the same header serves a 3-state model and a 30,000-state one.
+//  The generator's only job is to emit `state_ref omega;` members and bind them
+//  to their slots in Sim::bind().
+//
+//  Purpose: a named view of one slot in a model-wide block, so a node body can
+//  write `state.omega` instead of `sim.x[7]`, while an external solver (CVODE,
+//  odeint, a hand-rolled RK4) still sees nothing but `double*`.
+//
+//  ── THE UNIT CONTRACT ────────────────────────────────────────────────────────
+//  Units are checked by the DSL compiler at every declarative site and then
+//  ERASED. They are never C++ types. What survives into C++ is a guarantee:
+//
+//      the slot holds the value IN THE STATE'S DECLARED UNIT.
+//
+//  `omega (rad/s)` => x[i] is rad/s, `state.omega` reads rad/s, and a write to
+//  `state.omega` had better be rad/s — the compiler will not check that for
+//  you. This is a contract with the node implementer and with whoever writes
+//  the external solver, and it is why the generator emits a unit manifest
+//  (Sim.units.txt) alongside the model code.
+// ─────────────────────────────────────────────────────────────────────────────
+#pragma once
+
+namespace sim {
+
+// Not a `T&`. A reference member can be neither default-constructed nor
+// rebound, but the generated State and Der structs must be default-constructible
+// before Sim::bind() runs. Hence a pointer proxy.
+//
+// It IS a template, because a continuous state is always `double` (the solver's
+// ABI is a flat double array) but a discrete state may be `int` or `bool`, and
+// both now live in a model-wide block that the node only views. Templating does
+// not disturb the argument above: every instantiation is still a default-
+// constructible, rebindable pointer proxy.
+//
+// Constness propagates because the containing State struct is held BY VALUE in
+// the node. In a const method `state` is a `const State`, so `state.omega` is a
+// `const value_ref`, and `operator=` is not callable. A `T&` or `T*` member
+// would leak, which is exactly why this class exists.
+template <class T>
+class value_ref {
+    T* slot_ = nullptr;
+
+public:
+    value_ref() = default;
+    explicit value_ref(T& slot) : slot_(&slot) {}
+
+    // Bound once, in Sim::bind().
+    void bind(T& slot) { slot_ = &slot; }
+
+    // Read: behaves as a T, so every operator, every <cmath> function and every
+    // third-party API accepts it with no interop work whatsoever.
+    operator T() const { return *slot_; }
+
+    // Write.
+    value_ref& operator=(T v) {
+        *slot_ = v;
+        return *this;
+    }
+};
+
+using state_ref = value_ref<double>;
+
+}  // namespace sim
+)SERT";
+}
+
+const char* se_runtime_hpp() {
+    return R"SERT(// ─────────────────────────────────────────────────────────────────────────────
+//  se_runtime.hpp — FIXED ENGINE RUNTIME HEADER
+//
+//  Hand-written, ships with the engine, NEVER generated. It holds the four
+//  things the generated scheduler needs that are not model-shaped:
+//
+//      log.*          SPECIFICATION.md section 10.1 — qualitative, observational
+//      sim.stop/abort section 10.2 — the only way a run ends early
+//      the recorder   section 13.5 — quantitative, an aligned numeric table
+//      the frame      section 9.4  — free-run the batch, then spin
+//
+//  Nothing here knows anything about any particular model. The generator emits
+//  `se_rt::Log log{...}` into the preamble of the methods where logging is
+//  legal and simply does not emit it elsewhere, which is how confinement is
+//  enforced: by name withholding, not by an analyser (section 15.4).
+//
+//  C++17, no third-party packages.
+// ─────────────────────────────────────────────────────────────────────────────
+#pragma once
+
+#include <chrono>
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
+#include <deque>
+#include <sstream>
+#include <string>
+#include <utility>
+#include <vector>
+
+namespace se_rt {
+
+// Current sim time, owned by the engine and updated once per base tick. It is
+// a global because there is exactly one run per process, and because the
+// alternative — threading it through every generated call — would put it in
+// scope of bodies, where section 10.2 deliberately does not want it.
+inline double& sim_time() {
+    static double t = 0.0;
+    return t;
+}
+
+// ─── `{}` positional formatting (section 10.1) ───────────────────────────────
+// The engine auto-tags every record with sim time, node path and level, so
+// those are never arguments.
+
+inline void format_into(std::ostringstream& o, const char* f) {
+    while (*f) {
+        if (f[0] == '{' && f[1] == '}') {
+            o << "{}";
+            f += 2;
+            continue;
+        }
+        o << *f++;
+    }
+}
+
+template <class A, class... R>
+void format_into(std::ostringstream& o, const char* f, const A& a, const R&... rest) {
+    while (*f) {
+        if (f[0] == '{' && f[1] == '}') {
+            o << a;
+            format_into(o, f + 2, rest...);
+            return;
+        }
+        o << *f++;
+    }
+}
+
+template <class... A>
+std::string format(const char* f, const A&... a) {
+    std::ostringstream o;
+    format_into(o, f, a...);
+    return o.str();
+}
+
+// ─── Logging (section 13.7) ──────────────────────────────────────────────────
+
+enum class Level { Trace = 0, Debug, Info, Warn, Error };
+
+inline const char* level_name(Level l) {
+    switch (l) {
+        case Level::Trace: return "trace";
+        case Level::Debug: return "debug";
+        case Level::Info:  return "info";
+        case Level::Warn:  return "warn";
+        case Level::Error: return "error";
+    }
+    return "?";
+}
+
+class LogSink {
+public:
+    ~LogSink() {
+        if (file_) std::fclose(file_);
+    }
+
+    void configure(const char* path, Level global) {
+        global_ = global;
+        if (path && *path) file_ = std::fopen(path, "w");
+    }
+
+    // Per-node-path thresholds; the longest matching prefix wins.
+    void set_path_level(const char* path, Level l) { paths_.emplace_back(path, l); }
+
+    Level level_for(const char* path) const {
+        Level best = global_;
+        std::size_t best_len = 0;
+        for (const auto& p : paths_) {
+            const std::size_t n = p.first.size();
+            if (std::strncmp(path, p.first.c_str(), n) != 0) continue;
+            if (path[n] != '\0' && path[n] != '.') continue;
+            if (n >= best_len) {
+                best = p.second;
+                best_len = n;
+            }
+        }
+        return best;
+    }
+
+    void write(Level l, const char* path, double t, const std::string& msg) {
+        const bool passes = l >= level_for(path);
+        // The console always receives warn and above regardless of the
+        // configured threshold (section 13.7).
+        const bool to_console = (l >= Level::Warn) || (!file_ && passes);
+        const bool to_file = file_ && passes;
+        if (!to_console && !to_file) return;
+
+        char head[96];
+        std::snprintf(head, sizeof head, "[%12.6f] %-5s %s: ", t, level_name(l), path);
+        if (to_file) {
+            std::fputs(head, file_);
+            std::fputs(msg.c_str(), file_);
+            std::fputc('\n', file_);
+        }
+        if (to_console) {
+            std::fputs(head, stderr);
+            std::fputs(msg.c_str(), stderr);
+            std::fputc('\n', stderr);
+        }
+    }
+
+    // section 10.1 — trace in output()/rates() is suppressed unless this is set,
+    // so the four-evaluations-per-step hazard is visible rather than hidden.
+    bool trace_enabled = false;
+
+private:
+    std::FILE* file_ = nullptr;
+    Level global_ = Level::Info;
+    std::vector<std::pair<std::string, Level>> paths_;
+};
+
+inline LogSink& logs() {
+    static LogSink s;
+    return s;
+}
+
+// The `log` object the generator puts in scope of init(), on_step() and final().
+//
+// It holds the node path and NOTHING else — the sim time is read at call time,
+// from sim_time(). That is what lets the restricted form below be a class
+// member rather than a line of preamble in every method.
+struct Log {
+    const char* path;
+
+    template <class... A> void trace(const char* f, const A&... a) const {
+        logs().write(Level::Trace, path, sim_time(), format(f, a...));
+    }
+    template <class... A> void debug(const char* f, const A&... a) const {
+        logs().write(Level::Debug, path, sim_time(), format(f, a...));
+    }
+    template <class... A> void info(const char* f, const A&... a) const {
+        logs().write(Level::Info, path, sim_time(), format(f, a...));
+    }
+    template <class... A> void warn(const char* f, const A&... a) const {
+        logs().write(Level::Warn, path, sim_time(), format(f, a...));
+    }
+    template <class... A> void error(const char* f, const A&... a) const {
+        logs().write(Level::Error, path, sim_time(), format(f, a...));
+    }
+};
+
+// The restricted form for output() and rates(): `log.trace` alone (section
+// 10.1). `log.info` there is "no such member".
+//
+// Every leaf holds one of these as a member called `log`, so a pure method
+// needs no preamble at all. The mutating methods declare a local `Log log`
+// which shadows it, widening what is legal exactly where section 8.4 says it is.
+struct TraceLog {
+    const char* path;
+
+    template <class... A> void trace(const char* f, const A&... a) const {
+        if (!logs().trace_enabled) return;
+        logs().write(Level::Trace, path, sim_time(), format(f, a...) + "  [minor step]");
+    }
+};
+
+// ─── Block descriptors (section 15.6) ────────────────────────────────────────
+//
+// A generated model exposes its signal and discrete-state blocks as one
+// contiguous object each, plus a table of these. The offsets come from
+// offsetof() in the generated header, not from the DSL compiler: padding is the
+// C++ compiler's business, so the table is built where that is known.
+//
+// With the block's address and this table, an inspector, a shared-memory host,
+// a replay recorder or a co-simulation peer needs no generated accessor code.
+struct Slot {
+    const char* path;     // model path, as section 13.2 addresses it
+    std::size_t offset;   // bytes from the start of the block
+    std::size_t size;     // bytes
+    const char* type;     // "double", "int", "bool", "float"
+    const char* unit;     // the declared unit; "-" is dimensionless
+};
+
+// ─── Termination (section 10.2) ──────────────────────────────────────────────
+
+enum class Reason { Running, Completed, Stopped, Aborted, Error };
+
+inline const char* reason_name(Reason r) {
+    switch (r) {
+        case Reason::Running:   return "running";
+        case Reason::Completed: return "completed";
+        case Reason::Stopped:   return "stopped";
+        case Reason::Aborted:   return "aborted";
+        case Reason::Error:     return "error";
+    }
+    return "?";
+}
+
+// Read-only at teardown; a parameter rather than a global, because the outcome
+// is only knowable then (section 10.3).
+struct RunContext {
+    const char* reason = "completed";
+    std::string message;
+    double time = 0.0;
+};
+
+class Control {
+public:
+    void stop(const std::string& m) { set(Reason::Stopped, m); }
+    void abort(const std::string& m) { set(Reason::Aborted, m); }
+    void fail(const std::string& m) { set(Reason::Error, m); }
+    void complete() { set(Reason::Completed, std::string()); }
+
+    bool halted() const { return reason_ != Reason::Running; }
+    Reason reason() const { return reason_; }
+    const std::string& message() const { return message_; }
+
+    RunContext context(double t) const {
+        RunContext c;
+        c.reason = reason_name(reason_ == Reason::Running ? Reason::Completed : reason_);
+        c.message = message_;
+        c.time = t;
+        return c;
+    }
+
+private:
+    void set(Reason r, const std::string& m) {
+        // First writer wins: a later stop must not relabel an abort.
+        if (reason_ != Reason::Running) return;
+        reason_ = r;
+        message_ = m;
+    }
+
+    Reason reason_ = Reason::Running;
+    std::string message_;
+};
+
+inline Control& control() {
+    static Control c;
+    return c;
+}
+
+// ─── Recording (section 13.5) ────────────────────────────────────────────────
+
+class Recorder {
+public:
+    ~Recorder() { close(); }
+
+    bool open(const std::string& path) {
+        file_ = std::fopen(path.c_str(), "w");
+        return file_ != nullptr;
+    }
+
+    void header(const std::vector<std::string>& columns) {
+        if (!file_) return;
+        std::fputs("time (s)", file_);
+        for (const std::string& c : columns) {
+            std::fputc(',', file_);
+            std::fputs(c.c_str(), file_);
+        }
+        std::fputc('\n', file_);
+    }
+
+    void row(double t, const std::vector<double>& values) {
+        if (!file_) return;
+        std::fprintf(file_, "%.9g", t);
+        for (double v : values) std::fprintf(file_, ",%.9g", v);
+        std::fputc('\n', file_);
+        ++rows_;
+    }
+
+    void close() {
+        if (!file_) return;
+        std::fclose(file_);
+        file_ = nullptr;
+    }
+
+    std::uint64_t rows() const { return rows_; }
+
+private:
+    std::FILE* file_ = nullptr;
+    std::uint64_t rows_ = 0;
+};
+
+// ─── The real-time frame (section 9.4, section 13.6) ─────────────────────────
+//
+// Two-clock: free-run every base step in the frame as fast as it can, then
+// busy-wait on the high-resolution timer until the frame boundary. An overrun
+// starts the next batch immediately with no spin, so SIM TIME DRIFTS BEHIND
+// WALL TIME. Every base step always runs — dropping one would punch a hole in
+// a fixed-step integration, and drift is the honest failure mode.
+//
+// Overrun is INSTRUMENTED, NOT POLICED: there is no abort escalation here.
+
+class Realtime {
+public:
+    using clock = std::chrono::steady_clock;
+
+    void configure(double frame_seconds, double window_seconds) {
+        frame_ = frame_seconds;
+        enabled_ = frame_seconds > 0.0;
+        std::size_t n = 1;
+        if (enabled_ && window_seconds > 0.0)
+            n = static_cast<std::size_t>(window_seconds / frame_seconds + 0.5);
+        window_frames_ = n < 1 ? 1 : n;
+        deadline_ = clock::now();
+    }
+
+    void start() { deadline_ = clock::now(); }
+
+    void frame_boundary() {
+        if (!enabled_) return;
+        const clock::time_point target =
+            deadline_ + std::chrono::duration_cast<clock::duration>(
+                            std::chrono::duration<double>(frame_));
+        const clock::time_point done = clock::now();
+        const double compute = std::chrono::duration<double>(done - deadline_).count();
+        const bool overran = done > target;
+
+        if (!overran) {
+            while (clock::now() < target) {
+            }
+            deadline_ = target;
+        } else {
+            deadline_ = done;   // no spin; sim time falls behind wall time
+        }
+
+        window_.push_back({compute / frame_ * 100.0, overran});
+        if (window_.size() > window_frames_) window_.pop_front();
+        ++frames_;
+        if (overran) ++overruns_;
+    }
+
+    double utilization() const {
+        if (window_.empty()) return 0.0;
+        double sum = 0.0;
+        for (const auto& f : window_) sum += f.first;
+        return sum / static_cast<double>(window_.size());
+    }
+
+    double overrun_pct() const {
+        if (window_.empty()) return 0.0;
+        std::size_t n = 0;
+        for (const auto& f : window_)
+            if (f.second) ++n;
+        return 100.0 * static_cast<double>(n) / static_cast<double>(window_.size());
+    }
+
+    // The whole-run cumulative summary, free off the same counters.
+    void summary() const {
+        if (!enabled_ || frames_ == 0) return;
+        std::fprintf(stderr,
+                     "realtime: %llu frames, %llu overran (%.2f%% of the run)\n",
+                     static_cast<unsigned long long>(frames_),
+                     static_cast<unsigned long long>(overruns_),
+                     100.0 * static_cast<double>(overruns_) /
+                         static_cast<double>(frames_));
+    }
+
+private:
+    bool enabled_ = false;
+    double frame_ = 0.0;
+    std::size_t window_frames_ = 1;
+    std::deque<std::pair<double, bool>> window_;
+    std::uint64_t frames_ = 0;
+    std::uint64_t overruns_ = 0;
+    clock::time_point deadline_;
+};
+
+inline Realtime& realtime() {
+    static Realtime r;
+    return r;
+}
+
+}  // namespace se_rt
+)SERT";
+}
+
+}  // namespace se

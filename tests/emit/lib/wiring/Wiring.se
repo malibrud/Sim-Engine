@@ -1,0 +1,48 @@
+package wiring;
+
+// Stage-4 wiring diagnostics, all in one composite so the recorded output
+// shows them together: fan-in (SE0442), a wire pointing the wrong way
+// (SE0443), an unconnected input (SE0430) and incompatible units across a
+// wire (SE0410).
+node Wiring {
+    inputs  { a (-): double;  b (-): double; }
+    outputs { y (-): double; }
+
+    structure {
+        node p : Source {};
+        node q : Source {};
+        node s : Sink   {};
+        node m : Metres {};
+
+        // SE0442 — two sources into one input. Fan-out is free; fan-in is not.
+        p.v --> s.u;
+        q.v --> s.u;
+
+        // SE0443 — `self.y` is an output, so it cannot be a wire source.
+        self.y --> s.w;
+
+        // SE0410 — a length is not a dimensionless number.
+        m.len --> s.z;
+
+        // s.spare is left unconnected: SE0430.
+        p.v --> self.y;
+    }
+}
+
+node Source {
+    outputs { v (-): double; }
+    output() { out.v = 1.0; }
+}
+
+node Metres {
+    outputs { len (m): double; }
+    output() { out.len = 2.0; }
+}
+
+node Sink {
+    inputs  { u (-): double;  w (-): double;  z (-): double;  spare (-): double; }
+    outputs { total (-): double; }
+    output(u, w, z, spare) {
+        out.total = in.u + in.w + in.z + in.spare;
+    }
+}

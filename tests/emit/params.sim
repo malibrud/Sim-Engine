@@ -1,0 +1,10 @@
+sim Params {
+    root:     params.Params;
+    step:     1 (ms);
+    duration: 1 (s);
+    settings: "params.settings";
+
+    // SE0263 — `window` scales the real-time metrics, and this is a batch run,
+    // so it would be read and then quietly ignored.
+    window:   5 (s);
+}

@@ -6,6 +6,15 @@
 //
 //  This file is illustrative — hand-written to match what the emitter would
 //  produce, so the example teaches the lowering alongside the surface syntax.
+//  The emitter is now real; run
+//
+//      sec --emit -I examples -o <dir> examples/drivetrain/Drivetrain.sim
+//
+//  for the actual output. It differs from this file in one visible way: model
+//  paths are ROOT-RELATIVE (§13.2), as `Drivetrain.sim` says, so the members
+//  are `whl` and `tc` rather than the `fl_` prefixed names below. The `fl.`
+//  here is left over from an earlier scenario where `Corner` was nested inside
+//  a vehicle, and is retained only so the prefixing rule stays visible.
 //
 //  What to notice:
 //    1. `Corner` is ABSENT. Composites are elaboration-time scaffolding; their

@@ -1,0 +1,41 @@
+package params;
+
+// Stage-4 setting and rate diagnostics: a required setting nobody bound
+// (SE0420), a cycle among derived defaults (SE0421), and a rate that is not an
+// integer divisor of the base step (SE0450).
+node Params {
+    settings {
+        total_mass (kg): double = 1500.0;
+    }
+    outputs { y (-): double; }
+
+    structure {
+        node needy : Needy {};                    // SE0420: `mass` is required
+        node ring  : Ring  {};                    // SE0421
+        node slow  : Slow  { rate = 60.0; };      // SE0450: 1000/60 is not integral
+
+        needy.q --> self.y;
+    }
+}
+
+node Needy {
+    settings { mass (kg): double; }               // no default => required
+    outputs  { q (-): double; }
+    output() { out.q = param.mass; }
+}
+
+node Ring {
+    settings {
+        a (-): double = param.b + 1.0;
+        b (-): double = param.c * 2.0;
+        c (-): double = param.a - 1.0;
+    }
+    outputs  { z (-): double; }
+    output() { out.z = param.a; }
+}
+
+node Slow {
+    settings { rate (Hz): double = 100.0; }
+    outputs  { z (-): double; }
+    output() { out.z = 0.0; }
+}

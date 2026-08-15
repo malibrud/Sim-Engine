@@ -1,0 +1,5 @@
+sim Checks {
+    root:     checks.Checks;
+    step:     1 (ms);
+    duration: 1 (s);
+}

@@ -1,0 +1,10 @@
+﻿error[SE0264]: `window` is shorter than one `sync` frame
+  --> tests/emit/frames.sim:11:5
+   |
+11 |     window:   1 (ms);
+   |     ^^^^^^ window/sync = 0.1, which rounds to 0 frames
+   = note: the metrics are averaged over whole frames, so a window this short would report the latest frame, not a rolling average (§13.6)
+   = note: the window also sets the resolution of `sim.overrun_pct`: N frames means steps of 100/N percent
+   = help: `window` must be at least `sync`
+
+1 error emitted

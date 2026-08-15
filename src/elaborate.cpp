@@ -1,0 +1,1390 @@
+// ─────────────────────────────────────────────────────────────────────────────
+//  Stage 4 — elaboration.  SPECIFICATION.md §7, §9.2, §13, §14.
+// ─────────────────────────────────────────────────────────────────────────────
+#include "elaborate.hpp"
+
+#include <algorithm>
+#include <cmath>
+#include <cstdio>
+#include <functional>
+#include <set>
+
+#include "dump.hpp"
+#include "parser.hpp"
+
+namespace se {
+namespace {
+
+std::string sub(const std::string& path, const std::string& name) {
+    return path.empty() ? name : path + "." + name;
+}
+
+std::string ident_of(const std::string& path) {
+    std::string s = path;
+    for (char& c : s)
+        if (c == '.') c = '_';
+    return s;
+}
+
+// A rational approximation with a small denominator, for `^` exponents (§7.2).
+bool as_rational(double x, Rat& out) {
+    for (long d = 1; d <= 12; ++d) {
+        const double n = x * static_cast<double>(d);
+        const double r = std::floor(n + 0.5);
+        if (std::fabs(n - r) < 1e-9) {
+            out = rat(static_cast<long>(r), d);
+            return true;
+        }
+    }
+    return false;
+}
+
+// Levenshtein, only ever run on a path that already failed to resolve.
+int path_distance(const std::string& a, const std::string& b) {
+    std::vector<int> prev(b.size() + 1), cur(b.size() + 1);
+    for (std::size_t j = 0; j <= b.size(); ++j) prev[j] = static_cast<int>(j);
+    for (std::size_t i = 1; i <= a.size(); ++i) {
+        cur[0] = static_cast<int>(i);
+        for (std::size_t j = 1; j <= b.size(); ++j)
+            cur[j] = std::min({cur[j - 1] + 1, prev[j] + 1,
+                               prev[j - 1] + (a[i - 1] == b[j - 1] ? 0 : 1)});
+        prev = cur;
+    }
+    return prev[b.size()];
+}
+
+std::string join_file(const std::string& dir, const std::string& rel) {
+    if (dir.empty()) return rel;
+    if (!rel.empty() && (rel[0] == '/' || rel[0] == '\\')) return rel;
+    if (rel.size() > 1 && rel[1] == ':') return rel;   // absolute on Windows
+    return dir + "/" + rel;
+}
+
+const char* const kSolvers[] = {"euler", "rk2", "rk4"};
+const char* const kLevels[] = {"trace", "debug", "info", "warn", "error"};
+
+bool one_of(const std::string& s, const char* const* set, std::size_t n) {
+    for (std::size_t i = 0; i < n; ++i)
+        if (s == set[i]) return true;
+    return false;
+}
+
+}  // namespace
+
+Elaborator::Elaborator(Diagnostics& diag, Resolver& resolver)
+    : diag_(diag), resolver_(resolver) {}
+
+// ═════════════════════════════════════════════════════════════════════════════
+//  The §7 expression language
+// ═════════════════════════════════════════════════════════════════════════════
+
+bool Elaborator::eval(const ast::Expr* e, const Source& src, const Env& env, Value& out) {
+    if (!e) return false;
+    using K = ast::Expr::Kind;
+
+    switch (e->kind) {
+        case K::Number: {
+            out.v = e->number;
+            out.bare = (e->unit == nullptr);
+            UnitEval ue(src, diag_);
+            return ue.eval(e->unit.get(), out.unit);
+        }
+
+        case K::Param: {
+            auto it = env.find(e->text);
+            if (it == env.end()) {
+                std::vector<Attachment> att;
+                att.push_back(note("a setting expression may reference other settings "
+                                   "OF THE SAME NODE, through `param.` (§6.2)"));
+                if (!env.empty()) {
+                    std::string have = "in scope here: ";
+                    bool first = true;
+                    for (const auto& kv : env) {
+                        if (!first) have += ", ";
+                        have += "`" + kv.first + "`";
+                        first = false;
+                    }
+                    att.push_back(help(have));
+                }
+                diag_.error("SE0304", src, e->loc,
+                            "no setting named `" + e->text + "` here", "unresolved",
+                            std::move(att));
+                return false;
+            }
+            out = it->second;
+            out.bare = false;
+            return true;
+        }
+
+        case K::Name: {
+            if (e->text == "pi") {
+                out = Value{3.14159265358979323846, unit_one(), true};
+                return true;
+            }
+            if (e->text == "e") {
+                out = Value{2.71828182845904523536, unit_one(), true};
+                return true;
+            }
+            if (e->text == "inf") {
+                out = Value{HUGE_VAL, unit_one(), true};
+                return true;
+            }
+            // The grammar has no other way to spell a bare name here, so this
+            // is where `mass = fl.mass` lands.
+            diag_.error("SE0440", src, e->loc,
+                        "`" + e->text + "` is not a constant or a setting of this node",
+                        "unresolved name",
+                        {note("flow-down goes strictly parent -> child: there are no "
+                              "cross-instance references in a setting binding (§6.9.1)"),
+                         help("the constants are `pi`, `e` and `inf`; other settings of "
+                              "this node are reached as `param." + e->text + "`")});
+            return false;
+        }
+
+        case K::Unary: {
+            if (!eval(e->lhs.get(), src, env, out)) return false;
+            if (e->op == '-') out.v = -out.v;
+            return true;
+        }
+
+        case K::Binary: {
+            Value a, b;
+            if (!eval(e->lhs.get(), src, env, a)) return false;
+            if (!eval(e->rhs.get(), src, env, b)) return false;
+
+            if (e->op == '^') {
+                if (!b.unit.dimensionless()) {
+                    diag_.error("SE0412", src, e->rhs->loc,
+                                "the exponent of `^` must be dimensionless",
+                                "`(" + b.unit.str() + ")`");
+                    return false;
+                }
+                const double exp = to_si(b.v, b.unit);
+                Rat r;
+                if (as_rational(exp, r)) {
+                    // A value `v` in unit `u` is `v * u.scale` in SI, so
+                    // raising it leaves the number alone and raises the unit.
+                    out.unit = unit_pow(a.unit, r);
+                    out.v = std::pow(a.v, exp);
+                } else if (a.unit.dimensionless()) {
+                    out.unit = unit_one();
+                    out.v = std::pow(to_si(a.v, a.unit), exp);
+                } else {
+                    diag_.error("SE0412", src, e->rhs->loc,
+                                "a dimensioned base needs an integer or rational exponent",
+                                "not a simple rational",
+                                {note("`^` multiplies the exponent vector, so the result "
+                                      "must still have rational dimensions (§7.2)")});
+                    return false;
+                }
+                out.bare = a.bare && b.bare;
+                break;
+            }
+
+            if (e->op == '*' || e->op == '/') {
+                if (e->op == '/' && b.v == 0.0) {
+                    diag_.error("SE0413", src, e->loc, "division by zero at elaboration",
+                                "the divisor is zero",
+                                {note("the expression language is total by rejection, "
+                                      "not by producing NaN (§7.3)")});
+                    return false;
+                }
+                out.v = (e->op == '*') ? a.v * b.v : a.v / b.v;
+                out.unit = (e->op == '*') ? unit_mul(a.unit, b.unit)
+                                          : unit_div(a.unit, b.unit);
+                out.bare = a.bare && b.bare;
+                break;
+            }
+
+            // `+` and `-` require compatible dimensions and convert the right
+            // operand to the left's unit. A bare literal on either side adopts
+            // the other's unit, which is the same rule as at a declarative site.
+            if (a.bare && !b.bare) a.unit = b.unit;
+            if (b.bare && !a.bare) b.unit = a.unit;
+            if (!compatible(a.unit, b.unit)) {
+                diag_.error("SE0410", src, e->loc,
+                            "incompatible units in `" + std::string(1, e->op) + "`",
+                            "`(" + a.unit.str() + ")` and `(" + b.unit.str() + ")`",
+                            {note("left is " + a.unit.dim_str()),
+                             note("right is " + b.unit.dim_str())});
+                return false;
+            }
+            const double rhs = convert(b.v, b.unit, a.unit);
+            out.v = (e->op == '+') ? a.v + rhs : a.v - rhs;
+            out.unit = a.unit;
+            out.bare = a.bare && b.bare;
+            break;
+        }
+
+        case K::Call:
+            if (!eval_call(e, src, env, out)) return false;
+            break;
+    }
+
+    if (!std::isfinite(out.v) && !(e->kind == K::Name && e->text == "inf")) {
+        diag_.error("SE0413", src, e->loc, "elaboration produced a non-finite value",
+                    "not finite",
+                    {note("division by zero, a domain error, or an overflow (§7.3)")});
+        return false;
+    }
+    return true;
+}
+
+bool Elaborator::eval_call(const ast::Expr* e, const Source& src, const Env& env,
+                           Value& out) {
+    const std::string& f = e->text;
+    std::vector<Value> a;
+    for (const ast::ExprPtr& arg : e->args) {
+        Value v;
+        if (!eval(arg.get(), src, env, v)) return false;
+        a.push_back(v);
+    }
+
+    auto arity = [&](std::size_t n) {
+        if (a.size() == n) return true;
+        diag_.error("SE0412", src, e->loc,
+                    "`" + f + "` takes " + std::to_string(n) + " argument" +
+                        (n == 1 ? "" : "s"),
+                    "given " + std::to_string(a.size()));
+        return false;
+    };
+    auto want_dimensionless = [&](std::size_t i) {
+        if (a[i].unit.dimensionless()) return true;
+        diag_.error("SE0412", src, e->args[i]->loc,
+                    "`" + f + "` requires a dimensionless argument",
+                    "`(" + a[i].unit.str() + ")`",
+                    {note("trigonometric arguments are radians; `log*` and `exp` are "
+                          "dimensionless in and out (§7.3)")});
+        return false;
+    };
+    // Two arguments that must agree; the right is converted to the left's unit.
+    auto align = [&]() {
+        if (a[0].bare && !a[1].bare) a[0].unit = a[1].unit;
+        if (a[1].bare && !a[0].bare) a[1].unit = a[0].unit;
+        if (!compatible(a[0].unit, a[1].unit)) {
+            diag_.error("SE0412", src, e->loc,
+                        "`" + f + "` requires compatible arguments",
+                        "`(" + a[0].unit.str() + ")` and `(" + a[1].unit.str() + ")`",
+                        {note("left is " + a[0].unit.dim_str()),
+                         note("right is " + a[1].unit.dim_str())});
+            return false;
+        }
+        a[1].v = convert(a[1].v, a[1].unit, a[0].unit);
+        a[1].unit = a[0].unit;
+        return true;
+    };
+
+    out.bare = true;
+    for (const Value& v : a) out.bare = out.bare && v.bare;
+    out.unit = unit_one();
+
+    if (f == "abs" || f == "floor" || f == "ceil" || f == "round") {
+        if (!arity(1)) return false;
+        out.unit = a[0].unit;
+        out.v = f == "abs"     ? std::fabs(a[0].v)
+                : f == "floor" ? std::floor(a[0].v)
+                : f == "ceil"  ? std::ceil(a[0].v)
+                               : std::floor(a[0].v + 0.5);
+        return true;
+    }
+    if (f == "sign") {
+        if (!arity(1)) return false;
+        out.v = a[0].v > 0 ? 1.0 : (a[0].v < 0 ? -1.0 : 0.0);
+        out.bare = true;
+        return true;
+    }
+    if (f == "min" || f == "max" || f == "mod" || f == "hypot") {
+        if (!arity(2) || !align()) return false;
+        out.unit = a[0].unit;
+        out.v = f == "min"     ? std::min(a[0].v, a[1].v)
+                : f == "max"   ? std::max(a[0].v, a[1].v)
+                : f == "hypot" ? std::hypot(a[0].v, a[1].v)
+                               : std::fmod(a[0].v, a[1].v);
+        if (f == "mod" && a[1].v == 0.0) {
+            diag_.error("SE0413", src, e->loc, "`mod` by zero at elaboration", "");
+            return false;
+        }
+        return true;
+    }
+    if (f == "atan2") {
+        if (!arity(2) || !align()) return false;
+        out.v = std::atan2(a[0].v, a[1].v);
+        out.bare = true;
+        return true;
+    }
+    if (f == "sqrt" || f == "cbrt") {
+        if (!arity(1)) return false;
+        if (a[0].v < 0.0) {
+            diag_.error("SE0413", src, e->loc, "`" + f + "` of a negative value", "");
+            return false;
+        }
+        const Rat r = (f == "sqrt") ? rat(1, 2) : rat(1, 3);
+        out.unit = unit_pow(a[0].unit, r);
+        out.v = (f == "sqrt") ? std::sqrt(a[0].v) : std::cbrt(a[0].v);
+        return true;
+    }
+    if (f == "pow") {
+        if (!arity(2) || !want_dimensionless(1)) return false;
+        const double exp = to_si(a[1].v, a[1].unit);
+        Rat r;
+        if (as_rational(exp, r)) {
+            out.unit = unit_pow(a[0].unit, r);
+            out.v = std::pow(a[0].v, exp);
+        } else if (a[0].unit.dimensionless()) {
+            out.v = std::pow(to_si(a[0].v, a[0].unit), exp);
+        } else {
+            diag_.error("SE0412", src, e->args[1]->loc,
+                        "a dimensioned base needs an integer or rational exponent",
+                        "not a simple rational");
+            return false;
+        }
+        return true;
+    }
+    if (f == "exp" || f == "log" || f == "log2" || f == "log10") {
+        if (!arity(1) || !want_dimensionless(0)) return false;
+        const double x = to_si(a[0].v, a[0].unit);
+        if (f != "exp" && x <= 0.0) {
+            diag_.error("SE0413", src, e->loc, "`" + f + "` of a non-positive value", "");
+            return false;
+        }
+        out.v = f == "exp"    ? std::exp(x)
+                : f == "log"  ? std::log(x)
+                : f == "log2" ? std::log2(x)
+                              : std::log10(x);
+        out.bare = true;
+        return true;
+    }
+    if (f == "sin" || f == "cos" || f == "tan" || f == "asin" || f == "acos" ||
+        f == "atan") {
+        if (!arity(1) || !want_dimensionless(0)) return false;
+        const double x = to_si(a[0].v, a[0].unit);
+        if ((f == "asin" || f == "acos") && (x < -1.0 || x > 1.0)) {
+            diag_.error("SE0413", src, e->loc, "`" + f + "` argument outside [-1, 1]", "");
+            return false;
+        }
+        out.v = f == "sin"    ? std::sin(x)
+                : f == "cos"  ? std::cos(x)
+                : f == "tan"  ? std::tan(x)
+                : f == "asin" ? std::asin(x)
+                : f == "acos" ? std::acos(x)
+                              : std::atan(x);
+        out.bare = true;
+        return true;
+    }
+
+    diag_.error("SE0304", src, e->loc, "unknown builtin function `" + f + "`",
+                "not a builtin",
+                {note("the set is fixed and small so that elaboration is guaranteed to "
+                      "terminate (§7.3, §7.4)")});
+    return false;
+}
+
+bool Elaborator::coerce(const Value& v, const Type& target, const Source& src, Loc loc,
+                        const char* what, double& out) {
+    if (target.is_record) {
+        diag_.error("SE0410", src, loc,
+                    std::string(what) + " has a record type and cannot take a value", "");
+        return false;
+    }
+    if (v.bare) {
+        // §7.2 — a bare literal takes the unit of the site it initialises.
+        out = v.v;
+    } else {
+        if (!compatible(v.unit, target.unit)) {
+            diag_.error("SE0410", src, loc,
+                        std::string("incompatible units for ") + what,
+                        "`(" + v.unit.str() + ")` where `(" + target.unit.str() +
+                            ")` is declared",
+                        {note("value is " + v.unit.dim_str()),
+                         note("target is " + target.unit.dim_str())});
+            return false;
+        }
+        out = convert(v.v, v.unit, target.unit);
+    }
+    if (target.scalar == "int") {
+        const double r = std::floor(out + 0.5);
+        if (std::fabs(out - r) > 1e-9) {
+            diag_.error("SE0402", src, loc,
+                        "lossy conversion to an `int` target",
+                        "the value is " + std::to_string(out),
+                        {note("a literal has no inherent type: it is converted to the "
+                              "declared type of the site, and rejected if that is lossy "
+                              "(§3.5)")});
+            return false;
+        }
+        out = r;
+    }
+    return true;
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+//  The sim file
+// ═════════════════════════════════════════════════════════════════════════════
+
+bool Elaborator::time_value(const ast::Expr* e, const Source& src, const char* key,
+                            double& out) {
+    Value v;
+    if (!eval(e, src, Env{}, v)) return false;
+    Unit seconds;
+    lookup_unit_symbol("s", seconds);
+    if (v.bare) {
+        diag_.error("SE0410", src, e->loc,
+                    std::string("`") + key + ":` needs a unit",
+                    "no unit given",
+                    {help(std::string("write `") + key + ": 1 (ms);` — there is no "
+                          "implicit time unit")});
+        return false;
+    }
+    if (!compatible(v.unit, seconds)) {
+        diag_.error("SE0410", src, e->loc,
+                    std::string("`") + key + ":` must be a time",
+                    "`(" + v.unit.str() + ")` is " + v.unit.dim_str());
+        return false;
+    }
+    out = to_si(v.v, v.unit);
+    return true;
+}
+
+bool Elaborator::load_settings_file(const std::string& path, const Source& from, Loc loc) {
+    auto src = std::make_unique<Source>();
+    std::string error;
+    if (!Source::load(path, *src, error)) {
+        diag_.error("SE0304", from, loc, "cannot read settings source `" + path + "`",
+                    error);
+        return false;
+    }
+    Parser parser(*src, diag_);
+    auto ast = parser.parse_settings_file();
+    for (const ast::Override& o : ast->overrides) {
+        OverrideEntry e;
+        e.path = o.path.str();
+        e.value = o.value.get();
+        e.src = src.get();
+        e.loc = o.loc;
+        overrides_.push_back(e);
+    }
+    settings_srcs_.push_back(std::move(src));
+    settings_asts_.push_back(std::move(ast));
+    return true;
+}
+
+bool Elaborator::read_sim_entries(const ast::SimFile& sim, const Source& src, Model& m) {
+    bool have_step = false, have_duration = false, have_root = false, have_sync = false;
+    bool have_window = false;
+    Loc sync_loc, window_loc;
+
+    for (const ast::SimEntry& e : sim.entries) {
+        if (e.key == "step") have_step = time_value(e.value.get(), src, "step", m.step);
+        else if (e.key == "duration")
+            have_duration = time_value(e.value.get(), src, "duration", m.duration);
+        else if (e.key == "sync") {
+            have_sync = time_value(e.value.get(), src, "sync", m.sync);
+            sync_loc = e.loc;
+        } else if (e.key == "window") {
+            have_window = time_value(e.value.get(), src, "window", m.window);
+            window_loc = e.loc;
+        } else if (e.key == "root")
+            have_root = true;
+        else if (e.key == "solver") {
+            m.solver = e.word;
+            if (!one_of(e.word, kSolvers, 3))
+                diag_.error("SE0264", src, e.loc, "unknown solver `" + e.word + "`",
+                            "not a solver",
+                            {note("the solver is global, not per-node: `euler`, `rk2` "
+                                  "or `rk4` (§9.5)")});
+        } else if (e.key == "mode") {
+            if (e.word == "realtime") m.realtime = true;
+            else if (e.word != "batch")
+                diag_.error("SE0264", src, e.loc, "unknown mode `" + e.word + "`",
+                            "not a mode", {note("`batch` or `realtime` (§13.1)")});
+        }
+    }
+
+    if (!have_root)
+        diag_.error("SE0262", src, sim.loc, "`sim` has no `root:` entry", "required here",
+                    {note("the `root` entry is what makes a model runnable (§13.1)")});
+    if (!have_step)
+        diag_.error("SE0262", src, sim.loc, "`sim` has no `step:` entry", "required here",
+                    {note("one global fixed base step; every rate is an integer "
+                          "decimation of it (§9.1)")});
+    if (!have_duration)
+        diag_.error("SE0262", src, sim.loc, "`sim` has no `duration:` entry",
+                    "required here");
+
+    if (m.realtime && !have_sync)
+        diag_.error("SE0262", src, sim.loc, "`mode: realtime` requires a `sync:` entry",
+                    "required here",
+                    {note("the frame is the third integer quantity alongside the base "
+                          "step and the rate decimations (§9.4)")});
+    if (!m.realtime && have_sync)
+        diag_.error("SE0263", src, sync_loc, "`sync:` requires `mode: realtime`",
+                    "no frame to synchronise to");
+
+    // §13.6 — `window` scales real-time instrumentation and nothing else, so in
+    // a batch run it would be read and then ignored. Saying so beats leaving a
+    // recorded `sim.utilization` column of zeros to be puzzled over.
+    if (!m.realtime && have_window)
+        diag_.error("SE0263", src, window_loc, "`window:` requires `mode: realtime`",
+                    "no frames to average over",
+                    {note("`window` sets the rolling window for `sim.utilization` and "
+                          "`sim.overrun_pct`, which only exist in real time (§13.6)"),
+                     note("a batch run has no frame boundaries, so both metrics would "
+                          "record as zero")});
+
+    // §9.4 — the same error class as a non-divisor rate.
+    if (have_sync && have_step && m.step > 0.0) {
+        const double ratio = m.sync / m.step;
+        const double r = std::floor(ratio + 0.5);
+        if (std::fabs(ratio - r) > 1e-9 || r < 1.0) {
+            diag_.error("SE0451", src, sync_loc,
+                        "`sync` is not an integer multiple of `step`",
+                        "sync/step = " + std::to_string(ratio),
+                        {note("the frame free-runs a whole number of base steps, then "
+                              "spins to the boundary (§9.4)")});
+        } else {
+            m.sync_steps = static_cast<long>(r);
+        }
+    }
+
+    // §13.6 — the window is a whole number of frames, and rounding to one is
+    // honest. Rounding to ZERO is not: the metrics would then report the latest
+    // frame rather than a rolling average, which is a different quantity
+    // wearing the same name.
+    if (have_sync && have_window && m.sync > 0.0) {
+        const double frames = m.window / m.sync;
+        if (frames < 0.5) {
+            char buf[96];
+            std::snprintf(buf, sizeof buf, "window/sync = %g, which rounds to %ld frames",
+                          frames, static_cast<long>(std::floor(frames + 0.5)));
+            diag_.error("SE0264", src, window_loc,
+                        "`window` is shorter than one `sync` frame", buf,
+                        {note("the metrics are averaged over whole frames, so a window "
+                              "this short would report the latest frame, not a rolling "
+                              "average (§13.6)"),
+                         note("the window also sets the resolution of `sim.overrun_pct`: "
+                              "N frames means steps of 100/N percent"),
+                         help("`window` must be at least `sync`")});
+        }
+    }
+    return have_root && have_step && have_duration;
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+//  Instantiation
+// ═════════════════════════════════════════════════════════════════════════════
+
+// §13.3 — last writer wins. Every match is marked used, not just the winner,
+// so a superseded duplicate is not then reported as having hit nothing.
+OverrideEntry* Elaborator::find_override(const std::string& path) {
+    OverrideEntry* found = nullptr;
+    for (OverrideEntry& e : overrides_) {
+        if (e.path != path) continue;
+        e.used = true;
+        found = &e;
+    }
+    return found;
+}
+
+void Elaborator::apply_overrides(const NodeInfo* def, const std::string& path,
+                                 std::map<std::string, double>& pinned) {
+    for (const auto& s : def->settings) {
+        OverrideEntry* o = find_override(sub(path, s.name));
+        if (!o) continue;
+        Value v;
+        if (!eval(o->value, *o->src, Env{}, v)) continue;
+        double d = 0.0;
+        if (coerce(v, s.type, *o->src, o->loc, ("setting `" + o->path + "`").c_str(), d))
+            pinned[s.name] = d;
+    }
+}
+
+bool Elaborator::settings_of(const NodeInfo* def,
+                             const std::map<std::string, double>& pinned,
+                             const Source& src, Loc loc, std::vector<SettingValue>& out) {
+    const Source& def_src = *def->file->src;
+    Env env;
+    for (const auto& s : def->settings) {
+        auto it = pinned.find(s.name);
+        if (it != pinned.end()) env[s.name] = Value{it->second, s.type.unit, false};
+    }
+
+    // Topological evaluation of the unpinned defaults (§6.2). The graph is
+    // walked depth-first; a back edge is a cycle.
+    enum class Mark { White, Grey, Black };
+    std::map<std::string, Mark> mark;
+    for (const auto& s : def->settings)
+        mark[s.name] = env.count(s.name) ? Mark::Black : Mark::White;
+
+    std::vector<std::string> stack;
+    std::function<bool(const NodeInfo::SettingInfo&)> visit =
+        [&](const NodeInfo::SettingInfo& s) -> bool {
+        if (mark[s.name] == Mark::Black) return true;
+        if (mark[s.name] == Mark::Grey) {
+            std::string cycle;
+            for (const std::string& n : stack) cycle += n + " -> ";
+            cycle += s.name;
+            diag_.error("SE0421", def_src, s.loc,
+                        "cycle among derived settings of `" + def->def->name + "`",
+                        "`" + s.name + "` depends on itself",
+                        {note("cycle: " + cycle),
+                         note("settings are a dependency graph requiring a topological "
+                              "sort, so a cycle has no value (§6.2)")});
+            mark[s.name] = Mark::Black;
+            return false;
+        }
+        mark[s.name] = Mark::Grey;
+        stack.push_back(s.name);
+
+        bool ok = true;
+        if (!s.default_value) {
+            // §6.2 — no default means required, and every instantiation must
+            // bind it. Checked statically, here.
+            diag_.error("SE0420", src, loc,
+                        "required setting `" + s.name + "` is not bound",
+                        "instantiated here",
+                        {note("declared with no default, so every instantiation must "
+                              "bind it (§6.2)",
+                              def->file->path + ":" + std::to_string(s.loc.line))});
+            ok = false;
+        } else {
+            // Resolve dependencies first.
+            std::vector<const ast::Expr*> work{s.default_value};
+            while (!work.empty()) {
+                const ast::Expr* e = work.back();
+                work.pop_back();
+                if (!e) continue;
+                if (e->kind == ast::Expr::Kind::Param) {
+                    for (const auto& other : def->settings)
+                        if (other.name == e->text && mark[other.name] != Mark::Black)
+                            ok = visit(other) && ok;
+                }
+                work.push_back(e->lhs.get());
+                work.push_back(e->rhs.get());
+                for (const ast::ExprPtr& arg : e->args) work.push_back(arg.get());
+            }
+            Value v;
+            if (ok && eval(s.default_value, def_src, env, v)) {
+                double d = 0.0;
+                if (coerce(v, s.type, def_src, s.default_value->loc,
+                           ("setting `" + s.name + "`").c_str(), d))
+                    env[s.name] = Value{d, s.type.unit, false};
+                else
+                    ok = false;
+            } else {
+                ok = false;
+            }
+        }
+        stack.pop_back();
+        mark[s.name] = Mark::Black;
+        return ok;
+    };
+
+    bool ok = true;
+    for (const auto& s : def->settings) ok = visit(s) && ok;
+
+    for (const auto& s : def->settings) {
+        SettingValue sv;
+        sv.name = s.name;
+        sv.unit = s.type.unit;
+        sv.scalar = s.type.scalar;
+        auto it = env.find(s.name);
+        sv.value = it == env.end() ? 0.0 : it->second.v;
+        out.push_back(std::move(sv));
+    }
+    return ok;
+}
+
+void Elaborator::instantiate(const NodeInfo* def, const std::string& path,
+                             std::map<std::string, double> pinned, const Source& src,
+                             Loc loc, int depth, Model& m) {
+    if (depth > 64) {
+        diag_.error("SE0312", src, loc,
+                    "recursive instantiation of `" + def->fq + "`",
+                    "nesting is unbounded here",
+                    {note("a composite is flattened at elaboration, so a node that "
+                          "transitively contains itself has no finite runtime form "
+                          "(§15.2)")});
+        failed_ = true;
+        return;
+    }
+    instances_[path] = def;
+
+    apply_overrides(def, path, pinned);
+    std::vector<SettingValue> settings;
+    if (!settings_of(def, pinned, src, loc, settings)) failed_ = true;
+
+    for (const SettingValue& s : settings) known_setting_paths_.push_back(sub(path, s.name));
+
+    Env env;
+    for (const SettingValue& s : settings) env[s.name] = Value{s.value, s.unit, false};
+
+    if (def->composite) {
+        collect_wires(def, path, m);
+        const Source& def_src = *def->file->src;
+        for (const ast::Instance& inst : def->def->structure.instances) {
+            auto child_it = def->children.find(inst.name);
+            if (child_it == def->children.end()) continue;
+            const NodeInfo* child = child_it->second;
+
+            std::map<std::string, double> child_pinned;
+            std::set<std::string> bound;
+            for (const ast::Binding& b : inst.bindings) {
+                const NodeInfo::SettingInfo* target = child->setting(b.name);
+                if (!target) {
+                    std::vector<Attachment> att;
+                    std::string have;
+                    for (const auto& s : child->settings) {
+                        if (!have.empty()) have += ", ";
+                        have += "`" + s.name + "`";
+                    }
+                    if (!have.empty()) att.push_back(help("`" + child->def->name +
+                                                          "` declares " + have));
+                    diag_.error("SE0441", def_src, b.loc,
+                                "`" + child->def->name + "` has no setting `" + b.name +
+                                    "`",
+                                "unknown setting", std::move(att));
+                    failed_ = true;
+                    continue;
+                }
+                if (!bound.insert(b.name).second) {
+                    diag_.error("SE0441", def_src, b.loc,
+                                "setting `" + b.name + "` is bound twice", "already bound");
+                    failed_ = true;
+                    continue;
+                }
+                Value v;
+                if (!eval(b.value.get(), def_src, env, v)) {
+                    failed_ = true;
+                    continue;
+                }
+                double d = 0.0;
+                if (coerce(v, target->type, def_src, b.loc,
+                           ("setting `" + b.name + "`").c_str(), d))
+                    child_pinned[b.name] = d;
+                else
+                    failed_ = true;
+            }
+            instantiate(child, sub(path, inst.name), child_pinned, def_src, inst.loc,
+                        depth + 1, m);
+        }
+        return;
+    }
+
+    // ─── A leaf ──────────────────────────────────────────────────────────────
+    Leaf leaf;
+    leaf.path = path;
+    leaf.node = def;
+    leaf.loc = loc;
+    leaf.settings = std::move(settings);
+
+    // §9.2 — `rate` is consumed by the scheduler and produces no runtime member.
+    for (const SettingValue& s : leaf.settings) {
+        if (s.name != "rate") continue;
+        const double base_rate = m.step > 0.0 ? 1.0 / m.step : 0.0;
+        const double ratio = s.value > 0.0 ? base_rate / s.value : 0.0;
+        const double r = std::floor(ratio + 0.5);
+        if (s.value <= 0.0 || std::fabs(ratio - r) > 1e-9 || r < 1.0) {
+            char buf[64];
+            std::snprintf(buf, sizeof buf, "%g", s.value);
+            std::vector<Attachment> att;
+            char note_buf[160];
+            std::snprintf(note_buf, sizeof note_buf,
+                          "%g / %g = %.4f; the nearest legal rates are %g Hz and %g Hz",
+                          base_rate, s.value, ratio, base_rate / std::max(1.0, std::floor(ratio)),
+                          base_rate / std::max(1.0, std::ceil(ratio)));
+            att.push_back(note(note_buf));
+            diag_.error("SE0450", src, loc,
+                        std::string("rate ") + buf +
+                            " Hz is not an integer divisor of the base rate",
+                        "instantiated here", std::move(att));
+            failed_ = true;
+        } else {
+            leaf.decimation = static_cast<long>(r);
+        }
+    }
+
+    const Source& def_src = *def->file->src;
+    for (const auto& st : def->states) {
+        StateSlot slot;
+        slot.name = st.name;
+        slot.continuous = st.continuous;
+        slot.unit = st.type.unit;
+        slot.der_unit = st.der_unit;
+        slot.scalar = st.type.scalar;
+        if (st.initial) {
+            Value v;
+            if (eval(st.initial, def_src, env, v))
+                coerce(v, st.type, def_src, st.initial->loc,
+                       ("state `" + st.name + "`").c_str(), slot.initial);
+        }
+        // §13.4 — an IC override rides the SAME channel as a setting.
+        known_setting_paths_.push_back(sub(path, st.name));
+        if (OverrideEntry* o = find_override(sub(path, st.name))) {
+            Value v;
+            if (eval(o->value, *o->src, Env{}, v))
+                coerce(v, st.type, *o->src, o->loc,
+                       ("initial condition `" + o->path + "`").c_str(), slot.initial);
+        }
+        leaf.states.push_back(std::move(slot));
+    }
+
+    leaf_by_path_[path] = m.leaves.size();
+    for (const Field& f : def->outputs)
+        leaf_outputs_[sub(path, f.name)] = {m.leaves.size(), f.name};
+    m.leaves.push_back(std::move(leaf));
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+//  Wires
+// ═════════════════════════════════════════════════════════════════════════════
+
+bool Elaborator::port_conversion(const Field& from, const Field& to, const Source& src,
+                                 Loc loc, double& scale, double& offset) {
+    scale = 1.0;
+    offset = 0.0;
+    if (from.type.is_record != to.type.is_record) {
+        diag_.error("SE0410", src, loc, "a record and a scalar cannot be wired together",
+                    std::string(from.type.is_record ? "record -> scalar"
+                                                    : "scalar -> record"));
+        return false;
+    }
+    if (from.type.is_record) {
+        // A record travels as one value, so the two ports must be the same
+        // record: per-field conversion would need a copy, and §15.3 says a
+        // wire is not its own variable.
+        if (from.type.record != to.type.record) {
+            diag_.error("SE0410", src, loc, "record types do not match",
+                        "`" + from.type.record->fq + "` -> `" + to.type.record->fq + "`",
+                        {note("a wire carries the whole record and coincides with the "
+                              "producer's storage (§5.3, §15.3)")});
+            return false;
+        }
+        return true;
+    }
+    if (!compatible(from.type.unit, to.type.unit)) {
+        diag_.error("SE0410", src, loc, "incompatible units across a wire",
+                    "`(" + from.type.unit.str() + ")` -> `(" + to.type.unit.str() + ")`",
+                    {note("source is " + from.type.unit.dim_str()),
+                     note("destination is " + to.type.unit.dim_str())});
+        return false;
+    }
+    // The conversion folds to a constant and is applied where the value is
+    // read into the consumer's `In` view, which is a copy anyway.
+    scale = from.type.unit.scale / to.type.unit.scale;
+    offset = (from.type.unit.offset - to.type.unit.offset) / to.type.unit.scale;
+    return true;
+}
+
+void Elaborator::collect_wires(const NodeInfo* def, const std::string& path, Model& m) {
+    (void)m;
+    const Source& src = *def->file->src;
+
+    // Resolves one endpoint to its port and its addressable path. `as_source`
+    // flips the polarity of a `self` endpoint, which is the whole content of
+    // §6.9.2's rule about the boundary being inverted from the inside.
+    auto endpoint = [&](const ast::Endpoint& e, bool as_source, const Field*& field,
+                        std::string& key) -> bool {
+        if (e.is_self) {
+            if (e.segs.empty()) return false;
+            const std::string& n = e.segs[0];
+            field = as_source ? def->input(n) : def->output(n);
+            if (!field) {
+                const Field* other = as_source ? def->output(n) : def->input(n);
+                if (other)
+                    diag_.error("SE0443", src, e.loc,
+                                std::string("`self.") + n + "` is " +
+                                    (as_source ? "an output" : "an input") +
+                                    " and cannot be a wire " +
+                                    (as_source ? "source" : "destination"),
+                                "wrong direction",
+                                {note("seen from the inside, the boundary's polarity is "
+                                      "inverted: `self.<input>` is a source and "
+                                      "`self.<output>` is a destination (§6.9.2)")});
+                else
+                    diag_.error("SE0304", src, e.loc,
+                                "`" + def->def->name + "` has no port `" + n + "`",
+                                "unresolved port");
+                return false;
+            }
+            key = sub(path, n);
+            return true;
+        }
+        if (e.segs.size() < 2) return false;
+        const std::string& inst = e.segs[0];
+        const std::string& port = e.segs[1];
+        auto it = def->children.find(inst);
+        if (it == def->children.end()) {
+            diag_.error("SE0304", src, e.loc,
+                        "`" + def->def->name + "` has no child instance `" + inst + "`",
+                        "unresolved instance");
+            return false;
+        }
+        const NodeInfo* child = it->second;
+        field = as_source ? child->output(port) : child->input(port);
+        if (!field) {
+            const Field* other = as_source ? child->input(port) : child->output(port);
+            if (other)
+                diag_.error("SE0443", src, e.loc,
+                            "`" + inst + "." + port + "` is " +
+                                (as_source ? "an input" : "an output") +
+                                " and cannot be a wire " +
+                                (as_source ? "source" : "destination"),
+                            "wrong direction",
+                            {note("direction is always source -> destination (§6.9.2)")});
+            else
+                diag_.error("SE0304", src, e.loc,
+                            "`" + child->def->name + "` has no port `" + port + "`",
+                            "unresolved port");
+            return false;
+        }
+        key = sub(sub(path, inst), port);
+        return true;
+    };
+
+    for (const ast::Wire& w : def->def->structure.wires) {
+        const Field* sf = nullptr;
+        std::string skey;
+        if (!endpoint(w.source, /*as_source=*/true, sf, skey)) {
+            failed_ = true;
+            continue;
+        }
+        for (const ast::Endpoint& d : w.dests) {
+            const Field* df = nullptr;
+            std::string dkey;
+            if (!endpoint(d, /*as_source=*/false, df, dkey)) {
+                failed_ = true;
+                continue;
+            }
+            Hop hop;
+            hop.source = skey;
+            hop.loc = d.loc;
+            hop.src = &src;
+            if (!port_conversion(*sf, *df, src, d.loc, hop.scale, hop.offset))
+                failed_ = true;
+
+            auto existing = producers_.find(dkey);
+            if (existing != producers_.end()) {
+                // §6.9.2 — fan-in is what would make the single-writer wire
+                // lowering unsound, so it is rejected rather than summed.
+                diag_.error("SE0442", src, d.loc,
+                            "two sources drive `" + dkey + "`", "second source here",
+                            {note("already driven by `" + existing->second.source + "`"),
+                             note("fan-out is free, fan-in is forbidden: a wire "
+                                  "coincides with the producer's storage (§15.3)"),
+                             help("insert an explicit `Sum` node")});
+                failed_ = true;
+                continue;
+            }
+            producers_[dkey] = hop;
+        }
+    }
+}
+
+void Elaborator::resolve_inputs(Model& m) {
+    std::set<std::string> root_inputs;
+    for (const Field& f : m.root->inputs) root_inputs.insert(f.name);
+
+    for (std::size_t i = 0; i < m.leaves.size(); ++i) {
+        Leaf& leaf = m.leaves[i];
+        for (const Field& port : leaf.node->inputs) {
+            const std::string key = sub(leaf.path, port.name);
+
+            std::vector<const Hop*> chain;
+            std::string k = key;
+            for (std::size_t guard = 0; guard <= producers_.size(); ++guard) {
+                auto it = producers_.find(k);
+                if (it == producers_.end()) break;
+                chain.push_back(&it->second);
+                k = it->second.source;
+            }
+
+            InputSource in;
+            auto out_it = leaf_outputs_.find(k);
+            if (out_it != leaf_outputs_.end()) {
+                in.kind = InputSource::Kind::Leaf;
+                in.producer = out_it->second.first;
+                in.port = out_it->second.second;
+            } else if (chain.empty() ? root_inputs.count(key) != 0
+                                     : root_inputs.count(k) != 0) {
+                in.kind = InputSource::Kind::Boundary;
+                in.boundary = "sig.in." + (chain.empty() ? key : k);
+            } else {
+                // §6.3 — there is no implicit zero.
+                std::vector<Attachment> att;
+                if (!chain.empty())
+                    att.push_back(note("the wire reaches `" + k +
+                                       "`, which nothing drives"));
+                att.push_back(note("an unconnected input is an error: there is no "
+                                   "implicit zero (§6.3)"));
+                diag_.error("SE0430", *leaf.node->file->src, port.loc,
+                            "input `" + key + "` is not connected", "declared here", att);
+                failed_ = true;
+                continue;
+            }
+
+            double s = 1.0, o = 0.0;
+            for (std::size_t j = chain.size(); j-- > 0;) {
+                s = chain[j]->scale * s;
+                o = chain[j]->scale * o + chain[j]->offset;
+            }
+            in.scale = s;
+            in.offset = o;
+            leaf.inputs[port.name] = in;
+        }
+    }
+}
+
+void Elaborator::resolve_boundary(const NodeInfo* root, Model& m) {
+    for (const Field& f : root->inputs) {
+        // The root's inputs become the fields of `Sim::Signals::In`, so the
+        // host writes `sim.sig.in.axle_torque` and the manifest addresses the
+        // same thing as `in.axle_torque`.
+        BoundaryIn b;
+        b.ident = f.name;
+        b.path = "in." + f.name;
+        b.type = f.type;
+        m.boundary_in.push_back(std::move(b));
+    }
+
+    // A root output is named in the manifest by the leaf that actually
+    // produces it, because that is the storage the host would read.
+    for (const Field& f : root->outputs) {
+        std::string k = f.name;
+        for (std::size_t guard = 0; guard <= producers_.size(); ++guard) {
+            auto it = producers_.find(k);
+            if (it == producers_.end()) break;
+            k = it->second.source;
+        }
+        auto out_it = leaf_outputs_.find(k);
+        if (out_it == leaf_outputs_.end()) continue;   // undriven; simply unread
+        const Leaf& leaf = m.leaves[out_it->second.first];
+        const Field* port = leaf.node->output(out_it->second.second);
+        if (!port) continue;
+
+        // Records are listed field by field: the manifest is read by a human
+        // wiring up a host, and `ws` alone would not tell them anything.
+        std::function<void(const std::string&, const std::string&, const Type&)> expand =
+            [&](const std::string& path, const std::string& expr, const Type& t) {
+                if (!t.is_record) {
+                    BoundaryOut b;
+                    b.path = path;
+                    b.expr = expr;
+                    b.type = t;
+                    m.boundary_out.push_back(std::move(b));
+                    return;
+                }
+                for (const Field& sf : t.record->fields)
+                    expand(path + "." + sf.name, expr + "." + sf.name, sf.type);
+            };
+        expand(sub(leaf.path, port->name), "sig." + leaf.ident + "." + port->name,
+               port->type);
+    }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+//  Recording and logging
+// ═════════════════════════════════════════════════════════════════════════════
+
+void Elaborator::resolve_record(const ast::RecordBlock& block, const Source& src,
+                                Model& m) {
+    m.record.present = true;
+    m.record.file = block.has_file ? block.file : "run.csv";
+    m.record.every = block.has_every ? block.every : 1;
+    if (m.record.every < 1) m.record.every = 1;
+
+    for (const ast::Path& p : block.signals) {
+        const std::string path = p.str();
+
+        // §13.6 — the engine's own metrics are addressed in the same scheme.
+        if (p.segs.size() == 2 && p.segs[0] == "sim") {
+            RecordedSignal s;
+            s.path = path;
+            Unit pct;
+            lookup_unit_symbol("%", pct);
+            s.unit = pct;
+            if (p.segs[1] == "utilization") s.expr = "se_rt::realtime().utilization()";
+            else if (p.segs[1] == "overrun_pct") s.expr = "se_rt::realtime().overrun_pct()";
+            else {
+                diag_.error("SE0304", src, p.loc, "unknown engine metric `" + path + "`",
+                            "not a metric",
+                            {note("`sim.utilization` and `sim.overrun_pct` (§13.6)")});
+                failed_ = true;
+                continue;
+            }
+            m.record.signals.push_back(std::move(s));
+            continue;
+        }
+
+        // Longest instance-path prefix wins, so `whl.out.ws.slip` splits at
+        // `whl` and the rest is an accessor path.
+        std::size_t best = 0;
+        std::string leaf_path;
+        for (std::size_t n = p.segs.size(); n-- > 0;) {
+            std::string candidate;
+            for (std::size_t i = 0; i < n; ++i) candidate = sub(candidate, p.segs[i]);
+            if (leaf_by_path_.count(candidate)) {
+                leaf_path = candidate;
+                best = n;
+                break;
+            }
+        }
+        if (leaf_path.empty() && !leaf_by_path_.count("")) {
+            diag_.error("SE0304", src, p.loc, "no node at `" + path + "`",
+                        "unresolved signal path",
+                        {note("signals are dotted paths from the root (§13.2)")});
+            failed_ = true;
+            continue;
+        }
+        const Leaf& leaf = m.leaves[leaf_by_path_[leaf_path]];
+        std::vector<std::string> rest(p.segs.begin() + best, p.segs.end());
+        if (rest.empty()) {
+            diag_.error("SE0304", src, p.loc, "`" + path + "` names a node, not a signal",
+                        "not a signal");
+            failed_ = true;
+            continue;
+        }
+
+        std::string kind;
+        if (rest[0] == "out" || rest[0] == "state" || rest[0] == "var") {
+            kind = rest[0];
+            rest.erase(rest.begin());
+            if (rest.empty()) {
+                diag_.error("SE0304", src, p.loc, "`" + path + "` names no member",
+                            "incomplete path");
+                failed_ = true;
+                continue;
+            }
+        } else {
+            // §13.5 — a bare name is legal when unambiguous, and loud when not.
+            const bool is_state = leaf.node->state(rest[0]) != nullptr;
+            const bool is_out = leaf.node->output(rest[0]) != nullptr;
+            if (is_state && is_out) {
+                diag_.error("SE0461", src, p.loc,
+                            "`" + path + "` is ambiguous", "both a state and an output",
+                            {note("`" + leaf.path + ".state." + rest[0] + "` names the state"),
+                             note("`" + leaf.path + ".out." + rest[0] + "` names the output"),
+                             note("a node may legitimately have both (§6.11)")});
+                failed_ = true;
+                continue;
+            }
+            kind = is_state ? "state" : (is_out ? "out" : "var");
+        }
+
+        RecordedSignal s;
+        s.path = path;
+        const std::string base = leaf.ident;
+
+        if (kind == "state") {
+            const NodeInfo::StateInfo* st = leaf.node->state(rest[0]);
+            if (!st || rest.size() != 1) {
+                diag_.error("SE0304", src, p.loc, "`" + path + "` names no state",
+                            "unresolved");
+                failed_ = true;
+                continue;
+            }
+            // Read the block, not the node's view of it. A continuous state is
+            // a slot in `x` — the solver's ABI — and a discrete one is a field
+            // of `dis`; the node holds only proxies into both (§15.5).
+            if (st->continuous) {
+                std::size_t slot = 0;
+                for (const StateSlot& ss : leaf.states)
+                    if (ss.name == rest[0]) slot = ss.slot;
+                s.expr = "x[" + std::to_string(slot) + "]";
+            } else {
+                s.expr = "dis." + base + "." + rest[0];
+            }
+            s.unit = st->type.unit;
+        } else {
+            const Field* f = kind == "out" ? leaf.node->output(rest[0]) : nullptr;
+            if (!f)
+                for (const Field& v : leaf.node->vars)
+                    if (kind == "var" && v.name == rest[0]) f = &v;
+            if (!f) {
+                diag_.error("SE0304", src, p.loc,
+                            "`" + path + "` names no " + kind + " of `" +
+                                leaf.node->def->name + "`",
+                            "unresolved");
+                failed_ = true;
+                continue;
+            }
+            // An output lives in the signal block; a var is deliberately NOT a
+            // block member — §6.5 makes it private per-instance storage outside
+            // the override channel — so it is still read through the node.
+            s.expr = kind == "out" ? "sig." + base + "." + rest[0]
+                                   : base + ".var." + rest[0];
+            Type t = f->type;
+            bool ok = true;
+            for (std::size_t i = 1; i < rest.size(); ++i) {
+                if (!t.is_record) {
+                    ok = false;
+                    break;
+                }
+                const Field* sf = nullptr;
+                for (const Field& c : t.record->fields)
+                    if (c.name == rest[i]) sf = &c;
+                if (!sf) {
+                    ok = false;
+                    break;
+                }
+                s.expr += "." + rest[i];
+                t = sf->type;
+            }
+            if (!ok || t.is_record) {
+                diag_.error("SE0304", src, p.loc,
+                            "`" + path + "` does not name a scalar signal",
+                            t.is_record ? "a record cannot be a CSV column" : "no such field");
+                failed_ = true;
+                continue;
+            }
+            s.unit = t.unit;
+        }
+        m.record.signals.push_back(std::move(s));
+    }
+}
+
+void Elaborator::resolve_log(const ast::LogBlock& block, const Source& src, Model& m) {
+    m.log.present = true;
+    m.log.file = block.has_file ? block.file : "";
+    if (block.has_level) {
+        m.log.level = block.level;
+        if (!one_of(block.level, kLevels, 5))
+            diag_.error("SE0264", src, block.loc, "unknown log level `" + block.level + "`",
+                        "not a level",
+                        {note("`trace`, `debug`, `info`, `warn`, `error` (§13.7)")});
+    }
+    for (const auto& kv : block.levels) {
+        if (!one_of(kv.second, kLevels, 5)) {
+            diag_.error("SE0264", src, kv.first.loc,
+                        "unknown log level `" + kv.second + "`", "not a level");
+            continue;
+        }
+        m.log.levels.push_back({kv.first.str(), kv.second});
+    }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+//  Driver
+// ═════════════════════════════════════════════════════════════════════════════
+
+bool Elaborator::run(const ast::SimFile& sim, const Source& sim_src,
+                     const std::string& sim_dir, Model& m) {
+    m.name = sim.name;
+
+    const int before = diag_.error_count();
+    read_sim_entries(sim, sim_src, m);
+
+    const ast::SimEntry* root_entry = nullptr;
+    const ast::SimEntry* record_entry = nullptr;
+    const ast::SimEntry* log_entry = nullptr;
+    for (const ast::SimEntry& e : sim.entries) {
+        if (e.key == "root") root_entry = &e;
+        else if (e.key == "record") record_entry = &e;
+        else if (e.key == "log") log_entry = &e;
+        else if (e.key == "settings")
+            load_settings_file(join_file(sim_dir, e.text), sim_src, e.loc);
+    }
+    if (!root_entry) return false;
+
+    m.root = resolver_.resolve_root(root_entry->root.str(), sim_src, root_entry->loc);
+    if (!m.root) return false;
+    m.program = &resolver_.program();
+    m.root_namespace = m.root->file->package;
+
+    // §13.3 — the sim file's root block is the third writer; the `.settings`
+    // source is the fourth, and is applied inside instantiate().
+    std::map<std::string, double> pinned;
+    std::set<std::string> bound;
+    for (const ast::Binding& b : root_entry->bindings) {
+        const NodeInfo::SettingInfo* target = m.root->setting(b.name);
+        if (!target) {
+            diag_.error("SE0441", sim_src, b.loc,
+                        "`" + m.root->def->name + "` has no setting `" + b.name + "`",
+                        "unknown setting");
+            continue;
+        }
+        if (!bound.insert(b.name).second) {
+            diag_.error("SE0441", sim_src, b.loc,
+                        "setting `" + b.name + "` is bound twice", "already bound");
+            continue;
+        }
+        Value v;
+        if (!eval(b.value.get(), sim_src, Env{}, v)) continue;
+        double d = 0.0;
+        if (coerce(v, target->type, sim_src, b.loc, ("setting `" + b.name + "`").c_str(), d))
+            pinned[b.name] = d;
+    }
+
+    instantiate(m.root, "", pinned, sim_src, root_entry->loc, 0, m);
+    if (m.leaves.empty()) {
+        diag_.error("SE0511", sim_src, root_entry->loc,
+                    "the model has no leaf nodes", "nothing to run",
+                    {note("a composite leaves no runtime trace at all (§15.2)")});
+        return false;
+    }
+
+    // §I5 — generated identifiers are entirely the generator's business, so
+    // uniqueness is guaranteed here by construction rather than by a language
+    // rule the user has to know about.
+    std::map<std::string, int> used;
+    for (Leaf& leaf : m.leaves) {
+        // The root itself may be a leaf, in which case its model path is empty
+        // — §13.2 addresses from the root without naming it.
+        std::string base = leaf.path.empty() ? "root" : ident_of(leaf.path);
+        int& n = used[base];
+        leaf.ident = n == 0 ? base : base + "_" + std::to_string(n);
+        ++n;
+    }
+
+    resolve_inputs(m);
+    resolve_boundary(m.root, m);
+
+    std::size_t slot = 0;
+    for (Leaf& leaf : m.leaves)
+        for (StateSlot& s : leaf.states)
+            if (s.continuous) s.slot = slot++;
+    m.n_states = slot;
+
+    if (record_entry) resolve_record(record_entry->record, sim_src, m);
+    if (log_entry) resolve_log(log_entry->log, sim_src, m);
+
+    // Every override must have landed on something. A typo here is otherwise
+    // completely silent, which is the worst possible failure for the layer
+    // that parameter sweeps generate.
+    for (const OverrideEntry& o : overrides_) {
+        if (o.used) continue;
+        std::vector<Attachment> att;
+        auto inst = instances_.find(o.path);
+        if (inst != instances_.end()) {
+            att.push_back(note("`" + o.path + "` names a node, not a setting"));
+        } else {
+            const std::size_t dot = o.path.rfind('.');
+            const std::string prefix = dot == std::string::npos ? "" : o.path.substr(0, dot);
+            const std::string name = dot == std::string::npos ? o.path : o.path.substr(dot + 1);
+            auto owner = instances_.find(prefix);
+            if (owner != instances_.end() && owner->second->output(name))
+                att.push_back(note("`" + o.path +
+                                   "` names an output, and outputs are computed (§13.3)"));
+        }
+        // A typo here is otherwise completely silent, so spend the budget on
+        // pointing at what was probably meant.
+        std::string best;
+        int best_d = 4;
+        for (const std::string& known : known_setting_paths_) {
+            const int d = path_distance(o.path, known);
+            if (d < best_d) {
+                best_d = d;
+                best = known;
+            }
+        }
+        if (!best.empty()) att.push_back(help("did you mean `" + best + "`?"));
+        att.push_back(note("overrides address a setting or a state by a dotted path from "
+                           "the root (§13.2, §13.4)"));
+        diag_.error("SE0460", *o.src, o.loc, "override `" + o.path + "` matches nothing",
+                    "no such setting or state", std::move(att));
+        failed_ = true;
+    }
+
+    return !failed_ && diag_.error_count() == before;
+}
+
+}  // namespace se

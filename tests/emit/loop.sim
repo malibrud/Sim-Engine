@@ -1,0 +1,5 @@
+sim Loop {
+    root:     loop.Loop;
+    step:     1 (ms);
+    duration: 1 (s);
+}

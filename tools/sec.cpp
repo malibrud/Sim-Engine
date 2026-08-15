@@ -1,21 +1,34 @@
 // ─────────────────────────────────────────────────────────────────────────────
 //  sec — the sim-engine compiler driver.
 //
-//  This build implements stages 1–2 of SPECIFICATION.md §1.3: lexical and
-//  syntactic analysis over `.se`, `.sim` and `.settings` files. Name
-//  resolution, unit checking, elaboration, scheduling and emission are
-//  specified but not yet implemented; `--parse` is the whole contract for now.
+//  Implements all six stages of SPECIFICATION.md §1.3. `--parse` stops after
+//  stage 2 and takes any file kind; `--emit` runs the whole pipeline over one
+//  `.sim` file and writes the generated model, the unit manifest, the fixed
+//  runtime headers and a reference build script.
 //
 //  Usage:
 //      sec [options] <file>...
 //
 //      --parse            parse and report diagnostics (default)
+//      --emit             compile a .sim file and write the generated model
 //      --dump-ast         print the parsed AST
 //      --dump-tokens      print the token stream (does not parse)
+//      -I <dir>           add a root directory (§2.1); repeatable
+//      -o <dir>           output directory for --emit (default `.`)
+//      --stem=<name>      output base name for --emit (default `Sim`)
+//      --no-main          do not write <stem>.main.cpp (embed in your own host)
+//      --no-runtime       do not write state_ref.hpp / se_runtime.hpp
+//      --no-build         do not write build.bat / build.sh
 //      --kind=<k>         force model | sim | settings, ignoring the extension
 //      --max-errors=<n>   diagnostic cap (default 20; 0 means no cap)
 //      --no-color         plain output
 //      -h, --help
+//
+//  A root is a directory declared from outside the language, exactly like a
+//  C++ include directory, and the package path is the directory path inside
+//  it: `-I examples` makes `drivetrain.Corner` mean
+//  `examples/drivetrain/Corner.se`. There is deliberately no environment
+//  variable and no search-path default beyond `.`, so builds are reproducible.
 //
 //  Exit status (§16.2): 0 clean, 1 at least one error, 2 driver failure.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -29,8 +42,12 @@
 #include "../src/ast.hpp"
 #include "../src/diag.hpp"
 #include "../src/dump.hpp"
+#include "../src/elaborate.hpp"
+#include "../src/emit.hpp"
 #include "../src/lexer.hpp"
 #include "../src/parser.hpp"
+#include "../src/resolve.hpp"
+#include "../src/schedule.hpp"
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -43,18 +60,57 @@
 namespace {
 
 enum class Kind { Model, Sim, Settings };
-enum class Mode { Parse, DumpAst, DumpTokens };
+enum class Mode { Parse, Emit, DumpAst, DumpTokens };
 
 void usage(std::ostream& o) {
-    o << "sec — sim-engine compiler (stages 1-2: parse only)\n\n"
+    o << "sec — sim-engine compiler\n\n"
          "usage: sec [options] <file>...\n\n"
          "  --parse            parse and report diagnostics (default)\n"
+         "  --emit             compile a .sim file and write the generated model\n"
          "  --dump-ast         print the parsed AST\n"
          "  --dump-tokens      print the token stream (does not parse)\n"
+         "  -I <dir>           add a root directory; repeatable\n"
+         "  -o <dir>           output directory for --emit (default `.`)\n"
+         "  --stem=<name>      output base name for --emit (default `Sim`)\n"
+         "  --no-main          do not write <stem>.main.cpp\n"
+         "  --no-runtime       do not write state_ref.hpp / se_runtime.hpp\n"
+         "  --no-build         do not write build.bat / build.sh\n"
          "  --kind=<k>         force model | sim | settings\n"
          "  --max-errors=<n>   diagnostic cap (default 20, 0 = no cap)\n"
          "  --no-color         plain output\n"
          "  -h, --help         this text\n";
+}
+
+std::string dir_of(const std::string& path) {
+    const std::size_t slash = path.find_last_of("/\\");
+    return slash == std::string::npos ? std::string(".") : path.substr(0, slash);
+}
+
+// Stages 3-6 over one `.sim` file. Each stage runs only if the one before it
+// produced no errors: there is no value in scheduling a model whose wires did
+// not resolve, and a cascade of derived nonsense buries the real diagnostic.
+int compile(const std::string& path, se::Diagnostics& diag,
+            const std::vector<std::string>& roots, const se::EmitOptions& opt) {
+    se::Source src;
+    std::string error;
+    if (!se::Source::load(path, src, error)) {
+        std::cerr << "sec: " << path << ": " << error << "\n";
+        return 2;
+    }
+
+    se::Parser parser(src, diag);
+    auto sim = parser.parse_sim_file();
+    if (diag.error_count() > 0) return 1;
+
+    se::Resolver resolver(diag, roots);
+    se::Elaborator elaborator(diag, resolver);
+    se::Model model;
+    if (!elaborator.run(*sim, src, dir_of(path), model)) return 1;
+    if (!se::schedule(diag, model)) return 1;
+    if (diag.error_count() > 0) return 1;
+
+    if (!opt.quiet) std::printf("sec: %s -> %s\n", path.c_str(), opt.out_dir.c_str());
+    return se::emit(diag, model, opt) ? 0 : 2;
 }
 
 bool ends_with(const std::string& s, const std::string& suffix) {
@@ -118,12 +174,40 @@ int main(int argc, char** argv) {
     Kind forced = Kind::Model;
     int max_errors = 20;
     std::vector<std::string> files;
+    std::vector<std::string> roots;
+    se::EmitOptions emit_opt;
 
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         if (a == "-h" || a == "--help") {
             usage(std::cout);
             return 0;
+        } else if (a == "-I") {
+            if (++i >= argc) {
+                std::cerr << "sec: -I needs a directory\n";
+                return 2;
+            }
+            roots.push_back(argv[i]);
+        } else if (a.rfind("-I", 0) == 0 && a.size() > 2) {
+            roots.push_back(a.substr(2));
+        } else if (a == "-o") {
+            if (++i >= argc) {
+                std::cerr << "sec: -o needs a directory\n";
+                return 2;
+            }
+            emit_opt.out_dir = argv[i];
+        } else if (a.rfind("--stem=", 0) == 0) {
+            emit_opt.stem = a.substr(7);
+        } else if (a == "--no-main") {
+            emit_opt.write_main = false;
+        } else if (a == "--no-runtime") {
+            emit_opt.write_runtime = false;
+        } else if (a == "--no-build") {
+            emit_opt.write_build = false;
+        } else if (a == "--quiet") {
+            emit_opt.quiet = true;
+        } else if (a == "--emit") {
+            mode = Mode::Emit;
         } else if (a == "--parse") {
             mode = Mode::Parse;
         } else if (a == "--dump-ast") {
@@ -163,6 +247,16 @@ int main(int argc, char** argv) {
 
     se::Diagnostics diag(std::cout, color, max_errors);
     int driver_failures = 0;
+
+    if (mode == Mode::Emit) {
+        if (files.size() != 1) {
+            std::cerr << "sec: --emit takes exactly one .sim file\n";
+            return 2;
+        }
+        const int rc = compile(files.front(), diag, roots, emit_opt);
+        diag.print_summary();
+        return rc;
+    }
 
     for (const std::string& path : files) {
         Kind kind = Kind::Model;

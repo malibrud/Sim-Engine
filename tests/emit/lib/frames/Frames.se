@@ -1,0 +1,18 @@
+package frames;
+
+// A minimal real-time model, existing only so the `sync` / `window` frame
+// arithmetic of §13.6 has something to be checked against.
+node Frames {
+    settings {
+        gain (-): double = 1.0;
+    }
+    outputs {
+        y (-): double;
+    }
+    states {
+        continuous v (-): double = 1.0;
+    }
+
+    rates()  { der.v = -param.gain * state.v; }
+    output() { out.y = state.v; }
+}

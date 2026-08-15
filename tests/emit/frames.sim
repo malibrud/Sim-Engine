@@ -1,0 +1,12 @@
+// SE0264 — a window shorter than one frame. 1 ms over a 10 ms frame is a tenth
+// of a frame, which would round to zero and leave the two metrics reporting the
+// latest frame rather than a rolling average (§13.6).
+sim Frames {
+    root:     frames.Frames;
+    step:     1 (ms);
+    duration: 1 (s);
+
+    mode:     realtime;
+    sync:     10 (ms);
+    window:   1 (ms);
+}

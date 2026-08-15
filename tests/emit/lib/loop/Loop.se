@@ -1,0 +1,38 @@
+package loop;
+
+// SE0510. Two Mealy nodes wired head to tail: each declares feedthrough in its
+// `output()` signature, so the sort has no valid ordering. §8.6 makes the
+// QUALITY of this diagnostic an explicit goal, so this case exists to keep it
+// honest — the message must name the cycle, name each offending parameter with
+// a file and line, and state the fix.
+node Loop {
+    inputs  { setpoint (-): double; }
+    outputs { y        (-): double; }
+
+    structure {
+        node ctl : Controller {};
+        node act : Actuator {};
+
+        self.setpoint --> ctl.r;
+        act.f         --> ctl.fb;
+        ctl.cmd       --> act.u;
+        act.f         --> self.y;
+    }
+}
+
+node Controller {
+    settings { kp (-): double = 2.0; }
+    inputs   { r (-): double;  fb (-): double; }
+    outputs  { cmd (-): double; }
+
+    // Direct (Mealy) form: zero added latency, but a feedthrough node.
+    output(r, fb) { out.cmd = param.kp * (in.r - in.fb); }
+}
+
+node Actuator {
+    settings { g (-): double = 0.5; }
+    inputs   { u (-): double; }
+    outputs  { f (-): double; }
+
+    output(u) { out.f = param.g * in.u; }
+}

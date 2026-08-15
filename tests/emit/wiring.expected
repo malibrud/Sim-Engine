@@ -1,0 +1,39 @@
+﻿error[SE0442]: two sources drive `s.u`
+  --> tests/emit/lib/wiring/Wiring.se:19:17
+   |
+19 |         q.v --> s.u;
+   |                 ^^^ second source here
+   = note: already driven by `p.v`
+   = note: fan-out is free, fan-in is forbidden: a wire coincides with the producer's storage (§15.3)
+   = help: insert an explicit `Sum` node
+
+error[SE0443]: `self.y` is an output and cannot be a wire source
+  --> tests/emit/lib/wiring/Wiring.se:22:9
+   |
+22 |         self.y --> s.w;
+   |         ^^^^^^ wrong direction
+   = note: seen from the inside, the boundary's polarity is inverted: `self.<input>` is a source and `self.<output>` is a destination (§6.9.2)
+
+error[SE0410]: incompatible units across a wire
+  --> tests/emit/lib/wiring/Wiring.se:25:19
+   |
+25 |         m.len --> s.z;
+   |                   ^^^ `(m)` -> `(-)`
+   = note: source is m
+   = note: destination is -
+
+error[SE0430]: input `s.w` is not connected
+  --> tests/emit/lib/wiring/Wiring.se:43:31
+   |
+43 |     inputs  { u (-): double;  w (-): double;  z (-): double;  spare (-): double; }
+   |                               ^ declared here
+   = note: an unconnected input is an error: there is no implicit zero (§6.3)
+
+error[SE0430]: input `s.spare` is not connected
+  --> tests/emit/lib/wiring/Wiring.se:43:63
+   |
+43 |     inputs  { u (-): double;  w (-): double;  z (-): double;  spare (-): double; }
+   |                                                               ^^^^^ declared here
+   = note: an unconnected input is an error: there is no implicit zero (§6.3)
+
+5 errors emitted

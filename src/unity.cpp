@@ -14,5 +14,11 @@
 #include "dump.cpp"
 #include "lexer.cpp"
 #include "parser.cpp"
+#include "units.cpp"
+#include "resolve.cpp"
+#include "elaborate.cpp"
+#include "schedule.cpp"
+#include "emit.cpp"
+#include "runtime_src.cpp"
 
 #include "../tools/sec.cpp"
