@@ -11,6 +11,11 @@
 //    2. `init()` / `done()` / `tick()` / `finish()` is a real seam. The batch
 //       driver in Sim.main.cpp is written in terms of the same calls, so a host
 //       cannot drift away from what the generated driver does.
+//    3. A `rate` override reaches the SCHEDULE (§9.2). The tick guards read a
+//       decimation member that resolve_settings() derives, so retuning a
+//       compiled binary moves when a node samples and not only what it
+//       computes. A decimation baked as a literal passes every other check in
+//       this suite, which is why the case is here rather than nowhere.
 //
 //  It also drives the root boundary, which the batch driver cannot: the sim
 //  file has no syntax for supplying `in.axle_torque`, so a batch run leaves it
@@ -39,6 +44,47 @@ void check(bool ok, const char* what) {
 int main() {
     se_rt::logs().configure("", se_rt::Level::Warn);
     se_rt::realtime().configure(0.0, 0.0);   // batch: do not spin on frames
+
+    // ── §9.2 — a `rate` override moves the SCHEDULE, not only the values ─────
+    //  This runs FIRST and never calls finish(), because §10.2's control is a
+    //  process global with first-writer-wins: once one run completes, no second
+    //  run can start in the same process.
+    //
+    //  The pin index is spelled out here because §14.1's loader does not exist
+    //  yet; when it does, this becomes load_settings("tc.rate = 500 (Hz);").
+    {
+        static drivetrain::Sim retuned;
+        check(retuned.tc_decim == 5, "tc elaborates to 200 Hz on a 1 kHz base");
+
+        retuned.tc.param.rate = 500.0;
+        retuned.se_pin_[3] = true;
+        retuned.resolve_settings();
+        check(retuned.config_error().empty(), "500 Hz is an integer divisor of 1 kHz");
+        check(retuned.tc_decim == 2, "the decimation followed the rate override");
+
+        std::uint64_t off_sample = 0, total = 0;
+        retuned.init();
+        for (int i = 0; i < 400 && !retuned.done(); ++i) {
+            retuned.sig.in.axle_torque = 250.0;
+            retuned.sig.in.ground_speed = 22.0;
+            const std::uint64_t k = retuned.tick_index();
+            const double before = retuned.dis.tc.cut;
+            retuned.tick();
+            if (retuned.dis.tc.cut != before) {
+                ++total;
+                if (k % 2 != 0) ++off_sample;
+            }
+        }
+        check(total > 0, "the retuned controller actually did something");
+        check(off_sample == 0, "the retuned state moves on the NEW sample ticks");
+
+        // SE0450's runtime counterpart. Checked without init(), so the failed
+        // configuration does not poison the global control for the run below.
+        retuned.tc.param.rate = 60.0;
+        retuned.resolve_settings();
+        check(!retuned.config_error().empty(), "a non-divisor rate is refused");
+        check(retuned.tc_decim == 1, "a refused rate does not leave a bogus divisor");
+    }
 
     static drivetrain::Sim sim;
 

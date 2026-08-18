@@ -1,0 +1,37 @@
+// H(s) = 1/s, bilinear — i.e. the trapezoidal rule.
+//
+// Standalone rather than a degenerate Biquad: 1/s is first order, so it needs
+// ONE state, and routing it through a second-order section would put a dead
+// slot in the discrete map for every integrator in the model.
+//
+// This is the DISCRETE integrator, which is what a fixed-rate cascade wants and
+// what reproduces a bilinear-designed reference. A continuous integrator — one
+// that joins the solver's state vector via `der.` — is a different block and is
+// not this one.
+package std.signal;
+
+node Integrator {
+    units { U; }
+
+    settings { fs (Hz): double = sample_rate; }
+
+    inputs  { x (U): double; }
+    // The output unit is DERIVED, not declared: integrating m/s^2 gives m/s.
+    // Wiring this into a port that expected the input's unit is a hard error,
+    // which is the whole reason the unit is written as an expression.
+    outputs { y (U*s): double; }
+
+    // Direct Form II of (1/K)(1 + z^-1)/(1 - z^-1): one state.
+    states { discrete w1 (-): double = 0.0; }
+
+    vars { g (-): double; }
+
+    init() { var.g = 1.0 / (2.0 * param.fs); }   // T/2
+
+    output(x) {
+        const double w0 = in.x + state.w1;
+        out.y = var.g * (w0 + state.w1);
+    }
+
+    on_step(x) { next.w1 = in.x + state.w1; }
+}

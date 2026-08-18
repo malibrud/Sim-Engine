@@ -1,0 +1,76 @@
+// Unit parameters end to end (§6.2a). The chain is the check: `sec` preserves
+// its unit and `acc` CHANGES it, so with U = (m/s^2) the composite's own
+// `(m/s)` port is exactly what the product lands on. Get the substitution
+// wrong in either direction and this stops compiling.
+package uparam;
+
+node UParam {
+    outputs { y (m/s): double; }
+
+    structure {
+        node src : Ramp                {};
+        // `limit` is declared `(U)`, so this binding is checked against
+        // (m/s^2) — and the `(km/h^2)` spelling has to convert into it.
+        node flt : Section   (m/s^2)   { k = 0.5; limit = 36000 (km/h^2); };
+        node acc : Integrate (m/s^2)   {};
+        // §10.4 — same definition, different rate. `dec` declares `rate`, so
+        // its `sample_rate` is 200 Hz while `flt`'s is the 1 kHz base step.
+        node dec : Decimated (m/s^2)   {};
+
+        src.y --> dec.x;
+        src.y --> flt.x;
+        flt.y --> acc.x;
+        acc.y --> self.y;
+    }
+}
+
+node Ramp {
+    outputs { y (m/s^2): double; }
+    states  { discrete t (-): double = 0.0; }
+
+    output()   { out.y = state.t; }
+    on_step()  { next.t = state.t + 1.0; }
+}
+
+// Dimension-preserving: `U -> U` for whatever U turns out to be.
+node Section {
+    units    { U; }
+    // A setting may be declared IN the unit parameter — this is what a scale
+    // block's limit needs, and it means the binding converts per instance.
+    settings { k (-): double = 1.0;
+               limit (U): double = 100.0;
+               // §10.4 — no `rate` declared, so this is the base step.
+               fs (Hz): double = sample_rate; }
+    inputs   { x (U): double; }
+    outputs  { y (U): double; }
+
+    output(x) { out.y = param.k * in.x; }
+}
+
+// §10.4 — a decimated node. `sample_rate` and `time_step` must follow the
+// node's OWN rate, not the base step: filter coefficients computed at the
+// wrong rate are silently wrong, which is the whole reason these exist.
+node Decimated {
+    units    { U; }
+    settings { rate (Hz): double = 200.0;
+               fs   (Hz): double = sample_rate;
+               dt   (s):  double = time_step;
+               // The two spellings must agree by construction.
+               unity (-): double = sample_rate * time_step; }
+    inputs   { x (U): double; }
+    outputs  { y (U): double; }
+
+    output(x) { out.y = param.unity * in.x; }
+}
+
+// Dimension-changing: the output unit is DERIVED as `U*s`, so the wire out of
+// this node is checked against a unit nobody wrote down.
+node Integrate {
+    units   { U; }
+    inputs  { x (U): double; }
+    outputs { y (U*s): double; }
+    states  { discrete a (-): double = 0.0; }
+
+    output()   { out.y = state.a; }
+    on_step(x) { next.a = state.a + in.x; }
+}

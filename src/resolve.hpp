@@ -21,6 +21,11 @@
 
 namespace se {
 
+// The unit parameters of the node currently being resolved (§6.2a). A member
+// rather than a parameter on `resolve_type`, which is reached from settings,
+// states, ports, vars and record fields alike. Records are resolved with it
+// cleared: a record type is defined independently of any node and is memoized
+// across all of them.
 class Resolver {
 public:
     Resolver(Diagnostics& diag, std::vector<std::string> roots);
@@ -61,6 +66,10 @@ private:
     RecordInfo* resolve_record(FileInfo& file, const ast::TypeDef& def,
                                const std::string& fq, const std::string& cpp_name);
     bool resolve_type(const FileInfo& file, const ast::TypeRef& ref, Type& out);
+    // Validates `units { … }` and returns the names, in declaration order.
+    std::vector<std::string> resolve_unit_params(const FileInfo& file,
+                                                 const ast::NodeDef& def);
+    std::vector<std::string> unit_params_;
 
     // ─── Checks ──────────────────────────────────────────────────────────────
     void check_node(const NodeInfo& info);

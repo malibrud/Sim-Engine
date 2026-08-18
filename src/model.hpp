@@ -86,6 +86,11 @@ struct NodeInfo {
     const FileInfo* file = nullptr;
     bool composite = false;
 
+    // §6.2a — unit parameters in declaration order. This is the index space
+    // `Unit::param_exp` is keyed by, and the order an instantiation's bindings
+    // are resolved against. Empty for every non-parametric node.
+    std::vector<std::string> unit_params;
+
     std::vector<Field> inputs;
     std::vector<Field> outputs;
     std::vector<Field> vars;
@@ -144,6 +149,47 @@ struct SettingValue {
     double value = 0.0;
 };
 
+// One piece of an emitted §7 expression (§15.5). A setting reference cannot be
+// rendered when the expression is built: it needs the owning node's C++
+// identifier, and those are assigned only after the whole hierarchy is known,
+// behind a collision-dedup pass. So a reference stays symbolic — owner path plus
+// setting name — and stage 6 renders it once identifiers exist.
+//
+// Two kinds suffice because §6.2 and §6.9.1 between them guarantee that a
+// reference is only ever to a setting of the node being elaborated or of its
+// parent: `param.*` reaches the same node, and a flow-down binding is evaluated
+// in the parent's scope. There is no third case to represent.
+struct ExprTok {
+    enum class Kind { Text, Param };
+    Kind kind = Kind::Text;
+    std::string text;    // Text: literal C++. Param: the setting's name.
+    std::string owner;   // Param: model path of the node holding it, "" at root.
+};
+
+using ExprCode = std::vector<ExprTok>;
+
+// §6.2b — one assignment in the configuration program. The program is the whole
+// settings graph flattened into dependency order at elaboration, so the runtime
+// performs no sorting and holds no graph: `resolve_settings()` is a straight
+// sequence of these (§15.5).
+//
+// Composites appear here as well as leaves, which is the one place a composite
+// leaves a runtime trace: its settings are the inputs to its own flow-down
+// expressions, so overriding `front.left.mass` has something to flow through.
+struct SettingSlot {
+    std::string path;        // root-relative, §13.2: "fl.whl.inertia"
+    std::string owner;       // the node holding it: "fl.whl" ("" at the root)
+    std::string name;        // the setting's own name: "inertia"
+    std::string pin;         // the pinned-flag member guarding it
+    Unit unit;
+    std::string scalar;      // "double" / "int"
+    double value = 0.0;      // what elaboration computed — the dump's starting point
+    ExprCode expr;           // emitted right-hand side, references unresolved
+    bool constant = true;    // `expr` is a literal; nothing upstream can move it
+    bool rate = false;       // reserved `rate` (§9.2): drives decimation, no param member
+    bool structural = false; // fixed at elaboration (§6.2); refused on load
+};
+
 struct StateSlot {
     std::string name;
     bool continuous = false;
@@ -176,6 +222,13 @@ struct Leaf {
     std::vector<SettingValue> settings;
     std::vector<StateSlot> states;
     std::map<std::string, InputSource> inputs;   // by port name
+
+    // §6.2a — the definition's ports with every unit parameter substituted.
+    // Identical to `node->inputs`/`node->outputs` for a non-parametric node,
+    // which is almost all of them; for a parametric one this is the only place
+    // the port's real unit exists, since the definition only knows `(U)`.
+    std::vector<Field> ports_in;
+    std::vector<Field> ports_out;
 
     long decimation = 1;               // §9.2 — 1 means base rate
     Loc loc;                           // the instance statement
@@ -226,6 +279,11 @@ struct Model {
     std::vector<Leaf> leaves;          // elaboration order
     std::vector<std::size_t> order;    // §8.5 topological order, into `leaves`
     std::size_t n_states = 0;
+
+    // §6.2b — every setting in the model, composites included, in the order
+    // `resolve_settings()` must assign them. Doubles as the §15.6 configuration
+    // schema, so the manifest and the loader cannot disagree about what exists.
+    std::vector<SettingSlot> settings;
 
     std::vector<BoundaryIn> boundary_in;
     std::vector<BoundaryOut> boundary_out;

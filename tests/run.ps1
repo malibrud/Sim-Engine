@@ -11,6 +11,11 @@
 #    tests/emit/*.sim  are compiled with --emit against the root tests/emit/lib.
 #                  A case WITH a <name>.expected must fail, and its diagnostic
 #                  text is compared. A case WITHOUT one must emit cleanly.
+#                  A case may ALSO carry a <name>.manifest, which is compared
+#                  against the emitted Sim.units.txt. That file is the
+#                  configuration schema a settings source is checked against,
+#                  so a silent change to it is a silent change to the model's
+#                  external contract.
 #
 #  Then, if `cl` is on PATH, the generated C++ is actually compiled, and the
 #  decay model is run and its CSV checked against the closed form. Emitting
@@ -77,7 +82,7 @@ function Run-Case($relPath, $expectDiagnostics) {
         return
     }
 
-    $want = (Get-Content -Raw $expected) -replace "`r`n", "`n"
+    $want = (Get-Content -Raw -Encoding UTF8 $expected) -replace "`r`n", "`n"
     if ($want -eq $actual) {
         Write-Host "ok   $relPath" -ForegroundColor Green
         $script:pass++
@@ -132,20 +137,32 @@ foreach ($f in $exFiles) {
 $emitOut = Join-Path $root 'build\emit'
 
 function Compare-Or-Update($relPath, $actual) {
-    $expected = [IO.Path]::ChangeExtension((Join-Path $root $relPath), '.expected')
+    Compare-Text $relPath ([IO.Path]::ChangeExtension((Join-Path $root $relPath), '.expected')) $actual
+}
+
+# Compares generated text against a recorded file. Split out from
+# Compare-Or-Update so the manifest check can name its own expected file
+# rather than being forced onto the .expected extension, which already means
+# "the diagnostics this case must produce".
+function Compare-Text($label, $expected, $actual) {
     if ($Update) {
         Set-Content -Path $expected -Value $actual -NoNewline -Encoding utf8
-        Write-Host "update $relPath"
+        Write-Host "update $label"
         $script:updated++
+        return
+    }
+    if (-not (Test-Path $expected)) {
+        Write-Host "FAIL $label : no recorded file at $expected" -ForegroundColor Red
+        $script:fail++
         return
     }
     $want = (Get-Content -Raw $expected) -replace "`r`n", "`n"
     if ($want -eq $actual) {
-        Write-Host "ok   $relPath" -ForegroundColor Green
+        Write-Host "ok   $label" -ForegroundColor Green
         $script:pass++
         return
     }
-    Write-Host "FAIL $relPath : diagnostics differ from .expected" -ForegroundColor Red
+    Write-Host "FAIL $label : differs from the recorded file" -ForegroundColor Red
     $wantLines = $want -split "`n"
     $gotLines  = $actual -split "`n"
     $n = [Math]::Max($wantLines.Count, $gotLines.Count)
@@ -171,8 +188,10 @@ function Run-Emit($simName) {
     if (Test-Path $outDir) { Remove-Item -Recurse -Force $outDir }
     New-Item -ItemType Directory -Force $outDir | Out-Null
 
+    # `stdlib` is a root like any other (§2.1) — the standard library gets no
+    # special mechanism, it is simply on the search path.
     $actual = (& $sec --no-color --quiet --max-errors=0 --emit `
-                      -I tests/emit/lib -o ($outDir -replace '\\', '/') $rel 2>&1 | Out-String)
+                      -I stdlib -I tests/emit/lib -o ($outDir -replace '\\', '/') $rel 2>&1 | Out-String)
     $code   = $LASTEXITCODE
     $actual = $actual -replace "`r`n", "`n"
 
@@ -197,11 +216,39 @@ function Run-Emit($simName) {
     return $outDir
 }
 
+# The unit manifest is a real generator output, not documentation (SPEC 15.6):
+# it is the configuration schema a settings source is checked against, so a
+# silent change to it is a silent change to the model's external contract.
+# Opt-in per case: drop a <name>.manifest beside the .sim and it is compared.
+function Check-Manifest($stem, $outDir) {
+    $expected = Join-Path $root ("tests\emit\" + $stem + '.manifest')
+    # Opt in strictly by the file existing, so -Update refreshes the cases
+    # that asked for a manifest rather than minting one for every case.
+    if (-not (Test-Path $expected)) { return }
+    $produced = Join-Path $outDir 'Sim.units.txt'
+    if (-not (Test-Path $produced)) {
+        Write-Host "FAIL tests/emit/$stem : no Sim.units.txt was written" -ForegroundColor Red
+        $script:fail++
+        return
+    }
+    # -Encoding UTF8 is not optional: sec writes this file BOM-less, and
+    # Windows PowerShell 5.1 decodes a BOM-less file as the ANSI codepage, so a
+    # bare Get-Content turns every em-dash into mojibake. Both sides would be
+    # corrupted identically and still compare equal, which is worse than
+    # failing -- it is a test that passes while reading garbage.
+    $actual = (Get-Content -Raw -Encoding UTF8 $produced) -replace "`r`n", "`n"
+    Compare-Text "tests/emit/$stem.manifest" $expected $actual
+}
+
 $emitDirs = @{}
 foreach ($f in (Get-ChildItem -Path (Join-Path $root 'tests\emit') -File -Filter '*.sim' |
                 Sort-Object Name)) {
     $d = Run-Emit $f.Name
-    if ($d) { $emitDirs[[IO.Path]::GetFileNameWithoutExtension($f.Name)] = $d }
+    if ($d) {
+        $stem = [IO.Path]::GetFileNameWithoutExtension($f.Name)
+        $emitDirs[$stem] = $d
+        Check-Manifest $stem $d
+    }
 }
 
 # The worked example must emit cleanly too.

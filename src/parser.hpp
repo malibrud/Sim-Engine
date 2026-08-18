@@ -79,6 +79,7 @@ private:
     bool parse_node_item(ast::NodeDef& node);
     bool parse_field_list(std::vector<ast::FieldDecl>& out, const char* what,
                           bool allow_records);
+    bool parse_unit_param_list(std::vector<ast::UnitParamDecl>& out);
     bool parse_setting_list(std::vector<ast::SettingDecl>& out);
     bool parse_state_list(std::vector<ast::StateDecl>& out);
     bool parse_native_list(std::vector<ast::NativeDecl>& out);

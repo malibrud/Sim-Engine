@@ -1,0 +1,10 @@
+// §6.2a negative cases: a derived unit landing on the wrong port, two
+// instances of one parametric definition that do not interchange, and a
+// missing unit argument. Has an `.expected`, so this case must FAIL.
+sim UPErr {
+    root: uperr.UPErr {};
+
+    step:     1 (ms);
+    solver:   rk4;
+    duration: 10 (ms);
+}

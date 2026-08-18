@@ -42,7 +42,7 @@ std::string closest(const std::string& word, const std::vector<const char*>& can
 const std::vector<const char*>& section_names() {
     static const std::vector<const char*> v = {
         "settings", "inputs", "outputs", "states", "vars",
-        "native",   "build",  "structure", "declarations"};
+        "native",   "build",  "structure", "declarations", "units"};
     return v;
 }
 
@@ -175,6 +175,7 @@ void Parser::recover_in_node_body() {
                 case Tok::KwOutputs:
                 case Tok::KwStates:
                 case Tok::KwVars:
+                case Tok::KwUnits:
                 case Tok::KwNative:
                 case Tok::KwDeclarations:
                 case Tok::KwBuild:
@@ -805,6 +806,11 @@ bool Parser::parse_node_item(ast::NodeDef& node) {
             advance();
             return parse_field_list(node.vars, "var", true);
 
+        case Tok::KwUnits:
+            if (!mark_section(node.sec_units, "units", loc)) return false;
+            advance();
+            return parse_unit_param_list(node.unit_params);
+
         case Tok::KwStates:
             if (!mark_section(node.sec_states, "states", loc)) return false;
             advance();
@@ -939,6 +945,40 @@ bool Parser::parse_field_list(std::vector<ast::FieldDecl>& out, const char* what
         if (tok_.loc.offset == before && !at(Tok::RBrace)) advance();
     }
     return expect(Tok::RBrace, "SE0201", "to close the section");
+}
+
+// `units { U; V; }` — bare names, no type and no default. A unit parameter
+// ranges over units rather than values, so there is nothing else to declare.
+bool Parser::parse_unit_param_list(std::vector<ast::UnitParamDecl>& out) {
+    if (!expect(Tok::LBrace, "SE0201", "to open `units`")) return false;
+
+    while (!at(Tok::RBrace) && !at_end()) {
+        const std::uint32_t before = tok_.loc.offset;
+
+        if (!at(Tok::Ident)) {
+            std::vector<Attachment> att;
+            if (tok_.is_keyword())
+                att.push_back(note("`" + tok_.text + "` is a reserved word (Appendix B)"));
+            err("SE0201", tok_.loc,
+                std::string("expected a unit parameter name, found ") + describe(tok_.kind),
+                "expected a unit parameter name", std::move(att));
+            recover_in_list(Tok::RBrace);
+        } else {
+            ast::UnitParamDecl p;
+            p.name = tok_.text;
+            p.loc = tok_.loc;
+            advance();
+            if (!expect(Tok::Semi, "SE0208", "after the unit parameter")) {
+                recover_in_list(Tok::RBrace);
+            } else {
+                out.push_back(std::move(p));
+            }
+        }
+
+        if (give_up()) return false;
+        if (tok_.loc.offset == before && !at(Tok::RBrace)) advance();
+    }
+    return expect(Tok::RBrace, "SE0201", "to close `units`");
 }
 
 bool Parser::parse_setting_list(std::vector<ast::SettingDecl>& out) {
@@ -1232,6 +1272,25 @@ bool Parser::parse_instance(ast::Instance& out) {
 
     if (!expect(Tok::Colon, "SE0201", "after the instance name")) return false;
     if (!parse_qualified_name(out.definition)) return false;
+
+    // §6.2a — `Biquad (m/s^2)`. Only `{`, `;` or `(` may follow the definition
+    // path, and a `(` can be nothing but a unit argument list, so this costs no
+    // lookahead.
+    if (at(Tok::LParen)) {
+        out.unit_args_loc = tok_.loc;
+        advance();
+        for (;;) {
+            ast::UnitPtr u = parse_unit_expr();
+            if (!u) return false;
+            out.unit_args.push_back(std::move(u));
+            if (at(Tok::Comma)) {
+                advance();
+                continue;
+            }
+            break;
+        }
+        if (!expect(Tok::RParen, "SE0201", "to close the unit arguments")) return false;
+    }
 
     if (at(Tok::LBrace)) {
         if (!parse_bindings(out.bindings)) return false;

@@ -1,46 +1,62 @@
 ﻿error[SE0414]: unknown unit symbol `sec`
-  --> tests/emit/lib/checks/Checks.se:22:24
+  --> tests/emit/lib/checks/Checks.se:24:24
    |
-22 |     settings { period (sec): double = 1.0; }
+24 |     settings { period (sec): double = 1.0; }
    |                        ^^^ not a unit in Appendix A
-   = help: did you mean `(deg)`, `(s)` or `(sr)`?
+   = help: did you mean `(deg)`, `(rev)` or `(s)`?
 
 error[SE0431]: a `continuous` state must be `double`
-  --> tests/emit/lib/checks/Checks.se:29:26
+  --> tests/emit/lib/checks/Checks.se:31:26
    |
-29 |     states  { continuous n (-): int = 0; }
+31 |     states  { continuous n (-): int = 0; }
    |                          ^ declared `int`
    = note: the solver's ABI is one flat `double` array (§15.5)
    = help: make it `discrete` if it is not integrated
 
 error[SE0340]: node `NoOutput` declares outputs but no `output()`
-  --> tests/emit/lib/checks/Checks.se:33:6
+  --> tests/emit/lib/checks/Checks.se:35:6
    |
-33 | node NoOutput {
+35 | node NoOutput {
    |      ^^^^^^^^ no `output()`
    = note: nothing else could compute them (§6.12)
 
 error[SE0350]: `nope` is not a declared input of `BadParam`
-  --> tests/emit/lib/checks/Checks.se:44:12
+  --> tests/emit/lib/checks/Checks.se:46:12
    |
-44 |     output(nope) { out.z = 0.0; }
+46 |     output(nope) { out.z = 0.0; }
    |            ^^^^ not an input
    = note: the list names inputs, bare — it is the set of inputs this method reads (§8.3)
    = help: declared inputs: `u`
 
 error[SE0320]: node `Both` has both code and a `structure` block
-  --> tests/emit/lib/checks/Checks.se:47:6
+  --> tests/emit/lib/checks/Checks.se:49:6
    |
-47 | node Both {
+49 | node Both {
    |      ^^^^ leaf or composite, never both
    = note: a composite just groups and aggregates: its state is the union of its descendants' and it leaves no runtime trace at all (§6.1, §15.2)
    = help: move the code into a child leaf node
 
-error[SE0430]: input `d.u` is not connected
-  --> tests/emit/lib/checks/Checks.se:42:16
+error[SE0415]: `(deg)` may not be a declared unit
+  --> tests/emit/lib/checks/Checks.se:59:25
    |
-42 |     inputs   { u (-): double; }
+59 |     settings { heading (deg): double = 90.0; }
+   |                         ^^^ declare this in radians
+   = note: units are erased in bodies (§4.4), so `sin(state.theta)` on a degree-valued accessor is silently wrong, and no dimensional system can catch it
+   = help: declare the radian unit and convert at the literal — `theta (rad): double = 90 (deg);`
+
+error[SE0410]: incompatible units for setting `f`
+  --> tests/emit/lib/checks/Checks.se:67:33
+   |
+67 |     settings { f (Hz): double = 1.0 (rad/s); }
+   |                                 ^^^ `(rad/s)` where `(Hz)` is declared
+   = note: value is rad/s
+   = note: target is 1/s
+
+error[SE0430]: input `d.u` is not connected
+  --> tests/emit/lib/checks/Checks.se:44:16
+   |
+44 |     inputs   { u (-): double; }
    |                ^ declared here
    = note: an unconnected input is an error: there is no implicit zero (§6.3)
 
-6 errors emitted
+8 errors emitted

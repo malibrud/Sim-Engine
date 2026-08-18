@@ -1,0 +1,46 @@
+// The negative cases for §6.2a. Each offender is instantiated so that
+// elaboration actually reaches it.
+package uperr;
+
+node UPErr {
+    outputs { y (m/s^2): double; }
+
+    structure {
+        node src : Ramp                {};
+        node acc : Integrate (m/s^2)   {};
+        node bad : Section   (rad/s)   {};
+        node few : Section             {};
+
+        // SE0410 — `acc.y` is `(U*s)` with U = (m/s^2), so `(m/s)`. The
+        // composite's own port is `(m/s^2)`. Nobody wrote either unit down:
+        // both are derived, and the mismatch is only visible per instance.
+        src.y --> acc.x;
+        acc.y --> self.y;
+
+        // SE0410 — same definition, different unit argument, so these two
+        // instances do NOT interchange even though the definition says `(U)`
+        // on both sides.
+        src.y --> bad.x;
+    }
+}
+
+node Ramp {
+    outputs { y (m/s^2): double; }
+    output() { out.y = 1.0; }
+}
+
+node Section {
+    units   { U; }
+    inputs  { x (U): double; }
+    outputs { y (U): double; }
+    output(x) { out.y = in.x; }
+}
+
+node Integrate {
+    units   { U; }
+    inputs  { x (U): double; }
+    outputs { y (U*s): double; }
+    states  { discrete a (-): double = 0.0; }
+    output()   { out.y = state.a; }
+    on_step(x) { next.a = state.a + in.x; }
+}

@@ -107,6 +107,7 @@ const char* se_runtime_hpp() {
 #pragma once
 
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -282,7 +283,12 @@ struct TraceLog {
     }
 };
 
-// ─── Block descriptors (section 15.6) ────────────────────────────────────────
+)SERT"
+    // MSVC caps a single string literal at 16380 bytes, and this header passed
+    // it. Adjacent literals concatenate, so the split is invisible in the
+    // output; it must fall on a blank line between sections, and each half must
+    // stay under the cap as the header grows.
+    R"SERT(// ─── Block descriptors (section 15.6) ────────────────────────────────────────
 //
 // A generated model exposes its signal and discrete-state blocks as one
 // contiguous object each, plus a table of these. The offsets come from
@@ -298,6 +304,50 @@ struct Slot {
     const char* type;     // "double", "int", "bool", "float"
     const char* unit;     // the declared unit; "-" is dimensionless
 };
+
+// ─── Configuration (section 6.2b, section 9.2) ───────────────────────────────
+//
+// A node's decimation is derived from its `rate` setting rather than baked at
+// elaboration. `rate` is an ordinary runtime setting, so an override has to
+// move the SCHEDULE as well as the coefficients; a decimation frozen at code
+// generation would leave the node running at its compiled rate while every
+// value derived from `sample_rate` followed the override, which is worse than
+// refusing the override outright.
+//
+// This is SE0450's runtime counterpart: section 9.2's divisor rule, applied
+// where the value now arrives. Returns false and leaves `out` at 1 on a rate
+// that is not a positive integer divisor of the base rate. The caller knows
+// which path it was configuring; this function does not (section 16.4).
+inline bool decimation_of(double base_rate, double rate, std::uint64_t& out) {
+    out = 1;
+    if (!(rate > 0.0) || !(base_rate > 0.0)) return false;
+    const double ratio = base_rate / rate;
+    const double n = std::floor(ratio + 0.5);
+    // Tolerance, not equality: `rate` reaches here through a decimal literal
+    // and possibly a unit conversion, so the ratio need not be exact even when
+    // the intent was. One part in 1e9 is far tighter than any adjacent legal
+    // rate, which differ by whole decimation counts.
+    if (n < 1.0 || std::fabs(ratio - n) > 1e-9 * ratio) return false;
+    out = static_cast<std::uint64_t>(n);
+    return true;
+}
+
+// The message SE0450 would have produced, for a rate that arrived after the
+// model was compiled. Same wording and the same nearest-legal-rates note, so a
+// rate rejected by the compiler and one rejected by the loader read alike.
+inline std::string rate_error(const char* path, double rate, double base_rate) {
+    std::ostringstream o;
+    o << path << " = " << rate << " Hz is not an integer divisor of the "
+      << base_rate << " Hz base rate";
+    if (rate > 0.0 && base_rate > 0.0) {
+        const double ratio = base_rate / rate;
+        const double lo = std::floor(ratio) < 1.0 ? 1.0 : std::floor(ratio);
+        const double hi = std::ceil(ratio) < 1.0 ? 1.0 : std::ceil(ratio);
+        o << "; the nearest legal rates are " << base_rate / lo << " Hz and "
+          << base_rate / hi << " Hz";
+    }
+    return o.str();
+}
 
 // ─── Termination (section 10.2) ──────────────────────────────────────────────
 

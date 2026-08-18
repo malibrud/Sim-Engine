@@ -23,73 +23,85 @@ long gcd_l(long a, long b) {
 
 constexpr double kPi = 3.14159265358979323846;
 
-// The seven base dimensions, in the order of Unit::dim.
-const char* const kBaseSym[kBaseDims] = {"m", "kg", "s", "A", "K", "mol", "cd"};
+// The eight base dimensions, in the order of Unit::dim. `rad` is the angle base
+// of §4.5, appended so the seven SI slots keep their indices.
+const char* const kBaseSym[kBaseDims] = {"m", "kg", "s", "A", "K", "mol", "cd",
+                                         "rad"};
 
 struct SymbolDef {
     const char* sym;
     signed char dim[kBaseDims];
     double scale;
     double offset;
+    // A non-radian angle unit: legal as a literal suffix or display unit,
+    // illegal as a declared unit (§4.5, `SE0415`).
+    bool nr_angle;
 };
 
 // Appendix A. Dimensions are written out rather than derived so the table
 // reads as a table; every row was checked against the SI brochure.
-//                                   m  kg   s   A   K mol  cd
+//
+// The `rad` column is what §4.5 buys: `Hz` is T⁻¹ while `rad/s` is angle·T⁻¹,
+// so the ω-versus-f factor-of-2π mix-up is now a hard error. `lm`/`lx` carry
+// angle² because they are defined through `sr`; without that, `(lm)` and
+// `(cd*sr)` would be incompatible, which would be a bug in this table rather
+// than a feature.
+//                                   m  kg   s   A   K mol  cd rad
 const SymbolDef kSymbols[] = {
     // Base
-    {"m",    { 1,  0,  0,  0,  0,  0,  0}, 1.0, 0.0},
-    {"kg",   { 0,  1,  0,  0,  0,  0,  0}, 1.0, 0.0},
-    {"s",    { 0,  0,  1,  0,  0,  0,  0}, 1.0, 0.0},
-    {"A",    { 0,  0,  0,  1,  0,  0,  0}, 1.0, 0.0},
-    {"K",    { 0,  0,  0,  0,  1,  0,  0}, 1.0, 0.0},
-    {"mol",  { 0,  0,  0,  0,  0,  1,  0}, 1.0, 0.0},
-    {"cd",   { 0,  0,  0,  0,  0,  0,  1}, 1.0, 0.0},
+    {"m",    { 1,  0,  0,  0,  0,  0,  0,  0}, 1.0, 0.0, false},
+    {"kg",   { 0,  1,  0,  0,  0,  0,  0,  0}, 1.0, 0.0, false},
+    {"s",    { 0,  0,  1,  0,  0,  0,  0,  0}, 1.0, 0.0, false},
+    {"A",    { 0,  0,  0,  1,  0,  0,  0,  0}, 1.0, 0.0, false},
+    {"K",    { 0,  0,  0,  0,  1,  0,  0,  0}, 1.0, 0.0, false},
+    {"mol",  { 0,  0,  0,  0,  0,  1,  0,  0}, 1.0, 0.0, false},
+    {"cd",   { 0,  0,  0,  0,  0,  0,  1,  0}, 1.0, 0.0, false},
+    {"rad",  { 0,  0,  0,  0,  0,  0,  0,  1}, 1.0, 0.0, false},
 
-    // Derived. `rad` and `sr` are dimensionless — see §4.5 for the cost.
-    {"rad",  { 0,  0,  0,  0,  0,  0,  0}, 1.0, 0.0},
-    {"sr",   { 0,  0,  0,  0,  0,  0,  0}, 1.0, 0.0},
-    {"Hz",   { 0,  0, -1,  0,  0,  0,  0}, 1.0, 0.0},
-    {"N",    { 1,  1, -2,  0,  0,  0,  0}, 1.0, 0.0},
-    {"Pa",   {-1,  1, -2,  0,  0,  0,  0}, 1.0, 0.0},
-    {"J",    { 2,  1, -2,  0,  0,  0,  0}, 1.0, 0.0},
-    {"W",    { 2,  1, -3,  0,  0,  0,  0}, 1.0, 0.0},
-    {"C",    { 0,  0,  1,  1,  0,  0,  0}, 1.0, 0.0},
-    {"V",    { 2,  1, -3, -1,  0,  0,  0}, 1.0, 0.0},
-    {"F",    {-2, -1,  4,  2,  0,  0,  0}, 1.0, 0.0},
-    {"ohm",  { 2,  1, -3, -2,  0,  0,  0}, 1.0, 0.0},
-    {"S",    {-2, -1,  3,  2,  0,  0,  0}, 1.0, 0.0},
-    {"Wb",   { 2,  1, -2, -1,  0,  0,  0}, 1.0, 0.0},
-    {"T",    { 0,  1, -2, -1,  0,  0,  0}, 1.0, 0.0},
-    {"H",    { 2,  1, -2, -2,  0,  0,  0}, 1.0, 0.0},
-    {"lm",   { 0,  0,  0,  0,  0,  0,  1}, 1.0, 0.0},
-    {"lx",   {-2,  0,  0,  0,  0,  0,  1}, 1.0, 0.0},
-    {"Bq",   { 0,  0, -1,  0,  0,  0,  0}, 1.0, 0.0},
-    {"Gy",   { 2,  0, -2,  0,  0,  0,  0}, 1.0, 0.0},
-    {"Sv",   { 2,  0, -2,  0,  0,  0,  0}, 1.0, 0.0},
-    {"kat",  { 0,  0, -1,  0,  0,  1,  0}, 1.0, 0.0},
+    // Derived
+    {"sr",   { 0,  0,  0,  0,  0,  0,  0,  2}, 1.0, 0.0, false},
+    {"Hz",   { 0,  0, -1,  0,  0,  0,  0,  0}, 1.0, 0.0, false},
+    {"N",    { 1,  1, -2,  0,  0,  0,  0,  0}, 1.0, 0.0, false},
+    {"Pa",   {-1,  1, -2,  0,  0,  0,  0,  0}, 1.0, 0.0, false},
+    {"J",    { 2,  1, -2,  0,  0,  0,  0,  0}, 1.0, 0.0, false},
+    {"W",    { 2,  1, -3,  0,  0,  0,  0,  0}, 1.0, 0.0, false},
+    {"C",    { 0,  0,  1,  1,  0,  0,  0,  0}, 1.0, 0.0, false},
+    {"V",    { 2,  1, -3, -1,  0,  0,  0,  0}, 1.0, 0.0, false},
+    {"F",    {-2, -1,  4,  2,  0,  0,  0,  0}, 1.0, 0.0, false},
+    {"ohm",  { 2,  1, -3, -2,  0,  0,  0,  0}, 1.0, 0.0, false},
+    {"S",    {-2, -1,  3,  2,  0,  0,  0,  0}, 1.0, 0.0, false},
+    {"Wb",   { 2,  1, -2, -1,  0,  0,  0,  0}, 1.0, 0.0, false},
+    {"T",    { 0,  1, -2, -1,  0,  0,  0,  0}, 1.0, 0.0, false},
+    {"H",    { 2,  1, -2, -2,  0,  0,  0,  0}, 1.0, 0.0, false},
+    {"lm",   { 0,  0,  0,  0,  0,  0,  1,  2}, 1.0, 0.0, false},
+    {"lx",   {-2,  0,  0,  0,  0,  0,  1,  2}, 1.0, 0.0, false},
+    {"Bq",   { 0,  0, -1,  0,  0,  0,  0,  0}, 1.0, 0.0, false},
+    {"Gy",   { 2,  0, -2,  0,  0,  0,  0,  0}, 1.0, 0.0, false},
+    {"Sv",   { 2,  0, -2,  0,  0,  0,  0,  0}, 1.0, 0.0, false},
+    {"kat",  { 0,  0, -1,  0,  0,  1,  0,  0}, 1.0, 0.0, false},
 
     // Accepted non-SI
-    {"g",    { 0,  1,  0,  0,  0,  0,  0}, 1e-3, 0.0},
-    {"deg",  { 0,  0,  0,  0,  0,  0,  0}, kPi / 180.0, 0.0},
-    {"min",  { 0,  0,  1,  0,  0,  0,  0}, 60.0, 0.0},
-    {"h",    { 0,  0,  1,  0,  0,  0,  0}, 3600.0, 0.0},
-    {"d",    { 0,  0,  1,  0,  0,  0,  0}, 86400.0, 0.0},
-    {"L",    { 3,  0,  0,  0,  0,  0,  0}, 1e-3, 0.0},
-    {"t",    { 0,  1,  0,  0,  0,  0,  0}, 1000.0, 0.0},
-    {"bar",  {-1,  1, -2,  0,  0,  0,  0}, 1e5, 0.0},
-    {"atm",  {-1,  1, -2,  0,  0,  0,  0}, 101325.0, 0.0},
-    // One revolution per minute. `rad` is dimensionless, so rpm is 1/s.
-    {"rpm",  { 0,  0, -1,  0,  0,  0,  0}, 2.0 * kPi / 60.0, 0.0},
-    {"%",    { 0,  0,  0,  0,  0,  0,  0}, 0.01, 0.0},
-    {"degC", { 0,  0,  0,  0,  1,  0,  0}, 1.0, 273.15},
-    {"degF", { 0,  0,  0,  0,  1,  0,  0}, 5.0 / 9.0, 459.67 * 5.0 / 9.0},
-    {"in",   { 1,  0,  0,  0,  0,  0,  0}, 0.0254, 0.0},
-    {"ft",   { 1,  0,  0,  0,  0,  0,  0}, 0.3048, 0.0},
-    {"mi",   { 1,  0,  0,  0,  0,  0,  0}, 1609.344, 0.0},
-    {"lb",   { 0,  1,  0,  0,  0,  0,  0}, 0.45359237, 0.0},
-    {"hp",   { 2,  1, -3,  0,  0,  0,  0}, 745.6998715822702, 0.0},
-    {"psi",  {-1,  1, -2,  0,  0,  0,  0}, 6894.757293168361, 0.0},
+    {"g",    { 0,  1,  0,  0,  0,  0,  0,  0}, 1e-3, 0.0, false},
+    {"deg",  { 0,  0,  0,  0,  0,  0,  0,  1}, kPi / 180.0, 0.0, true},
+    {"rev",  { 0,  0,  0,  0,  0,  0,  0,  1}, 2.0 * kPi, 0.0, true},
+    {"min",  { 0,  0,  1,  0,  0,  0,  0,  0}, 60.0, 0.0, false},
+    {"h",    { 0,  0,  1,  0,  0,  0,  0,  0}, 3600.0, 0.0, false},
+    {"d",    { 0,  0,  1,  0,  0,  0,  0,  0}, 86400.0, 0.0, false},
+    {"L",    { 3,  0,  0,  0,  0,  0,  0,  0}, 1e-3, 0.0, false},
+    {"t",    { 0,  1,  0,  0,  0,  0,  0,  0}, 1000.0, 0.0, false},
+    {"bar",  {-1,  1, -2,  0,  0,  0,  0,  0}, 1e5, 0.0, false},
+    {"atm",  {-1,  1, -2,  0,  0,  0,  0,  0}, 101325.0, 0.0, false},
+    // One revolution per minute: angle per time, like `rad/s` and unlike `Hz`.
+    {"rpm",  { 0,  0, -1,  0,  0,  0,  0,  1}, 2.0 * kPi / 60.0, 0.0, true},
+    {"%",    { 0,  0,  0,  0,  0,  0,  0,  0}, 0.01, 0.0, false},
+    {"degC", { 0,  0,  0,  0,  1,  0,  0,  0}, 1.0, 273.15, false},
+    {"degF", { 0,  0,  0,  0,  1,  0,  0,  0}, 5.0 / 9.0, 459.67 * 5.0 / 9.0, false},
+    {"in",   { 1,  0,  0,  0,  0,  0,  0,  0}, 0.0254, 0.0, false},
+    {"ft",   { 1,  0,  0,  0,  0,  0,  0,  0}, 0.3048, 0.0, false},
+    {"mi",   { 1,  0,  0,  0,  0,  0,  0,  0}, 1609.344, 0.0, false},
+    {"lb",   { 0,  1,  0,  0,  0,  0,  0,  0}, 0.45359237, 0.0, false},
+    {"hp",   { 2,  1, -3,  0,  0,  0,  0,  0}, 745.6998715822702, 0.0, false},
+    {"psi",  {-1,  1, -2,  0,  0,  0,  0,  0}, 6894.757293168361, 0.0, false},
 };
 
 struct PrefixDef {
@@ -112,6 +124,7 @@ Unit from_def(const SymbolDef& d, double prefix_scale) {
     u.scale = d.scale * prefix_scale;
     u.offset = d.offset;
     u.has_offset = d.offset != 0.0;
+    u.nonradian_angle = d.nr_angle;
     return u;
 }
 
@@ -157,10 +170,33 @@ std::string rat_str(Rat r) {
 // ─── Unit algebra ────────────────────────────────────────────────────────────
 
 bool Unit::dimensionless() const {
+    // A parametric unit is not dimensionless even when its concrete factor is:
+    // `(U)` is whatever U turns out to be.
+    if (parametric()) return false;
     for (int i = 0; i < kBaseDims; ++i)
         if (!dim[i].zero()) return false;
     return true;
 }
+
+bool Unit::parametric() const {
+    for (const Rat& e : param_exp)
+        if (!e.zero()) return true;
+    return false;
+}
+
+// Element-wise on the shorter-padded-with-zero convention `param_exp` uses.
+namespace {
+void param_combine(std::vector<Rat>& out, const std::vector<Rat>& a,
+                   const std::vector<Rat>& b, bool subtract) {
+    const std::size_t n = std::max(a.size(), b.size());
+    out.assign(n, rat(0));
+    for (std::size_t i = 0; i < n; ++i) {
+        const Rat x = i < a.size() ? a[i] : rat(0);
+        const Rat y = i < b.size() ? b[i] : rat(0);
+        out[i] = subtract ? rat_sub(x, y) : rat_add(x, y);
+    }
+}
+}  // namespace
 
 std::string Unit::str() const {
     std::string num, den;
@@ -196,6 +232,15 @@ std::string Unit::dim_str() const {
 }
 
 bool compatible(const Unit& a, const Unit& b) {
+    // Unbound parameters compare symbolically: `(U)` matches `(U)` but not
+    // `(V)` and not `(m/s)`. After `unit_bind` both sides are concrete and this
+    // degenerates to the dimension check it has always been.
+    const std::size_t np = std::max(a.param_exp.size(), b.param_exp.size());
+    for (std::size_t i = 0; i < np; ++i) {
+        const Rat x = i < a.param_exp.size() ? a.param_exp[i] : rat(0);
+        const Rat y = i < b.param_exp.size() ? b.param_exp[i] : rat(0);
+        if (x != y) return false;
+    }
     for (int i = 0; i < kBaseDims; ++i)
         if (a.dim[i] != b.dim[i]) return false;
     return true;
@@ -234,9 +279,51 @@ Unit unit_mul(const Unit& a, const Unit& b) {
     Unit r;
     for (int i = 0; i < kBaseDims; ++i) r.dim[i] = rat_add(a.dim[i], b.dim[i]);
     r.scale = a.scale * b.scale;
+    r.nonradian_angle = a.nonradian_angle || b.nonradian_angle;
+    param_combine(r.param_exp, a.param_exp, b.param_exp, false);
     r.display = a.display;
     for (const UnitFactor& f : b.display) merge_factor(r.display, f);
     drop_zero_factors(r.display);
+    return r;
+}
+
+Unit unit_rad() {
+    Unit u;
+    u.dim[kBaseDims - 1] = rat(1);
+    u.display.push_back({"rad", rat(1)});
+    return u;
+}
+
+Unit unit_param(std::size_t index, const std::string& name) {
+    Unit u;
+    u.param_exp.assign(index + 1, rat(0));
+    u.param_exp[index] = rat(1);
+    // The parameter carries its own name in the display form, so a diagnostic
+    // or the manifest prints `(U*s)` rather than a bare `(s)`.
+    u.display.push_back({name, rat(1), true});
+    return u;
+}
+
+Unit unit_bind(const Unit& u, const std::vector<Unit>& binding) {
+    if (!u.parametric()) return u;
+    // The parameter-free factor is what is left once the placeholders go; the
+    // dimension vector already excludes them, since a placeholder contributes
+    // only to `param_exp`.
+    Unit r = u;
+    r.param_exp.clear();
+    r.display.clear();
+    for (const UnitFactor& f : u.display)
+        if (!f.is_param) r.display.push_back(f);
+
+    for (std::size_t i = 0; i < u.param_exp.size(); ++i) {
+        if (u.param_exp[i].zero()) continue;
+        // A short binding means the arity check already reported and gave up.
+        // Leave the parameter unsubstituted rather than reading off the end:
+        // this runs on a path that is already failing, and a crash there would
+        // replace a good diagnostic with no diagnostic at all.
+        if (i >= binding.size()) continue;
+        r = unit_mul(r, unit_pow(binding[i], u.param_exp[i]));
+    }
     return r;
 }
 
@@ -244,6 +331,8 @@ Unit unit_div(const Unit& a, const Unit& b) {
     Unit r;
     for (int i = 0; i < kBaseDims; ++i) r.dim[i] = rat_sub(a.dim[i], b.dim[i]);
     r.scale = a.scale / b.scale;
+    r.nonradian_angle = a.nonradian_angle || b.nonradian_angle;
+    param_combine(r.param_exp, a.param_exp, b.param_exp, true);
     r.display = a.display;
     for (const UnitFactor& f : b.display) merge_factor(r.display, {f.sym, rat_neg(f.exp)});
     drop_zero_factors(r.display);
@@ -254,7 +343,14 @@ Unit unit_pow(const Unit& a, Rat e) {
     Unit r;
     for (int i = 0; i < kBaseDims; ++i) r.dim[i] = rat_mul(a.dim[i], e);
     r.scale = std::pow(a.scale, static_cast<double>(e.n) / static_cast<double>(e.d));
-    for (const UnitFactor& f : a.display) r.display.push_back({f.sym, rat_mul(f.exp, e)});
+    // `(deg^0)` is dimensionless and carries no degrees, so the taint goes with
+    // the factors rather than surviving a zero exponent.
+    r.nonradian_angle = a.nonradian_angle && !e.zero();
+    r.param_exp.assign(a.param_exp.size(), rat(0));
+    for (std::size_t i = 0; i < a.param_exp.size(); ++i)
+        r.param_exp[i] = rat_mul(a.param_exp[i], e);
+    for (const UnitFactor& f : a.display)
+        r.display.push_back({f.sym, rat_mul(f.exp, e), f.is_param});
     drop_zero_factors(r.display);
     return r;
 }
@@ -322,6 +418,15 @@ bool UnitEval::eval_inner(const ast::UnitExpr* u, Unit& out, bool compound) {
             return true;
 
         case K::Symbol: {
+            // §6.2a — a unit parameter shadows Appendix A within its node, so
+            // `U` resolves symbolically rather than as an unknown symbol. The
+            // shadowing is why a parameter may not be spelled like a real unit
+            // (`SE0416`, checked where the parameter is declared).
+            for (std::size_t i = 0; i < params_.size(); ++i) {
+                if (params_[i] != u->symbol) continue;
+                out = unit_param(i, u->symbol);
+                return true;
+            }
             if (!lookup_unit_symbol(u->symbol, out)) {
                 std::vector<Attachment> att;
                 const std::vector<std::string> near = near_unit_symbols(u->symbol);

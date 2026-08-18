@@ -98,8 +98,13 @@ column in §16.4 gives the detecting stage.
   `structure` block. Lowers to an object (leaf) or to nothing (composite).
 - **Leaf** — a node with code. **Composite** — a node with children and wires.
 - **Port** — an entry in `inputs` or `outputs`.
-- **Elaboration** — the compile-time evaluation that folds settings, resolves
-  the hierarchy, and produces the flat runtime model.
+- **Elaboration** — the compile-time evaluation that resolves the hierarchy,
+  checks every declarative site, and produces the flat runtime model.
+  Elaboration fixes **shape**; it does not fix setting **values** (§6.2).
+- **Configuration** — the runtime phase between construction and `init()`, in
+  which setting overrides are applied and derived settings and flow-down are
+  recomputed (§6.2). Elaboration decides what *may* be configured;
+  configuration decides what it *is*.
 - **Base step** — the global fixed time step. **Tick** — one base step.
 - **Frame** — the real-time synchronisation interval (`sync`), an integer
   multiple of the base step.
@@ -269,7 +274,7 @@ Only these words are **reserved** everywhere:
 
 ```
 package  use  type  node  self
-settings inputs outputs states vars native structure declarations build
+settings units inputs outputs states vars native structure declarations build
 continuous discrete
 init output rates on_step final
 sim
@@ -379,12 +384,16 @@ Examples, all from working models:
 (km/h)  (deg)  (Hz)  (m^(1/2))
 ```
 
+`(deg)` and `(rpm)` are well-formed unit expressions, but they may appear only as
+a literal suffix or a display unit — never as a *declared* unit. See §4.5.
+
 ### 4.2 Dimensions and equivalence
 
 A unit expression evaluates to a **dimension** — a rational exponent vector over
-the seven SI base dimensions — together with a **scale factor** and, for a few
-units, an **offset**. Two units are *compatible* iff their dimension vectors are
-equal. `(-)`, `(1)`, and `(%)` are all dimensionless; `(%)` carries scale 1/100.
+**eight** base dimensions: the seven SI bases plus **angle** (§4.5) — together
+with a **scale factor** and, for a few units, an **offset**. Two units are
+*compatible* iff their dimension vectors are equal. `(-)`, `(1)`, and `(%)` are
+all dimensionless; `(%)` carries scale 1/100.
 
 Compatible units convert automatically, and the conversion folds to a
 compile-time constant. `(m/s)` → `(km/h)` multiplies by 3.6 at elaboration and
@@ -436,13 +445,45 @@ The choice is **reversible**. The DSL retains full unit information, so
 re-introducing typed bodies later is a codegen change plus a header — not a
 redesign.
 
-### 4.5 Known limitation: angle
+### 4.5 Angle
 
-`(deg)` and `(rad)` are dimensionally identical (both dimensionless), so
-dimensional analysis **cannot** catch a radians/degrees mix-up — a common,
-expensive real-world bug. Treating angle as a distinct base dimension would catch
-it but is physically wrong and breaks identities like (m/s) = (m)·(rad/s). This
-is unresolved; see Appendix C.
+**Angle is a distinct base dimension** — the eighth — and **radians are the only
+declarable angle unit**. These are two separate rules fixing two separate
+confusions, and both are needed.
+
+**The dimension.** Without it, `(deg)` and `(-)` have equal dimension vectors, so
+wiring a heading into a slip-ratio port is legal and silently scales by π/180.
+With it:
+
+| Unit | Dimension |
+|---|---|
+| `rad` | 1·angle |
+| `deg` | (π/180)·angle |
+| `rev` | 2π·angle |
+| `rpm` | (2π/60)·angle·T⁻¹ |
+| `sr` | angle² |
+
+**Canonical radian storage.** Units are erased in bodies (§4.4), so `sin(state.theta)`
+on a `(deg)` accessor is silently wrong and *no* dimensional system catches it.
+Therefore **a declared unit may not contain a non-radian angle unit**: `(deg)`,
+`(rpm)`, and `(deg/s)` are legal as literal suffixes and as display units, and
+illegal as the declared unit of a setting, state, port, or field (`SE0415`).
+Writing `theta (rad): double = 90 (deg);` is correct and converts at elaboration.
+
+**Why this is nearly free here.** The identities that normally make angle-as-a-
+dimension expensive — `v = ωr`, `τ = Iα` — live *only inside bodies*, where
+arithmetic is already unchecked (§4.4). The cost is confined to setting flow-down
+(§7), where angular products are rare.
+
+**The larger win.** `(rad/s)` is angle·T⁻¹ while `(Hz)` stays T⁻¹, so they are no
+longer compatible and the ω-versus-*f* factor-of-2π mix-up becomes a hard error.
+
+**Deliberately not claimed.** This does *not* separate torque from energy. `τ = Iα`
+puts angle in the numerator and `W = τθ` in the denominator, so they disagree —
+the genuine wart in the angle-as-dimension literature. Force, energy, and inertia
+units stay angle-free; torque and energy remain mutually convertible exactly as
+before. No regression, no gain, and the conflict never surfaces because it only
+appears in bodies.
 
 ---
 
@@ -571,9 +612,22 @@ settings {
   **other settings of the same node** via `param.*`, which makes settings a
   dependency graph requiring a topological sort; a cycle is an error (`SE0421`).
 - Derived settings behave the way a reader expects: overriding `total_mass`
-  recomputes `corner_mass`; overriding `corner_mass` pins it.
-- Settings are **fixed at elaboration**. There is no two-phase init, no runtime
-  reparameterisation, and no way for a parent to reach into a child at run time.
+  recomputes `corner_mass`; overriding `corner_mass` **pins** it — the derived
+  expression no longer runs for that setting. This is the same rule at
+  elaboration and at configuration.
+- Settings are **values, not shape**. Their *names, units, types and dependency
+  graph* are fixed at elaboration; their *values* are not. A setting may be
+  overridden at **configuration** (§6.2b) in a binary that has already been
+  compiled.
+
+**What settings may not decide.** Because shape is fixed at elaboration, a
+setting may not select wiring, instance count, or state count. §7.4's absence of
+conditionals and §7.2's requirement of a literal `^` exponent already prevent
+most of this. The one construct that *would* let a setting change shape is an
+**array extent** (`states { discrete w [param.order] … }`), and a setting that
+appears in one is therefore **structural**: fixed at elaboration, not
+overridable at configuration, and reported as such by the manifest (§15.6). This
+is inferred from use, not declared.
 
 **Reserved setting: `rate`.** A node may declare
 
@@ -581,10 +635,148 @@ settings {
 settings { rate (Hz): double = 200.0; }
 ```
 
-`rate` is an ordinary setting in every respect — declared, defaulted, bound at
-instantiation, flowed down — except that the scheduler consumes it (§9.2) and it
-produces **no runtime member**. If declared, it must have unit `(Hz)` and type
-`double` (`SE0422`). A node that does not declare `rate` runs at the base step.
+`rate` is an ordinary setting in **every** respect — declared, defaulted, bound at
+instantiation, flowed down, overridable at configuration, and holding a `param`
+member like any other. If declared, it must have unit `(Hz)` and type `double`
+(`SE0422`). A node that does not declare `rate` runs at the base step.
+
+Its only distinction is that the scheduler *reads* it (§9.2): the node's
+decimation is derived from `param.rate` during configuration, in the same pass
+and by the same rule as any other derived value. Before §6.2b, `rate` produced
+no runtime member because its value folded into a decimation constant; with
+values no longer folded there is nothing left to special-case, and `sample_rate`
+(§10.4) is simply a reading of it.
+
+`rate` is **not structural**: it sets a decimation counter, not a shape. The
+emitted schedule is a fixed sequence of calls in a fixed order (§15.7); rate
+supplies only the divisor that guards each one (§9.6). See §9.2 for the one
+consequence, which is that `SE0450` moves to configuration time for an override.
+
+#### 6.2a `units` — unit parameters
+
+A node may declare **unit variables**, and write its port, state and setting
+units as expressions over them:
+
+```
+node Integrator {
+    units    { U; }
+    inputs   { x (U):   double; }
+    outputs  { y (U*s): double; }
+}
+```
+
+`U` ranges over a **unit**, not a dimension. `(km/h)` and `(m/s)` are different
+bindings that happen to share a dimension vector, and a node bound to one is not
+interchangeable with a node bound to the other — the conversion between them is
+exactly what §4.3 exists to insert.
+
+Each unit variable is a bare identifier, `;`-terminated, in a `units` section.
+Declaring one that shadows an Appendix A symbol is an error (`SE0416`); so is
+declaring the same name twice (`SE0417`).
+
+**Why the library needs this.** Without unit parameters a filter is written once
+per dimension it might carry — five definitions for two concepts in the motion-
+cueing algorithm alone — and remains closed to any dimension its author did not
+anticipate. Declaring the ports dimensionless instead is worse, and *virally* so:
+a chain of scale → high-pass → high-pass → integrate → integrate loses every
+downstream check the moment its first output goes dimensionless.
+
+**A unit parameter is an asserted invariant**, which is what makes it worth more
+than a hole in the type. `U → U` asserts that a block preserves its input's
+dimension; `U → U*s` asserts that it integrates; `U → V` asserts nothing between
+them, but still pins both at instantiation and checks everything downstream.
+
+##### Binding
+
+Unit arguments are **positional**, in the order the `units` section declares
+them, and are written **after the definition path**:
+
+```
+node acc : signal.Integrator (m/s^2) { };   // y is (m/s^2 * s) = (m/s)
+```
+
+Supplying the wrong number of arguments is an error (`SE0419`).
+
+*Why not inside the brace list*, which is the more natural first instinct:
+`U = (m/s^2)` is **indistinguishable from a setting binding**. `(m/s^2)` is a
+valid §7 expression — `m` and `s` parse as named constants, `^2` as a power — so
+it has the identical token shape to `mass = (total / 4.0)`. Telling them apart
+requires knowing which names are unit parameters, which is resolution's job, not
+the parser's. Moving the argument list left of the braces dissolves the ambiguity
+completely: only `{`, `;` or `(` may follow a definition path, and there is no
+expression context there, so a `(` in that position can only introduce a unit.
+No lookahead, no backtracking, no trial parse.
+
+##### Substitution
+
+Binding happens at instantiation, and substitution reaches **every declarative
+site the definition owns** — input and output units, state and derivative units,
+and setting units. A parametric definition only ever knows `(U)`, so the
+substituted unit is the only place a port's real unit exists; the wire check
+(§15.3), the root boundary, and the manifest all read the substituted form.
+
+Substitution is per instance. Two instances of one definition bound to different
+units are **not interchangeable**, and wiring one into the other is an ordinary
+`SE0410`:
+
+```
+node a : Integrator (m/s^2);
+node b : Integrator (N);
+a.y --> b.x;              // error: (m/s) where (N) is declared
+```
+
+A setting declared `(U)` converts per instance like any other declarative site: a
+node bound `(m/s^2)` and given `36000 (km/h^2)` receives `2.7778`.
+
+##### Leaf-only
+
+A **composite may not declare unit parameters** (`SE0418`). Flowing a unit
+parameter to a child is a second flow-down mechanism running parallel to §6.9.1's,
+and nothing has yet needed it. This is a restriction, not a design position:
+lifting it is a pure relaxation and no model written against this rule would
+change meaning.
+
+##### Cost
+
+None at run time. Units are erased at the C++ boundary (I3), so a parametric
+definition emits **one class regardless of how many ways it is instantiated** —
+the parameter exists only to be checked, and is gone by stage 6. This is what
+makes unit polymorphism cheap enough to use everywhere in a library, and it is
+why the feature needed no code generator changes at all.
+
+#### 6.2b Configuration
+
+Between construction and `init()`, a compiled model passes through
+**configuration**:
+
+1. Every setting holds the value elaboration computed for it.
+2. Overrides are applied from the §14 settings source, each **pinning** its
+   target.
+3. Derived defaults (§6.2) and flow-down expressions (§6.9.1) are re-evaluated
+   in dependency order, **skipping pinned settings**, and each node's decimation
+   is recomputed from its `rate` (§9.2).
+4. `init()` runs.
+
+Step 3 is what makes overriding `total_mass` recompute `corner_mass` in a
+shipped binary, exactly as it does at elaboration. The §7 expressions are not
+folded away; they are **emitted** (§15.5) and run here.
+
+**Configuration happens once, before the first tick.** There is no two-phase
+init and no way for a parent to reach into a child *during* a run: once `init()`
+has run, settings are constant for the lifetime of the model. Nothing in this
+document requires `init()` to be re-entrant.
+
+Unit checking is **not** deferred to configuration. Every declarative site is
+checked at elaboration (§4.3); an override supplied at configuration is checked
+against the target's recorded dimension (§15.6) by the loader, which is the same
+check applied to a value that arrives later.
+
+**A configuration that fails does not start a run.** Two things can be wrong
+here — a dimension that disagrees with §15.6, and a `rate` that violates §9.2's
+divisor rule — and neither can be raised where it is found, because
+configuration runs before there is a run to fail. The failure is recorded
+against the offending path and `init()` refuses to proceed, leaving the model in
+the terminated state `sim.abort` produces (§10.2) with no node having executed.
 
 ### 6.3 `inputs` and `outputs`
 
@@ -757,8 +949,10 @@ structure {
 #### 6.9.1 Instances
 
 ```
-instance := 'node' identifier ':' qualified_name [ '{' { binding } '}' ] ';'
-binding  := identifier '=' expression ';'
+instance   := 'node' identifier ':' qualified_name
+              [ unit_args ] [ '{' { binding } '}' ] ';'
+unit_args  := '(' unit_expr { ',' unit_expr } ')'        // §6.2a
+binding    := identifier '=' expression ';'
 ```
 
 - The trailing `;` after the closing brace is **required** — it terminates the
@@ -766,16 +960,26 @@ binding  := identifier '=' expression ';'
   malformed binding list unambiguous.
 - Bindings are **declarative** (§7): each right-hand side is a side-effect-free
   expression over literals, the enclosing node's `param.*`, arithmetic, and
-  builtin math, evaluated at elaboration and unit-checked.
+  builtin math, **unit-checked at elaboration and evaluated at configuration**
+  (§6.2b). A binding whose operands are all literal folds at elaboration and is
+  emitted as a constant; one that reads `param.*` is emitted as an expression, so
+  overriding the parent's setting flows down in a compiled binary.
 - **No cross-instance references.** `mass = fl.mass` is illegal (`SE0440`).
   Flow-down goes strictly parent → child.
 - Binding an unknown setting, or binding one twice, is an error (`SE0441`).
 
 Why declarative and not imperative: under an imperative scheme, every group node
 would need hand-written C++ solely to pass a number down, which contradicts §6.1
-— a group node does no work. Declarative flow-down also keeps settings fixed at
-elaboration, needs no two-phase init, and makes required settings statically
-checkable.
+— a group node does no work. Declarative flow-down also makes required settings
+statically checkable, and keeps the flow-down graph *visible to the compiler*,
+which is what lets §6.2b re-evaluate it in dependency order at configuration
+without the user writing an ordering anywhere.
+
+**A composite's settings therefore exist at run time**, unlike its ports and
+wires, which flatten away entirely (§15.2). They are the inputs to the flow-down
+expressions, and overriding one at configuration is the whole point of
+addressing a path like `front.left.mass` (§13.2). They hold no signal and take
+part in no computation beyond §6.2b step 3.
 
 #### 6.9.2 Wires
 
@@ -862,9 +1066,16 @@ algebraic node needs no `rates()`.
 
 ## 7. The elaboration expression language
 
-A small, total, side-effect-free expression language, evaluated once at
-elaboration. It appears in exactly four places: setting defaults, setting
+A small, total, side-effect-free expression language, evaluated **once per run,
+never per tick**. It appears in exactly four places: setting defaults, setting
 bindings at instantiation, state defaults, and sim-file / `.settings` values.
+
+`sec` evaluates it at elaboration to produce the values a model starts with, and
+**emits** it — one C++ expression per §7 expression — so that configuration
+(§6.2b) can re-evaluate it against overrides. Both readings are the same
+language and cannot disagree, because the emitter walks the same tree the
+evaluator does. A compiled model does **not** accept §7 text; §14.1 restricts the
+right-hand side a running binary will parse.
 
 ### 7.1 Grammar
 
@@ -904,16 +1115,16 @@ Every value is a real number with a dimension.
 
 | | |
 |---|---|
-| Constants | `pi`, `e`, `inf` |
+| Constants | `pi`, `e`, `inf`, `sample_rate` (§10.4), `time_step` (§10.4) |
 | Arithmetic | `abs`, `min`, `max`, `sign`, `floor`, `ceil`, `round`, `mod` |
 | Powers | `sqrt`, `cbrt`, `pow`, `exp`, `log`, `log2`, `log10`, `hypot` |
 | Trigonometry | `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2` |
 
-Trigonometric arguments must be dimensionless (radians); `asin`/`acos`/`atan`
-return dimensionless values. `sqrt` halves the exponent vector and requires the
-result to be rational. `min`, `max`, `hypot`, `atan2`, and `mod` require
-compatible arguments. `log*` and `exp` require dimensionless arguments. Anything
-else is `SE0412`.
+`sin`, `cos`, and `tan` take an **angle** (§4.5) and return a dimensionless value;
+`asin`, `acos`, `atan`, and `atan2` return an **angle**. `sqrt` halves the
+exponent vector and requires the result to be rational. `min`, `max`, `hypot`,
+`atan2`, and `mod` require compatible arguments. `log*` and `exp` require
+dimensionless arguments. Anything else is `SE0412`.
 
 Evaluation is in `double`. Division by zero, a domain error, or a non-finite
 result is an elaboration error (`SE0413`) — the language is total by rejection,
@@ -924,8 +1135,15 @@ not by producing NaN.
 No conditionals, no comparisons, no string operations, no user-defined functions,
 no references to run-time signals, and no references to other instances. The
 language stays small so that (a) elaboration is guaranteed to terminate, (b)
-settings can be topologically sorted, and (c) every value is a compile-time
-constant that folds into the generated code.
+settings can be topologically sorted, and (c) every expression emits as **one
+C++ expression over `double` plus `<cmath>`**, with no temporaries, no control
+flow, and no runtime evaluator.
+
+(c) used to read "folds into the generated code," which §6.2b changed. What the
+restriction actually buys is unchanged and is now doing more work: an expression
+language with conditionals or loops could not be emitted as straight-line code,
+so `resolve_settings` would need an interpreter and a dependency graph at run
+time instead of a flat sequence of assignments (§15.5).
 
 A declarative `stop_when:` condition in the sim file is parked precisely because
 it would need run-time signals here, which is a much larger change than it looks
@@ -1095,17 +1313,29 @@ has no statable worst-case execution time.
 ### 9.2 Rates
 
 `rate` is a reserved setting (§6.2) set at instantiation, flowed down through the
-expression language, and constant from elaboration onward. A 100 Hz PID and a
-50 Hz PID are the same definition with different instances.
+expression language, and **constant from configuration onward** (§6.2b). A 100 Hz
+PID and a 50 Hz PID are the same definition with different instances.
 
-The decimation is `base_rate / rate`. A rate that is not an integer divisor of
-the base rate is an elaboration error:
+The decimation is `base_rate / rate`. It is a **counter divisor, not a shape**:
+the emitted schedule is a fixed sequence of direct calls in a fixed order
+(§15.7), and rate supplies only the modulus that guards each one (§9.6 step 1).
+Nothing about which nodes exist, how they are wired, or how they sort depends on
+it — §9.3 requires one topological order to be valid whether or not a node
+samples, so the order cannot be rate-derived.
+
+A rate that is not an integer divisor of the base rate is an error. `sec` checks
+the elaborated default:
 
 ```
 error[SE0450]: rate 60 Hz is not an integer divisor of the 1 kHz base step
   --> Vehicle.se:31:22
    = note: 1000 / 60 = 16.667; nearest legal rates are 62.5 Hz and 58.82 Hz
 ```
+
+A `rate` **override** supplied at configuration is checked by the loader instead,
+and the same violation fails there — deterministically, before the first tick,
+with the offending path named. This is the one check that moves out of `sec` as a
+consequence of §6.2b, and it moves only for values `sec` never sees.
 
 **Rate propagation/inference was dropped**, and that is a real simplification. A
 purely algebraic node — `Gain`, `Sum` — has **no rate at all**. It is
@@ -1272,6 +1502,41 @@ says exactly that.
 **only for nodes whose `init()` completed** — a node that never initialised cannot
 be asked to tear down. RAII on C++ members is the quiet default for nodes that
 write no `final()` at all.
+
+### 10.4 `sample_rate` and `time_step`
+
+Two constants in the §7 expression language, giving the node's **effective** rate:
+
+| | | |
+|---|---|---|
+| `sample_rate` | `(Hz)` | the node's declared `rate` (§6.2), or the base rate if it declares none |
+| `time_step` | `(s)` | `1 / sample_rate` |
+
+```
+node Biquad {
+    settings { wn (rad/s): double;
+               fs (Hz):    double = sample_rate; }   // 1 kHz base step -> 1000
+}
+```
+
+A discrete filter cannot compute its coefficients without its own sample period —
+`K = 2·fs` in a bilinear transform — and §6.2 gives the reserved `rate` setting no
+runtime member, so it cannot be read directly.
+
+- They are **effective, not global.** A node declaring `rate = 200 (Hz)` inside a
+  1 kHz model sees `sample_rate = 200` and `time_step = 0.005`, not the base step.
+  That is the point: coefficients designed at the wrong rate are silently wrong.
+- **Both spellings ship** because coefficient design wants a rate while anything
+  expressed as a period wants the reciprocal. Both derive from one number, so
+  `sample_rate * time_step` is exactly 1 and they cannot drift apart.
+- They are **derived from the node's own `rate`**, not ambient context. This is what
+  keeps §10.2's objection from applying: there is no "which fields are live when"
+  question, because these are a function of one of the node's own settings and are
+  resolved with them at configuration (§6.2b). Overriding `rate` moves `sample_rate`
+  and `time_step` with it, and any coefficient derived from them follows — which is
+  the behaviour a filter needs and the reason they are not folded.
+- The reserved `rate` setting is resolved **before** any other setting of the same
+  node, so a derived setting may read `sample_rate` freely.
 
 ---
 
@@ -1529,7 +1794,14 @@ Resolution order, **last writer wins**:
 1. Definition default (§6.2)
 2. Flow-down expression at instantiation (§6.9.1)
 3. The sim file's `root` block
-4. The external `.settings` source (§14)
+4. The external `.settings` source (§14) presented to `sec`
+5. The external `.settings` source presented to the **compiled model** at
+   configuration (§6.2b)
+
+Sources 1–4 are seen by `sec` and decide the values the generated code starts
+with. Source 5 is the same grammar arriving later, at a carrier `sec` never sees
+(§14). It is **opt-in**: a configuration source binds only the paths it names,
+and every path it does not name keeps whatever 1–4 produced.
 
 Overrides **may reach any depth**, not just the root:
 
@@ -1662,6 +1934,50 @@ Every value is unit-checked against its target (§4.3).
 Comments follow §3.2. There is no `package`, no nesting, and no conditionals:
 this is deliberately the flattest possible surface, because it is the layer that
 gets generated by scripts and sweeps.
+
+### 14.1 The third carrier: a compiled model
+
+The same grammar is accepted by a **compiled model** at configuration (§6.2b),
+which is the carrier `sec` never sees. A model exposes three operations:
+
+| | |
+|---|---|
+| `load_settings` | apply a §14 source; each binding pins its target |
+| `resolve_settings` | re-evaluate derived defaults and flow-down, skipping pinned |
+| `dump_settings` | emit a §14 source describing the model's current settings |
+
+**The runtime accepts a restricted right-hand side.** `sec` evaluates all of §7;
+a compiled model accepts a **number with an optional unit suffix** and nothing
+else — no arithmetic, no builtins, no `param.*`. Two reasons: the full evaluator
+would have to ship inside every generated artifact, and `param.*` at this layer
+would name a value that a later line in the same source may itself rebind,
+requiring an evaluation order that the elaboration-time version gets for free
+from its topological sort. A source containing an expression is rejected with the
+offending path named; it is not silently truncated.
+
+The unit suffix is **checked, not decorative**:
+
+```
+front.left.mass = 340 (kg);   // ok
+front.left.mass = 340;        // ok — canonical unit, per the manifest (§15.6)
+front.left.mass = 340 (m);    // rejected: L where M is declared
+```
+
+This is the check that `sec` applies at every other site (§4.3), applied at the
+one site where the value arrives after units have been erased. It requires the
+generated artifact to carry each setting's dimension and scale — which §15.6
+already records — and it is why erasure at the C++ boundary (I3) does not leave
+a hole here.
+
+**`dump_settings` and `load_settings` round-trip.** Dumping a model, loading the
+result into a freshly constructed one, and dumping again produces identical text.
+The dump emits canonical units and every settable path, so it doubles as a
+golden record of what a binary was configured with — and as the readable
+inventory of what a model exposes, which no external document has to be kept in
+sync with.
+
+Structural settings (§6.2) appear in a dump, marked, and are **rejected on load**:
+they are shape, and shape was fixed when the binary was generated.
 
 ---
 
@@ -1829,6 +2145,38 @@ complete checkpoint of the model.**
   because §6.5 makes them private per-instance storage outside the override
   channel and therefore outside the model's addressable surface.
 
+**Settings are a fourth block, and they are addressable.** Each leaf owns its
+`Param`; each composite owns one too, holding only the settings its flow-down
+expressions read (§6.9.1). `resolve_settings` is a generated method containing a
+flat sequence of assignments in dependency order — one per setting, guarded by
+its pinned flag:
+
+```cpp
+void resolve_settings() {
+    if (!pin_.fl_wheel_inertia) fl.param.wheel_inertia = 0.9;
+    if (!pin_.fl_whl_inertia)   fl_whl.param.inertia   = fl.param.wheel_inertia;
+    if (!pin_.fl_whl_radius)    fl_whl.param.radius    = 0.31;
+}
+```
+
+The order is the topological sort §6.2 already requires; emitting it as straight
+line code means the runtime performs no sorting and holds no dependency graph.
+A binding over literals emits as a constant, exactly as before §6.2b existed; one
+that reads `param.*` emits as the expression, which is what makes a parent's
+override reach its children. **§7 is emitted, not interpreted** — it is total,
+side-effect-free arithmetic over `double` plus `<cmath>`, so each expression
+becomes one C++ expression and I1 is untouched: the generator writes C++, it
+still never parses it.
+
+**`resolve_settings` also derives the schedule's divisors.** A node that declares
+`rate` gets a decimation *member*, and the tick guard reads it — `if (k %
+dec_decim == 0)` where the emitted code would otherwise have carried
+`if (k % 5 == 0)`. This is what makes §9.2's "counter divisor, not a shape" true
+of the generated code and not merely of the language: an override moves the
+guard, and nothing about the call sequence or its order moves with it. It is also
+where the divisor rule is re-checked (§16.4), the elaborated default no longer
+being the value that runs.
+
 ### 15.6 The unit manifest
 
 Because units are erased (I3), the manifest is a **load-bearing generator
@@ -1853,8 +2201,10 @@ xd[0]     whl.omega'            rad/s^2
 [boundary.out]            # root outputs the host may read
           whl.ws.speed          rad/s
 
-[settings]                # elaborated values, post-conversion
+[settings]                # configurable; value is the elaborated default
           whl.inertia           kg*m^2      = 0.9
+          tc.rate               Hz          = 200.0
+          bq.order              -           = 4        structural
 
 [types]
 drivetrain.WheelState.speed     rad/s
@@ -1878,6 +2228,17 @@ static const se_rt::Slot* discrete_map(std::size_t& count);
 
 Both the manifest section and the table are generated from one list, so they
 cannot drift apart.
+
+**`[settings]` is the configuration schema** (§14.1), not a record of what was
+baked. It names every path a §14 source may bind, the unit that source is checked
+against, and the value elaboration produced — which is the value the binary
+starts with, and which `dump_settings` reproduces. A setting marked `structural`
+(§6.2) appears so that the inventory is complete, and is refused on load.
+
+The dimension behind each unit string ships in the generated header alongside the
+slot maps, for the same reason the offsets do: the loader has to compare
+dimensions, and a string comparison — `"m/s^2"` against `"m/s2"` — is not that
+comparison.
 
 ### 15.7 Dispatch
 
@@ -1993,8 +2354,13 @@ Codes are stable. `SE01xx` lexical, `SE02xx` syntactic, `SE03xx` resolution,
 | `SE0412` | 4 | Builtin function argument has the wrong dimension |
 | `SE0413` | 4 | Non-finite or domain-error result at elaboration |
 | `SE0414` | 4 | Unknown unit symbol |
+| `SE0415` | 4 | Non-radian angle unit in a declared unit |
 | `SE0420` | 4 | Required setting not bound |
 | `SE0421` | 4 | Cycle among derived settings |
+| `SE0416` | 3 | Unit parameter shadows an Appendix A unit symbol |
+| `SE0417` | 3 | Duplicate unit parameter |
+| `SE0418` | 3 | A composite may not declare unit parameters |
+| `SE0419` | 4 | Wrong number of unit arguments at an instantiation |
 | `SE0422` | 4 | Reserved setting `rate` has the wrong unit or type |
 | `SE0430` | 4 | Unconnected input |
 | `SE0431` | 4 | A `continuous` state must be `double` |
@@ -2008,6 +2374,15 @@ Codes are stable. `SE01xx` lexical, `SE02xx` syntactic, `SE03xx` resolution,
 | `SE0461` | 4 | Recorded signal path is ambiguous |
 | `SE0510` | 5 | Algebraic loop |
 | `SE0511` | 5 | Node is unreachable from the root |
+
+**Configuration-time failures are not `SE` codes.** A §14 source presented to a
+compiled model (§14.1) is diagnosed by that model's loader, not by `sec`, and
+reports through `load_settings`'s return rather than through this catalogue. The
+three failures are: an unknown path, a right-hand side outside the restricted
+grammar, and a dimension that disagrees with §15.6 — including a `rate` override
+that violates `SE0450`'s divisor rule, which is the only entry above with a
+runtime counterpart. Each names the offending path. `sec`'s own checks are
+unchanged: everything it can see, it still rejects at the stage listed.
 
 ---
 
@@ -2038,7 +2413,7 @@ field_decl      = IDENT unit ":" scalar_type ";"
 
 node_def        = "node" IDENT "{" { node_item } "}" ;
 
-node_item       = settings_sec | inputs_sec | outputs_sec | states_sec
+node_item       = settings_sec | units_sec | inputs_sec | outputs_sec | states_sec
                 | vars_sec | native_sec | declarations_sec | build_sec
                 | structure_sec
                 | lifecycle_method
@@ -2046,6 +2421,9 @@ node_item       = settings_sec | inputs_sec | outputs_sec | states_sec
 
 settings_sec    = "settings" "{" { setting_decl } "}" ;
 setting_decl    = IDENT unit ":" scalar_type [ "=" expression ] ";" ;
+
+units_sec       = "units" "{" { unit_param } "}" ;      (* §6.2a *)
+unit_param      = IDENT ";" ;
 
 inputs_sec      = "inputs"  "{" { port_decl } "}" ;
 outputs_sec     = "outputs" "{" { port_decl } "}" ;
@@ -2073,7 +2451,9 @@ structure_sec   = "structure" "{" { structure_item } "}" ;
 structure_item  = instance_decl | wire_stmt ;
 
 instance_decl   = "node" IDENT ":" qualified_name
+                  [ unit_args ]                          (* §6.2a *)
                   [ "{" { setting_binding } "}" ] ";" ;
+unit_args       = "(" unit_expr { "," unit_expr } ")" ;
 setting_binding = IDENT "=" expression ";" ;
 
 wire_stmt       = endpoint "-->" endpoint { "," endpoint } ";" ;
@@ -2162,8 +2542,12 @@ milli-something) and `Pa` is the pascal (never peta-`a`).
 **Derived:** `rad` `sr` `Hz` `N` `Pa` `J` `W` `C` `V` `F` `ohm` `S` `Wb` `T` `H`
 `lm` `lx` `Bq` `Gy` `Sv` `kat`
 
-**Accepted non-SI:** `g` `deg` `min` `h` `d` `L` `t` `bar` `atm` `rpm` `%`
+**Accepted non-SI:** `g` `deg` `rev` `min` `h` `d` `L` `t` `bar` `atm` `rpm` `%`
 `degC` `degF` `in` `ft` `mi` `lb` `hp` `psi`
+
+**Angle symbols** — `rad` and `sr` carry the angle dimension (§4.5); `deg`, `rev`,
+and `rpm` carry it with a non-unity scale and are therefore accepted only as
+literal suffixes and display units, never as a declared unit (`SE0415`).
 
 **Prefixes:** `y` `z` `a` `f` `p` `n` `u` `m` `c` `d` `da` `h` `k` `M` `G` `T`
 `P` `E` `Z` `Y`
@@ -2180,8 +2564,8 @@ An unknown symbol is `SE0414`, and the diagnostic must suggest near matches —
 ```
 build       continuous  declarations  discrete  final   init      inputs
 native      node        on_step       output    outputs package   rates
-self        settings    sim           states    structure  type   use
-vars
+self        settings    sim           states    structure  type   units
+use         vars
 ```
 
 `param`, `in`, `out`, `state`, `der`, `next`, `var`, `log`, and `sim` are
@@ -2197,9 +2581,11 @@ Recorded so that their absence is visibly deliberate.
 
 **Design questions genuinely open:**
 
-1. **`(deg)` versus `(rad)`** (§4.5). Dimensionally identical, so dimensional
-   analysis cannot catch the mix-up, and it is a common expensive bug. Treating
-   angle as a distinct dimension would catch it but is unphysical.
+1. **Display units for recording** (§13.5) — a gap *created* by resolving the angle
+   question. §4.5 makes radians the only declarable angle unit, so a recorded CSV
+   can no longer report degrees or rpm; recording emits the declared unit. A
+   display-unit annotation on recorded signals is needed before any model wants
+   degrees in its output.
 2. **Read-only `native` access in `output()`** (§6.7). A preloaded lookup table or
    interpolation map is genuinely pure and genuinely wants to be read there, but
    the `init`/`on_step`/`final` confinement excludes it. A real need with no

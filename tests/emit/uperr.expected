@@ -1,0 +1,32 @@
+﻿error[SE0419]: `Section` takes 1 unit argument, given 0
+  --> tests/emit/lib/uperr/UPErr.se:12:14
+   |
+12 |         node few : Section             {};
+   |              ^^^ wrong number of unit arguments
+   = note: `Section` declares 1 unit parameter: U
+   = help: unit arguments are positional, after the definition — `node x : Section (m/s^2) { … };`
+
+error[SE0410]: incompatible units across a wire
+  --> tests/emit/lib/uperr/UPErr.se:18:19
+   |
+18 |         acc.y --> self.y;
+   |                   ^^^^^^ `(m/s)` -> `(m/s^2)`
+   = note: source is m/s
+   = note: destination is m/s^2
+
+error[SE0410]: incompatible units across a wire
+  --> tests/emit/lib/uperr/UPErr.se:23:19
+   |
+23 |         src.y --> bad.x;
+   |                   ^^^^^ `(m/s^2)` -> `(rad/s)`
+   = note: source is m/s^2
+   = note: destination is rad/s
+
+error[SE0430]: input `few.x` is not connected
+  --> tests/emit/lib/uperr/UPErr.se:34:15
+   |
+34 |     inputs  { x (U): double; }
+   |               ^ declared here
+   = note: an unconnected input is an error: there is no implicit zero (§6.3)
+
+4 errors emitted

@@ -7,7 +7,10 @@
 #include <cmath>
 #include <cstdio>
 #include <functional>
+#include <iomanip>
+#include <limits>
 #include <set>
+#include <sstream>
 
 #include "dump.hpp"
 #include "parser.hpp"
@@ -78,6 +81,97 @@ Elaborator::Elaborator(Diagnostics& diag, Resolver& resolver)
 //  The §7 expression language
 // ═════════════════════════════════════════════════════════════════════════════
 
+namespace {
+
+// §15.5 — a double as a C++ literal that reads back bit-identical. The settings
+// program is generated source, so a lossy rendering here would be a silent
+// numerical difference between what `sec` computed and what the binary runs.
+std::string cpp_number(double v) {
+    if (std::isinf(v)) return v < 0 ? "-HUGE_VAL" : "HUGE_VAL";
+    std::ostringstream os;
+    os << std::setprecision(std::numeric_limits<double>::max_digits10) << v;
+    std::string s = os.str();
+    if (s.find_first_of(".eE") == std::string::npos) s += ".0";
+    return s;
+}
+
+ExprCode ec_lit(std::string s) {
+    ExprCode c;
+    ExprTok t;
+    t.kind = ExprTok::Kind::Text;
+    t.text = std::move(s);
+    c.push_back(std::move(t));
+    return c;
+}
+
+ExprCode ec_num(double v) { return ec_lit(cpp_number(v)); }
+
+ExprCode ec_param(std::string owner, std::string name) {
+    ExprCode c;
+    ExprTok t;
+    t.kind = ExprTok::Kind::Param;
+    t.owner = std::move(owner);
+    t.text = std::move(name);
+    c.push_back(std::move(t));
+    return c;
+}
+
+// Whether the code can be used as an operand without parentheses. A single
+// reference or a single literal can; anything already carrying an operator
+// cannot, and rather than track precedence we parenthesise. The generated
+// program is read by people, but it is not hand-maintained, so a few redundant
+// parentheses cost less than a precedence bug would.
+bool ec_atomic(const ExprCode& c) {
+    if (c.size() != 1) return false;
+    if (c[0].kind == ExprTok::Kind::Param) return true;
+    const std::string& s = c[0].text;
+    return !s.empty() && s.find_first_of("+-*/ ", 1) == std::string::npos;
+}
+
+ExprCode ec_atom(ExprCode c) {
+    if (ec_atomic(c)) return c;
+    ExprCode r = ec_lit("(");
+    r.insert(r.end(), c.begin(), c.end());
+    r.push_back(ec_lit(")")[0]);
+    return r;
+}
+
+// a <op> b, each operand parenthesised only if it needs to be.
+ExprCode ec_bin(const ExprCode& a, const char* op, const ExprCode& b) {
+    ExprCode r = ec_atom(a);
+    r.push_back(ec_lit(std::string(" ") + op + " ")[0]);
+    ExprCode rb = ec_atom(b);
+    r.insert(r.end(), rb.begin(), rb.end());
+    return r;
+}
+
+// fn(a, b) — arguments are already delimited, so they need no parentheses.
+ExprCode ec_call(const char* fn, const std::vector<ExprCode>& args) {
+    ExprCode r = ec_lit(std::string(fn) + "(");
+    for (std::size_t i = 0; i < args.size(); ++i) {
+        if (i) r.push_back(ec_lit(", ")[0]);
+        r.insert(r.end(), args[i].begin(), args[i].end());
+    }
+    r.push_back(ec_lit(")")[0]);
+    return r;
+}
+
+// The affine conversion `convert()` performs, applied to an expression instead
+// of to a number (§4.2 units carry a scale and an offset). Emitted only when it
+// would change the value, so an in-unit expression stays untouched — which is
+// why the common case generates no conversion arithmetic at all.
+ExprCode ec_convert(const ExprCode& c, const Unit& from, const Unit& to) {
+    if (from.scale == to.scale && from.offset == to.offset) return c;
+    ExprCode r = c;
+    if (from.scale != 1.0) r = ec_bin(r, "*", ec_num(from.scale));
+    if (from.offset != 0.0) r = ec_bin(r, "+", ec_num(from.offset));
+    if (to.offset != 0.0) r = ec_bin(r, "-", ec_num(to.offset));
+    if (to.scale != 1.0) r = ec_bin(r, "/", ec_num(to.scale));
+    return r;
+}
+
+}  // namespace
+
 bool Elaborator::eval(const ast::Expr* e, const Source& src, const Env& env, Value& out) {
     if (!e) return false;
     using K = ast::Expr::Kind;
@@ -86,6 +180,8 @@ bool Elaborator::eval(const ast::Expr* e, const Source& src, const Env& env, Val
         case K::Number: {
             out.v = e->number;
             out.bare = (e->unit == nullptr);
+            out.code = ec_num(e->number);
+            out.constant = true;
             UnitEval ue(src, diag_);
             return ue.eval(e->unit.get(), out.unit);
         }
@@ -111,6 +207,9 @@ bool Elaborator::eval(const ast::Expr* e, const Source& src, const Env& env, Val
                             std::move(att));
                 return false;
             }
+            // `cpp` and `constant` ride along from the environment: the binding
+            // that put this name in scope already knows whether it is a literal
+            // or an lvalue a configuration override can move (§6.2b).
             out = it->second;
             out.bare = false;
             return true;
@@ -119,14 +218,51 @@ bool Elaborator::eval(const ast::Expr* e, const Source& src, const Env& env, Val
         case K::Name: {
             if (e->text == "pi") {
                 out = Value{3.14159265358979323846, unit_one(), true};
+                out.code = ec_num(out.v);
                 return true;
             }
             if (e->text == "e") {
                 out = Value{2.71828182845904523536, unit_one(), true};
+                out.code = ec_num(out.v);
                 return true;
             }
             if (e->text == "inf") {
                 out = Value{HUGE_VAL, unit_one(), true};
+                out.code = ec_lit("HUGE_VAL");
+                return true;
+            }
+            // §10.4 — the node's own effective sample rate, resolved at
+            // elaboration: its declared `rate` if it has one, the base step
+            // otherwise. NOT runtime ambient context (§10.2) — these are
+            // compile-time constants, which is why they carry none of the
+            // "which fields are live when" baggage that closed `sim.*`.
+            //
+            // Both spellings ship because coefficient design wants a rate
+            // (`K = 2 * sample_rate`) while anything expressed as a period
+            // wants the reciprocal; deriving both from one number means they
+            // cannot disagree.
+            if (e->text == "sample_rate" || e->text == "time_step") {
+                if (effective_rate_ <= 0.0) {
+                    diag_.error("SE0413", src, e->loc,
+                                "`" + e->text + "` has no value here",
+                                "no sample rate in scope",
+                                {note("it resolves to the node's `rate`, or the base "
+                                      "step when the node declares none — neither is "
+                                      "known outside a node's settings (§10.4)")});
+                    return false;
+                }
+                Unit u;
+                lookup_unit_symbol(e->text == "sample_rate" ? "Hz" : "s", u);
+                out = Value{e->text == "sample_rate" ? effective_rate_
+                                                     : 1.0 / effective_rate_,
+                            u, false};
+                // Both spellings come off one number, so they cannot disagree
+                // after an override any more than they can before one.
+                out.code = e->text == "sample_rate"
+                               ? effective_rate_code_
+                               : ec_bin(ec_num(1.0), "/", effective_rate_code_);
+                out.constant = effective_rate_code_.size() == 1 &&
+                               effective_rate_code_[0].kind == ExprTok::Kind::Text;
                 return true;
             }
             // The grammar has no other way to spell a bare name here, so this
@@ -143,7 +279,13 @@ bool Elaborator::eval(const ast::Expr* e, const Source& src, const Env& env, Val
 
         case K::Unary: {
             if (!eval(e->lhs.get(), src, env, out)) return false;
-            if (e->op == '-') out.v = -out.v;
+            if (e->op == '-') {
+                out.v = -out.v;
+                ExprCode neg = ec_lit("-");
+                ExprCode a = ec_atom(out.code);
+                neg.insert(neg.end(), a.begin(), a.end());
+                out.code = std::move(neg);
+            }
             return true;
         }
 
@@ -159,6 +301,21 @@ bool Elaborator::eval(const ast::Expr* e, const Source& src, const Env& env, Val
                                 "`(" + b.unit.str() + ")`");
                     return false;
                 }
+                // §6.2b — an exponent that a configuration override could move
+                // would move the DIMENSION of the result with it, and dimensions
+                // are shape. §7.2 already asks for a literal here; this is where
+                // that requirement becomes load-bearing rather than stylistic.
+                if (!b.constant) {
+                    diag_.error("SE0412", src, e->rhs->loc,
+                                "the exponent of `^` must not depend on a setting",
+                                "this can change after the binary is built",
+                                {note("`^` multiplies the exponent vector, so an "
+                                      "overridable exponent would change the result's "
+                                      "dimension at configuration (§6.2b)"),
+                                 help("settings are values, not shape (§6.2) — write the "
+                                      "exponent as a literal")});
+                    return false;
+                }
                 const double exp = to_si(b.v, b.unit);
                 Rat r;
                 if (as_rational(exp, r)) {
@@ -166,9 +323,12 @@ bool Elaborator::eval(const ast::Expr* e, const Source& src, const Env& env, Val
                     // raising it leaves the number alone and raises the unit.
                     out.unit = unit_pow(a.unit, r);
                     out.v = std::pow(a.v, exp);
+                    out.code = ec_call("std::pow", {a.code, ec_num(exp)});
                 } else if (a.unit.dimensionless()) {
                     out.unit = unit_one();
                     out.v = std::pow(to_si(a.v, a.unit), exp);
+                    out.code = ec_call(
+                        "std::pow", {ec_convert(a.code, a.unit, unit_one()), ec_num(exp)});
                 } else {
                     diag_.error("SE0412", src, e->rhs->loc,
                                 "a dimensioned base needs an integer or rational exponent",
@@ -178,6 +338,7 @@ bool Elaborator::eval(const ast::Expr* e, const Source& src, const Env& env, Val
                     return false;
                 }
                 out.bare = a.bare && b.bare;
+                out.constant = a.constant;   // b is constant, checked above
                 break;
             }
 
@@ -193,6 +354,8 @@ bool Elaborator::eval(const ast::Expr* e, const Source& src, const Env& env, Val
                 out.unit = (e->op == '*') ? unit_mul(a.unit, b.unit)
                                           : unit_div(a.unit, b.unit);
                 out.bare = a.bare && b.bare;
+                out.code = ec_bin(a.code, e->op == '*' ? "*" : "/", b.code);
+                out.constant = a.constant && b.constant;
                 break;
             }
 
@@ -213,6 +376,12 @@ bool Elaborator::eval(const ast::Expr* e, const Source& src, const Env& env, Val
             out.v = (e->op == '+') ? a.v + rhs : a.v - rhs;
             out.unit = a.unit;
             out.bare = a.bare && b.bare;
+            // The conversion the line above performs on the number, performed on
+            // the expression — the two operands may be in different units and
+            // only the left one's is kept.
+            out.code = ec_bin(a.code, e->op == '+' ? "+" : "-",
+                              ec_convert(b.code, b.unit, a.unit));
+            out.constant = a.constant && b.constant;
             break;
         }
 
@@ -253,8 +422,21 @@ bool Elaborator::eval_call(const ast::Expr* e, const Source& src, const Env& env
         diag_.error("SE0412", src, e->args[i]->loc,
                     "`" + f + "` requires a dimensionless argument",
                     "`(" + a[i].unit.str() + ")`",
-                    {note("trigonometric arguments are radians; `log*` and `exp` are "
-                          "dimensionless in and out (§7.3)")});
+                    {note("`asin`/`acos`/`atan` take a ratio and RETURN an angle; "
+                          "`log*` and `exp` are dimensionless in and out (§7.3)")});
+        return false;
+    };
+    // §4.5 made angle a base dimension, so `sin` now takes an angle rather than
+    // a bare ratio. A bare value is still accepted and read as radians — `pi/4`
+    // is the canonical argument and carries no unit of its own.
+    auto want_angle = [&](std::size_t i) {
+        if (a[i].bare || compatible(a[i].unit, unit_rad())) return true;
+        diag_.error("SE0412", src, e->args[i]->loc,
+                    "`" + f + "` requires an angle",
+                    "`(" + a[i].unit.str() + ")`",
+                    {note("the argument is " + a[i].unit.dim_str()),
+                     help("angle is a base dimension (§4.5) — write `(rad)`, or a "
+                          "`(deg)` literal, which converts here")});
         return false;
     };
     // Two arguments that must agree; the right is converted to the left's unit.
@@ -270,13 +452,26 @@ bool Elaborator::eval_call(const ast::Expr* e, const Source& src, const Env& env
             return false;
         }
         a[1].v = convert(a[1].v, a[1].unit, a[0].unit);
+        a[1].code = ec_convert(a[1].code, a[1].unit, a[0].unit);
         a[1].unit = a[0].unit;
         return true;
     };
 
     out.bare = true;
-    for (const Value& v : a) out.bare = out.bare && v.bare;
+    out.constant = true;
+    for (const Value& v : a) {
+        out.bare = out.bare && v.bare;
+        out.constant = out.constant && v.constant;
+    }
     out.unit = unit_one();
+
+    // An argument that a builtin consumes in SI — `sin` wants radians whatever
+    // the caller wrote, `log` wants a pure ratio. Mirrors the `to_si` the value
+    // path applies a few lines below each use.
+    auto si = [&](std::size_t i) { return ec_convert(a[i].code, a[i].unit, unit_one()); };
+    auto code1 = [&](const char* fn) { out.code = ec_call(fn, {a[0].code}); };
+    auto code1_si = [&](const char* fn) { out.code = ec_call(fn, {si(0)}); };
+    auto code2 = [&](const char* fn) { out.code = ec_call(fn, {a[0].code, a[1].code}); };
 
     if (f == "abs" || f == "floor" || f == "ceil" || f == "round") {
         if (!arity(1)) return false;
@@ -285,12 +480,22 @@ bool Elaborator::eval_call(const ast::Expr* e, const Source& src, const Env& env
                 : f == "floor" ? std::floor(a[0].v)
                 : f == "ceil"  ? std::ceil(a[0].v)
                                : std::floor(a[0].v + 0.5);
+        if (f == "abs") code1("std::fabs");
+        else if (f == "floor") code1("std::floor");
+        else if (f == "ceil") code1("std::ceil");
+        else out.code = ec_call("std::floor", {ec_bin(a[0].code, "+", ec_num(0.5))});
         return true;
     }
     if (f == "sign") {
         if (!arity(1)) return false;
         out.v = a[0].v > 0 ? 1.0 : (a[0].v < 0 ? -1.0 : 0.0);
         out.bare = true;
+        // No `<cmath>` equivalent, so it emits as the conditional it is. This is
+        // generated code, not §7 source: §7.4's ban on conditionals constrains
+        // what a user may write, not what the emitter may produce for it.
+        out.code = ec_atom(ec_bin(ec_bin(a[0].code, ">", ec_num(0.0)), "? 1.0 :",
+                                  ec_atom(ec_bin(ec_bin(a[0].code, "<", ec_num(0.0)),
+                                                 "? -1.0 :", ec_num(0.0)))));
         return true;
     }
     if (f == "min" || f == "max" || f == "mod" || f == "hypot") {
@@ -304,12 +509,19 @@ bool Elaborator::eval_call(const ast::Expr* e, const Source& src, const Env& env
             diag_.error("SE0413", src, e->loc, "`mod` by zero at elaboration", "");
             return false;
         }
+        code2(f == "min"     ? "std::min"
+              : f == "max"   ? "std::max"
+              : f == "hypot" ? "std::hypot"
+                             : "std::fmod");
         return true;
     }
     if (f == "atan2") {
         if (!arity(2) || !align()) return false;
+        // The arguments' shared unit cancels in the ratio; the result is an angle.
         out.v = std::atan2(a[0].v, a[1].v);
-        out.bare = true;
+        out.unit = unit_rad();
+        out.bare = false;
+        code2("std::atan2");
         return true;
     }
     if (f == "sqrt" || f == "cbrt") {
@@ -321,17 +533,31 @@ bool Elaborator::eval_call(const ast::Expr* e, const Source& src, const Env& env
         const Rat r = (f == "sqrt") ? rat(1, 2) : rat(1, 3);
         out.unit = unit_pow(a[0].unit, r);
         out.v = (f == "sqrt") ? std::sqrt(a[0].v) : std::cbrt(a[0].v);
+        code1(f == "sqrt" ? "std::sqrt" : "std::cbrt");
         return true;
     }
     if (f == "pow") {
         if (!arity(2) || !want_dimensionless(1)) return false;
+        // Same rule as `^`: the exponent decides the result's dimension, and a
+        // dimension is shape, so it may not move at configuration (§6.2b).
+        if (!a[1].constant) {
+            diag_.error("SE0412", src, e->args[1]->loc,
+                        "the exponent of `pow` must not depend on a setting",
+                        "this can change after the binary is built",
+                        {note("it multiplies the exponent vector, so an overridable "
+                              "exponent would change the result's dimension (§6.2b)"),
+                         help("settings are values, not shape (§6.2)")});
+            return false;
+        }
         const double exp = to_si(a[1].v, a[1].unit);
         Rat r;
         if (as_rational(exp, r)) {
             out.unit = unit_pow(a[0].unit, r);
             out.v = std::pow(a[0].v, exp);
+            out.code = ec_call("std::pow", {a[0].code, ec_num(exp)});
         } else if (a[0].unit.dimensionless()) {
             out.v = std::pow(to_si(a[0].v, a[0].unit), exp);
+            out.code = ec_call("std::pow", {si(0), ec_num(exp)});
         } else {
             diag_.error("SE0412", src, e->args[1]->loc,
                         "a dimensioned base needs an integer or rational exponent",
@@ -352,23 +578,34 @@ bool Elaborator::eval_call(const ast::Expr* e, const Source& src, const Env& env
                 : f == "log2" ? std::log2(x)
                               : std::log10(x);
         out.bare = true;
+        code1_si(f == "exp" ? "std::exp" : f == "log" ? "std::log"
+                          : f == "log2" ? "std::log2"
+                                        : "std::log10");
         return true;
     }
-    if (f == "sin" || f == "cos" || f == "tan" || f == "asin" || f == "acos" ||
-        f == "atan") {
+    // Angle in, ratio out.
+    if (f == "sin" || f == "cos" || f == "tan") {
+        if (!arity(1) || !want_angle(0)) return false;
+        const double x = to_si(a[0].v, a[0].unit);
+        out.v = f == "sin" ? std::sin(x) : f == "cos" ? std::cos(x) : std::tan(x);
+        out.bare = true;
+        code1_si(f == "sin" ? "std::sin" : f == "cos" ? "std::cos" : "std::tan");
+        return true;
+    }
+    // Ratio in, angle out. `to_si` is a no-op on a dimensionless argument, and
+    // `std::asin` already returns radians, so the value needs no conversion —
+    // only the unit is attached.
+    if (f == "asin" || f == "acos" || f == "atan") {
         if (!arity(1) || !want_dimensionless(0)) return false;
         const double x = to_si(a[0].v, a[0].unit);
         if ((f == "asin" || f == "acos") && (x < -1.0 || x > 1.0)) {
             diag_.error("SE0413", src, e->loc, "`" + f + "` argument outside [-1, 1]", "");
             return false;
         }
-        out.v = f == "sin"    ? std::sin(x)
-                : f == "cos"  ? std::cos(x)
-                : f == "tan"  ? std::tan(x)
-                : f == "asin" ? std::asin(x)
-                : f == "acos" ? std::acos(x)
-                              : std::atan(x);
-        out.bare = true;
+        out.v = f == "asin" ? std::asin(x) : f == "acos" ? std::acos(x) : std::atan(x);
+        out.unit = unit_rad();
+        out.bare = false;
+        code1_si(f == "asin" ? "std::asin" : f == "acos" ? "std::acos" : "std::atan");
         return true;
     }
 
@@ -380,15 +617,17 @@ bool Elaborator::eval_call(const ast::Expr* e, const Source& src, const Env& env
 }
 
 bool Elaborator::coerce(const Value& v, const Type& target, const Source& src, Loc loc,
-                        const char* what, double& out) {
+                        const char* what, double& out, ExprCode* out_code) {
     if (target.is_record) {
         diag_.error("SE0410", src, loc,
                     std::string(what) + " has a record type and cannot take a value", "");
         return false;
     }
     if (v.bare) {
-        // §7.2 — a bare literal takes the unit of the site it initialises.
+        // §7.2 — a bare literal takes the unit of the site it initialises, so
+        // there is nothing to convert on either the number or the expression.
         out = v.v;
+        if (out_code) *out_code = v.code;
     } else {
         if (!compatible(v.unit, target.unit)) {
             diag_.error("SE0410", src, loc,
@@ -400,6 +639,7 @@ bool Elaborator::coerce(const Value& v, const Type& target, const Source& src, L
             return false;
         }
         out = convert(v.v, v.unit, target.unit);
+        if (out_code) *out_code = ec_convert(v.code, v.unit, target.unit);
     }
     if (target.scalar == "int") {
         const double r = std::floor(out + 0.5);
@@ -413,6 +653,12 @@ bool Elaborator::coerce(const Value& v, const Type& target, const Source& src, L
             return false;
         }
         out = r;
+        // The check above covers the elaborated value; an override reaching an
+        // `int` target at configuration has not been through it, so the emitted
+        // form rounds rather than letting C++ truncate toward zero. A constant
+        // expression is replaced by its literal downstream and needs no rounding.
+        if (out_code && !v.constant)
+            *out_code = ec_call("std::floor", {ec_bin(*out_code, "+", ec_num(0.5))});
     }
     return true;
 }
@@ -566,6 +812,8 @@ bool Elaborator::read_sim_entries(const ast::SimFile& sim, const Source& src, Mo
                          help("`window` must be at least `sync`")});
         }
     }
+    // §10.4 — the base rate every node's `sample_rate` falls back to.
+    base_rate_ = m.step > 0.0 ? 1.0 / m.step : 0.0;
     return have_root && have_step && have_duration;
 }
 
@@ -586,26 +834,45 @@ OverrideEntry* Elaborator::find_override(const std::string& path) {
 }
 
 void Elaborator::apply_overrides(const NodeInfo* def, const std::string& path,
-                                 std::map<std::string, double>& pinned) {
+                                 std::map<std::string, Pin>& pinned) {
     for (const auto& s : def->settings) {
         OverrideEntry* o = find_override(sub(path, s.name));
         if (!o) continue;
         Value v;
         if (!eval(o->value, *o->src, Env{}, v)) continue;
         double d = 0.0;
-        if (coerce(v, s.type, *o->src, o->loc, ("setting `" + o->path + "`").c_str(), d))
-            pinned[s.name] = d;
+        if (coerce(v, s.type, *o->src, o->loc, ("setting `" + o->path + "`").c_str(), d)) {
+            // §13.3 — an override detaches from the flow-down, so it emits as a
+            // literal and the binding that would otherwise drive this setting is
+            // simply not run. Evaluated in an empty environment, so there is
+            // nothing it could depend on anyway.
+            pinned[s.name] = Pin{d, ec_num(d), true};
+        }
     }
 }
 
 bool Elaborator::settings_of(const NodeInfo* def,
-                             const std::map<std::string, double>& pinned,
+                             const std::map<std::string, Pin>& pinned,
                              const Source& src, Loc loc, std::vector<SettingValue>& out) {
     const Source& def_src = *def->file->src;
     Env env;
+    // What each setting will be assigned in the configuration program: a pinned
+    // one keeps the expression that pinned it, a derived one gets its coerced
+    // default below. Collected here rather than in `out` because the topological
+    // walk decides the order and this map preserves it by name.
+    std::map<std::string, Pin> resolved;
+
+    // Every setting in scope reads as its own `param` member, whatever produced
+    // its value: at configuration the member is what a sibling expression sees,
+    // so an override of this setting reaches everything derived from it.
     for (const auto& s : def->settings) {
         auto it = pinned.find(s.name);
-        if (it != pinned.end()) env[s.name] = Value{it->second, s.type.unit, false};
+        if (it == pinned.end()) continue;
+        resolved[s.name] = it->second;
+        Value v{it->second.value, s.type.unit, false};
+        v.code = ec_param(settings_path_, s.name);
+        v.constant = false;
+        env[s.name] = std::move(v);
     }
 
     // Topological evaluation of the unpinned defaults (§6.2). The graph is
@@ -664,12 +931,23 @@ bool Elaborator::settings_of(const NodeInfo* def,
             }
             Value v;
             if (ok && eval(s.default_value, def_src, env, v)) {
+                // §6.2a — a setting may be declared in a unit parameter
+                // (`limit (U)`), so coerce against this instance's substituted
+                // unit rather than the definition's `(U)`.
+                Type target = s.type;
+                target.unit = bound(s.type.unit);
                 double d = 0.0;
-                if (coerce(v, s.type, def_src, s.default_value->loc,
-                           ("setting `" + s.name + "`").c_str(), d))
-                    env[s.name] = Value{d, s.type.unit, false};
-                else
+                ExprCode code;
+                if (coerce(v, target, def_src, s.default_value->loc,
+                           ("setting `" + s.name + "`").c_str(), d, &code)) {
+                    resolved[s.name] = Pin{d, std::move(code), v.constant};
+                    Value bound_v{d, target.unit, false};
+                    bound_v.code = ec_param(settings_path_, s.name);
+                    bound_v.constant = false;
+                    env[s.name] = std::move(bound_v);
+                } else {
                     ok = false;
+                }
             } else {
                 ok = false;
             }
@@ -680,23 +958,121 @@ bool Elaborator::settings_of(const NodeInfo* def,
     };
 
     bool ok = true;
+
+    // §10.4 — `sample_rate` and `time_step` are this node's EFFECTIVE values,
+    // so the reserved `rate` setting has to be resolved before any other
+    // setting can read them. Seeded with the base rate first, so that a `rate`
+    // default which itself mentions `sample_rate` reads the base step rather
+    // than an undefined value.
+    effective_rate_ = base_rate_;
+    effective_rate_code_ = ec_num(base_rate_);
+    for (const auto& s : def->settings) {
+        if (s.name != "rate") continue;
+        ok = visit(s) && ok;
+        auto it = env.find("rate");
+        if (it != env.end() && it->second.v > 0.0) effective_rate_ = it->second.v;
+        // Only now, so that a `rate` default which itself mentions `sample_rate`
+        // reads the base step rather than referring to itself.
+        effective_rate_code_ = ec_param(settings_path_, "rate");
+        break;
+    }
+
     for (const auto& s : def->settings) ok = visit(s) && ok;
 
+    slots_.clear();
     for (const auto& s : def->settings) {
         SettingValue sv;
         sv.name = s.name;
-        sv.unit = s.type.unit;
+        // §15.6 promises the manifest reader that `value` is already in `unit`,
+        // so this has to be the substituted unit, not the definition's `(U)`.
+        sv.unit = bound(s.type.unit);
         sv.scalar = s.type.scalar;
         auto it = env.find(s.name);
         sv.value = it == env.end() ? 0.0 : it->second.v;
+
+        // §6.2b — the same setting as one assignment in the configuration
+        // program. `def->settings` is already in the order the topological walk
+        // above settled, so appending here preserves it.
+        SettingSlot slot;
+        slot.path = sub(settings_path_, s.name);
+        slot.owner = settings_path_;
+        slot.name = s.name;
+        slot.unit = sv.unit;
+        slot.scalar = sv.scalar;
+        slot.value = sv.value;
+        slot.rate = (s.name == "rate");
+        auto r = resolved.find(s.name);
+        if (r != resolved.end()) {
+            slot.expr = r->second.code;
+            slot.constant = r->second.constant;
+        } else {
+            // A required setting nobody bound: already reported as SE0420, and
+            // the program still needs a well-formed entry to stay emittable.
+            slot.expr = ec_num(sv.value);
+        }
+        slots_.push_back(std::move(slot));
+
         out.push_back(std::move(sv));
     }
     return ok;
 }
 
+std::vector<Unit> Elaborator::unit_args_of(const NodeInfo* child, const ast::Instance& inst,
+                                           const Source& src) {
+    const std::size_t want = child->unit_params.size();
+    const std::size_t got = inst.unit_args.size();
+    std::vector<Unit> out;
+
+    if (want != got) {
+        std::string names;
+        for (const std::string& p : child->unit_params) {
+            if (!names.empty()) names += ", ";
+            names += p;
+        }
+        std::vector<Attachment> att;
+        if (want == 0)
+            att.push_back(note("`" + child->def->name + "` declares no `units` section"));
+        else
+            att.push_back(note("`" + child->def->name + "` declares " + std::to_string(want) +
+                               " unit parameter" + (want == 1 ? "" : "s") + ": " + names));
+        att.push_back(help("unit arguments are positional, after the definition — "
+                           "`node x : " + child->def->name + " (m/s^2) { … };`"));
+        diag_.error("SE0419", src, got ? inst.unit_args_loc : inst.loc,
+                    "`" + child->def->name + "` takes " + std::to_string(want) +
+                        " unit argument" + (want == 1 ? "" : "s") + ", given " +
+                        std::to_string(got),
+                    "wrong number of unit arguments", std::move(att));
+        failed_ = true;
+        return out;
+    }
+
+    for (const ast::UnitPtr& u : inst.unit_args) {
+        // Evaluated with NO parameter scope: a unit argument is a concrete
+        // unit, so `(U)` here would have to name a real Appendix A symbol.
+        UnitEval ue(src, diag_);
+        Unit bound_unit;
+        if (!ue.eval(u.get(), bound_unit)) {
+            failed_ = true;
+            bound_unit = unit_one();
+        } else if (bound_unit.nonradian_angle) {
+            // Same reason as `SE0415`: this unit becomes a declared unit of
+            // every port that mentions the parameter.
+            diag_.error("SE0415", src, inst.unit_args_loc,
+                        "`(" + bound_unit.str() + ")` may not be a unit argument",
+                        "declare this in radians",
+                        {note("a unit argument becomes the declared unit of every port "
+                              "that names the parameter (§4.5, §6.2a)")});
+            failed_ = true;
+        }
+        out.push_back(std::move(bound_unit));
+    }
+    return out;
+}
+
 void Elaborator::instantiate(const NodeInfo* def, const std::string& path,
-                             std::map<std::string, double> pinned, const Source& src,
-                             Loc loc, int depth, Model& m) {
+                             std::map<std::string, Pin> pinned, const Source& src,
+                             Loc loc, int depth, Model& m,
+                             std::vector<Unit> unit_binding) {
     if (depth > 64) {
         diag_.error("SE0312", src, loc,
                     "recursive instantiation of `" + def->fq + "`",
@@ -709,24 +1085,63 @@ void Elaborator::instantiate(const NodeInfo* def, const std::string& path,
     }
     instances_[path] = def;
 
+    // Swapped in for the duration of this node, and restored on the way out so
+    // the recursion into children does not inherit the parent's binding.
+    std::vector<Unit> saved_binding;
+    saved_binding.swap(unit_binding_);
+    unit_binding_ = std::move(unit_binding);
+    struct RestoreBinding {
+        std::vector<Unit>& live;
+        std::vector<Unit>& saved;
+        ~RestoreBinding() { live.swap(saved); }
+    } restore_binding{unit_binding_, saved_binding};
+
     apply_overrides(def, path, pinned);
     std::vector<SettingValue> settings;
+    settings_path_ = path;
     if (!settings_of(def, pinned, src, loc, settings)) failed_ = true;
+
+    // §6.2b — this node's slice of the configuration program, appended in walk
+    // order. Parents are instantiated before their children and a node's own
+    // settings are topologically sorted within it, so appending as we go yields
+    // a globally valid order with no second sort.
+    for (SettingSlot& slot : slots_) m.settings.push_back(std::move(slot));
+    slots_.clear();
 
     for (const SettingValue& s : settings) known_setting_paths_.push_back(sub(path, s.name));
 
+    // A child binding is evaluated in the parent's scope, so `param.*` here
+    // reads the PARENT's members — the second of the two owners an ExprTok can
+    // name, and what makes an override of a composite setting flow downward.
     Env env;
-    for (const SettingValue& s : settings) env[s.name] = Value{s.value, s.unit, false};
+    for (const SettingValue& s : settings) {
+        Value v{s.value, s.unit, false};
+        v.code = ec_param(path, s.name);
+        v.constant = false;
+        env[s.name] = std::move(v);
+    }
 
     if (def->composite) {
-        collect_wires(def, path, m);
         const Source& def_src = *def->file->src;
+
+        // §6.2a — evaluated once per composite and shared with `collect_wires`,
+        // which needs them to make endpoint units concrete. Computing them in
+        // both places would report every arity error twice.
+        std::map<std::string, std::vector<Unit>> child_bindings;
+        for (const ast::Instance& inst : def->def->structure.instances) {
+            auto it = def->children.find(inst.name);
+            if (it == def->children.end()) continue;
+            if (it->second->unit_params.empty() && inst.unit_args.empty()) continue;
+            child_bindings[inst.name] = unit_args_of(it->second, inst, def_src);
+        }
+
+        collect_wires(def, path, m, child_bindings);
         for (const ast::Instance& inst : def->def->structure.instances) {
             auto child_it = def->children.find(inst.name);
             if (child_it == def->children.end()) continue;
             const NodeInfo* child = child_it->second;
 
-            std::map<std::string, double> child_pinned;
+            std::map<std::string, Pin> child_pinned;
             std::set<std::string> bound;
             for (const ast::Binding& b : inst.bindings) {
                 const NodeInfo::SettingInfo* target = child->setting(b.name);
@@ -757,15 +1172,25 @@ void Elaborator::instantiate(const NodeInfo* def, const std::string& path,
                     failed_ = true;
                     continue;
                 }
+                // §6.2a — the child's setting may be declared in one of the
+                // child's unit parameters, so the binding is checked against
+                // the CHILD's substitution, not this composite's.
+                Type child_target = target->type;
+                auto cb = child_bindings.find(inst.name);
+                if (cb != child_bindings.end())
+                    child_target.unit = unit_bind(target->type.unit, cb->second);
                 double d = 0.0;
-                if (coerce(v, target->type, def_src, b.loc,
-                           ("setting `" + b.name + "`").c_str(), d))
-                    child_pinned[b.name] = d;
+                ExprCode code;
+                if (coerce(v, child_target, def_src, b.loc,
+                           ("setting `" + b.name + "`").c_str(), d, &code))
+                    child_pinned[b.name] = Pin{d, std::move(code), v.constant};
                 else
                     failed_ = true;
             }
+            auto bit = child_bindings.find(inst.name);
             instantiate(child, sub(path, inst.name), child_pinned, def_src, inst.loc,
-                        depth + 1, m);
+                        depth + 1, m,
+                        bit == child_bindings.end() ? std::vector<Unit>{} : bit->second);
         }
         return;
     }
@@ -777,7 +1202,10 @@ void Elaborator::instantiate(const NodeInfo* def, const std::string& path,
     leaf.loc = loc;
     leaf.settings = std::move(settings);
 
-    // §9.2 — `rate` is consumed by the scheduler and produces no runtime member.
+    // §9.2 — the elaborated decimation. It is a DEFAULT, not the final word:
+    // `rate` is an ordinary runtime setting, so the emitted model recomputes
+    // this in resolve_settings() and re-runs the divisor check there. What is
+    // checked here is what `sec` can see, which is the default.
     for (const SettingValue& s : leaf.settings) {
         if (s.name != "rate") continue;
         const double base_rate = m.step > 0.0 ? 1.0 / m.step : 0.0;
@@ -808,8 +1236,8 @@ void Elaborator::instantiate(const NodeInfo* def, const std::string& path,
         StateSlot slot;
         slot.name = st.name;
         slot.continuous = st.continuous;
-        slot.unit = st.type.unit;
-        slot.der_unit = st.der_unit;
+        slot.unit = bound(st.type.unit);
+        slot.der_unit = bound(st.der_unit);
         slot.scalar = st.type.scalar;
         if (st.initial) {
             Value v;
@@ -826,6 +1254,19 @@ void Elaborator::instantiate(const NodeInfo* def, const std::string& path,
                        ("initial condition `" + o->path + "`").c_str(), slot.initial);
         }
         leaf.states.push_back(std::move(slot));
+    }
+
+    // §6.2a — the ports as this instance actually sees them. For a
+    // non-parametric node `bound` is the identity, so this is a copy.
+    for (const Field& f : def->inputs) {
+        Field g = f;
+        g.type.unit = bound(f.type.unit);
+        leaf.ports_in.push_back(std::move(g));
+    }
+    for (const Field& f : def->outputs) {
+        Field g = f;
+        g.type.unit = bound(f.type.unit);
+        leaf.ports_out.push_back(std::move(g));
     }
 
     leaf_by_path_[path] = m.leaves.size();
@@ -875,15 +1316,17 @@ bool Elaborator::port_conversion(const Field& from, const Field& to, const Sourc
     return true;
 }
 
-void Elaborator::collect_wires(const NodeInfo* def, const std::string& path, Model& m) {
+void Elaborator::collect_wires(const NodeInfo* def, const std::string& path, Model& m,
+                               const std::map<std::string, std::vector<Unit>>& child_binding) {
     (void)m;
     const Source& src = *def->file->src;
 
     // Resolves one endpoint to its port and its addressable path. `as_source`
     // flips the polarity of a `self` endpoint, which is the whole content of
     // §6.9.2's rule about the boundary being inverted from the inside.
-    auto endpoint = [&](const ast::Endpoint& e, bool as_source, const Field*& field,
+    auto endpoint = [&](const ast::Endpoint& e, bool as_source, Field& out_field,
                         std::string& key) -> bool {
+        const Field* field = nullptr;
         if (e.is_self) {
             if (e.segs.empty()) return false;
             const std::string& n = e.segs[0];
@@ -906,6 +1349,10 @@ void Elaborator::collect_wires(const NodeInfo* def, const std::string& path, Mod
                                 "unresolved port");
                 return false;
             }
+            // A composite may not be unit-parametric (`SE0418`), so its own
+            // binding is empty and this is a copy.
+            out_field = *field;
+            out_field.type.unit = bound(field->type.unit);
             key = sub(path, n);
             return true;
         }
@@ -937,19 +1384,23 @@ void Elaborator::collect_wires(const NodeInfo* def, const std::string& path, Mod
                             "unresolved port");
             return false;
         }
+        out_field = *field;
+        auto bit = child_binding.find(inst);
+        if (bit != child_binding.end())
+            out_field.type.unit = unit_bind(field->type.unit, bit->second);
         key = sub(sub(path, inst), port);
         return true;
     };
 
     for (const ast::Wire& w : def->def->structure.wires) {
-        const Field* sf = nullptr;
+        Field sf;
         std::string skey;
         if (!endpoint(w.source, /*as_source=*/true, sf, skey)) {
             failed_ = true;
             continue;
         }
         for (const ast::Endpoint& d : w.dests) {
-            const Field* df = nullptr;
+            Field df;
             std::string dkey;
             if (!endpoint(d, /*as_source=*/false, df, dkey)) {
                 failed_ = true;
@@ -959,7 +1410,7 @@ void Elaborator::collect_wires(const NodeInfo* def, const std::string& path, Mod
             hop.source = skey;
             hop.loc = d.loc;
             hop.src = &src;
-            if (!port_conversion(*sf, *df, src, d.loc, hop.scale, hop.offset))
+            if (!port_conversion(sf, df, src, d.loc, hop.scale, hop.offset))
                 failed_ = true;
 
             auto existing = producers_.find(dkey);
@@ -1058,7 +1509,11 @@ void Elaborator::resolve_boundary(const NodeInfo* root, Model& m) {
         auto out_it = leaf_outputs_.find(k);
         if (out_it == leaf_outputs_.end()) continue;   // undriven; simply unread
         const Leaf& leaf = m.leaves[out_it->second.first];
-        const Field* port = leaf.node->output(out_it->second.second);
+        // §6.2a — the substituted port, so the manifest reports the unit the
+        // host actually receives rather than the definition's `(U)`.
+        const Field* port = nullptr;
+        for (const Field& lf : leaf.ports_out)
+            if (lf.name == out_it->second.second) { port = &lf; break; }
         if (!port) continue;
 
         // Records are listed field by field: the manifest is read by a human
@@ -1193,9 +1648,15 @@ void Elaborator::resolve_record(const ast::RecordBlock& block, const Source& src
             } else {
                 s.expr = "dis." + base + "." + rest[0];
             }
+            // §6.2a — the slot's unit is substituted; the node's is still `(U)`.
             s.unit = st->type.unit;
+            for (const StateSlot& ss : leaf.states)
+                if (ss.name == rest[0]) s.unit = ss.unit;
         } else {
-            const Field* f = kind == "out" ? leaf.node->output(rest[0]) : nullptr;
+            const Field* f = nullptr;
+            if (kind == "out")
+                for (const Field& lf : leaf.ports_out)
+                    if (lf.name == rest[0]) f = &lf;
             if (!f)
                 for (const Field& v : leaf.node->vars)
                     if (kind == "var" && v.name == rest[0]) f = &v;
@@ -1292,7 +1753,7 @@ bool Elaborator::run(const ast::SimFile& sim, const Source& sim_src,
 
     // §13.3 — the sim file's root block is the third writer; the `.settings`
     // source is the fourth, and is applied inside instantiate().
-    std::map<std::string, double> pinned;
+    std::map<std::string, Pin> pinned;
     std::set<std::string> bound;
     for (const ast::Binding& b : root_entry->bindings) {
         const NodeInfo::SettingInfo* target = m.root->setting(b.name);
@@ -1310,8 +1771,12 @@ bool Elaborator::run(const ast::SimFile& sim, const Source& sim_src,
         Value v;
         if (!eval(b.value.get(), sim_src, Env{}, v)) continue;
         double d = 0.0;
-        if (coerce(v, target->type, sim_src, b.loc, ("setting `" + b.name + "`").c_str(), d))
-            pinned[b.name] = d;
+        ExprCode code;
+        if (coerce(v, target->type, sim_src, b.loc, ("setting `" + b.name + "`").c_str(), d,
+                   &code))
+            // The root block is evaluated in an empty environment — there is no
+            // enclosing node whose settings it could read — so it always folds.
+            pinned[b.name] = Pin{d, std::move(code), v.constant};
     }
 
     instantiate(m.root, "", pinned, sim_src, root_entry->loc, 0, m);

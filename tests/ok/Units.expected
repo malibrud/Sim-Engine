@@ -15,7 +15,7 @@ model-file
       decay (s^-1): double = 0.5
       ratio (-): double = 0.25
       duty (%): double = 40.0
-      heading (deg): double = 90.0
+      heading (rad): double = 90 (deg)
       limit (m/s): double = 130 (km/h)
       omega (rad/s): double = ((2.0 * pi) * 50.0)
       diag (m): double = hypot(3.0, 4.0)
@@ -25,4 +25,4 @@ model-file
     outputs
       y (-): double
     output()   [no feedthrough — sort root]
-      body @line 40 (22 bytes): "out.y = param.ratio;"
+      body @line 42 (22 bytes): "out.y = param.ratio;"

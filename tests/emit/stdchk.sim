@@ -1,0 +1,9 @@
+// The v1 standard library must emit and compile. No `.expected`, so this case
+// must succeed.
+sim StdChk {
+    root: stdchk.StdChk {};
+
+    step:     1 (ms);
+    solver:   rk4;
+    duration: 10 (ms);
+}

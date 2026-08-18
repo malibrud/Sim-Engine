@@ -12,6 +12,8 @@ node Checks {
         node c : NoOutput {};
         node d : BadParam {};
         node e : Both     {};
+        node f : DegUnit  {};
+        node g : OmegaHz  {};
 
         a.z --> self.y;
     }
@@ -48,4 +50,21 @@ node Both {
     // SE0320 — leaf or composite, never both.
     vars { t (-): double; }
     structure { node inner : BadUnit {}; }
+}
+
+node DegUnit {
+    // SE0415 — radians are the only DECLARABLE angle unit (§4.5). A `(deg)`
+    // literal is still fine, because it converts and is gone; a `(deg)`
+    // accessor would survive into a body, where units are erased.
+    settings { heading (deg): double = 90.0; }
+    outputs  { z (-): double; }
+    output() { out.z = param.heading; }
+}
+
+node OmegaHz {
+    // SE0410 — `(rad/s)` is angle/time and `(Hz)` is 1/time, so they no longer
+    // convert. This is the factor-of-2pi mix-up that §4.5 buys.
+    settings { f (Hz): double = 1.0 (rad/s); }
+    outputs  { z (-): double; }
+    output() { out.z = param.f; }
 }

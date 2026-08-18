@@ -1,0 +1,42 @@
+// H(s) = wc s / (s + wc) — a differentiator rolled off above wc so it does not
+// amplify high-frequency noise. Below wc it is s; above it, the gain flattens
+// at wc instead of climbing without bound.
+//
+// Standalone rather than a degenerate Biquad: one pole, so one state.
+//
+// The roll-off is not a shortcut. Differentiating a signal that already
+// contains a high-passed input means the exact derivative would require the
+// input's own derivative, which the model does not carry.
+package std.signal;
+
+node Differentiator {
+    units { U; }
+
+    settings {
+        wc (rad/s): double;                      // roll-off, required
+        fs (Hz):    double = sample_rate;
+    }
+
+    inputs  { x (U): double; }
+    // Derived, like the integrator's and in the opposite direction.
+    outputs { y (U/s): double; }
+
+    states { discrete w1 (-): double = 0.0; }
+
+    vars { da1 (-): double;  db0 (-): double;  db1 (-): double; }
+
+    init() {
+        const double K = 2.0 * param.fs;
+        const double A0 = K + param.wc;
+        var.da1 = (param.wc - K) / A0;
+        var.db0 =  K * param.wc / A0;
+        var.db1 = -K * param.wc / A0;
+    }
+
+    output(x) {
+        const double w0 = in.x - var.da1 * state.w1;
+        out.y = var.db0 * w0 + var.db1 * state.w1;
+    }
+
+    on_step(x) { next.w1 = in.x - var.da1 * state.w1; }
+}

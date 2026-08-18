@@ -171,6 +171,14 @@ struct Binding {              // setting = expression;
 struct Instance {             // node whl : Wheel { … };
     std::string name;
     Path definition;
+    // §6.2a — unit arguments, positional, in the definition's `units` order:
+    // `node hp : Biquad (m/s^2) { … };`. They sit after the definition path
+    // rather than inside the brace list because nothing else may follow that
+    // path, so a `(` here needs no lookahead. Inside the braces `U = (m/s^2)`
+    // would be indistinguishable from a parenthesised setting expression such
+    // as `mass = (total / 4)`.
+    std::vector<UnitPtr> unit_args;
+    Loc unit_args_loc;
     std::vector<Binding> bindings;
     Loc loc;
 };
@@ -215,13 +223,23 @@ struct TypeDef {              // §5.2
     Loc loc;
 };
 
+// One unit parameter — a name that stands for a unit inside this node's port,
+// state and var declarations, bound at instantiation (§6.2a). It has no type
+// and no default: a unit variable ranges over units, not values.
+struct UnitParamDecl {
+    std::string name;
+    Loc loc;
+};
+
 struct NodeDef {              // §6
     std::string name;
     Loc loc;
 
     SectionMark sec_settings, sec_inputs, sec_outputs, sec_states, sec_vars;
     SectionMark sec_native, sec_declarations, sec_build, sec_structure;
+    SectionMark sec_units;
 
+    std::vector<UnitParamDecl> unit_params;
     std::vector<SettingDecl> settings;
     std::vector<FieldDecl> inputs;
     std::vector<FieldDecl> outputs;

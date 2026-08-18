@@ -1,0 +1,74 @@
+// Second-order low-pass by natural frequency and damping:
+//
+//     H(s) = wn^2 / (s^2 + 2 zeta wn s + wn^2)
+//
+// This is the motion-cueing field's native parameterisation — Reid & Nahon
+// Table 5.3 quotes zeta = 1.4 for the translational and tilt paths and 1.0 for
+// the rotational one. A second-order Butterworth is the special case
+// zeta = 1/sqrt(2).
+//
+// The design algebra lives in DERIVED SETTINGS, not in `init()`, and that is
+// the whole point: a setting default is checked against its declared unit
+// (§4.3), so `2 zeta wn` has to come out in rad/s and `wn^2` in (rad/s)^2.
+// Invert one of them, or drop a factor of wn, and it is a compile error rather
+// than a filter that runs and is wrong.
+package std.signal;
+
+node LowPass2 {
+    units { U; }
+
+    settings {
+        wn   (rad/s): double;                  // required
+        zeta (-):     double = 1.0;
+
+        // s^2 + 2 zeta wn s + wn^2, prewarped below.
+        a1 (rad/s):     double = 2.0 * param.zeta * param.wn;
+        a2 ((rad/s)^2): double = param.wn * param.wn;
+
+        fs (Hz): double = sample_rate;
+    }
+
+    inputs  { x (U): double; }
+    outputs { y (U): double; }
+
+    states {
+        discrete w1 (-): double = 0.0;
+        discrete w2 (-): double = 0.0;
+    }
+
+    vars {
+        da1 (-): double;  da2 (-): double;
+        db0 (-): double;  db1 (-): double;  db2 (-): double;
+    }
+
+    // Prewarped so the designed break lands exactly at wn under the bilinear
+    // map. Prewarping is deliberately NOT a derived setting: K*tan(wn/K) is
+    // dimensionally T^-1 while wn is angle*T^-1, so the standard formula does
+    // not type-check once angle is a base dimension (§4.5). It is honest
+    // arithmetic on erased units, so it belongs here.
+    init() {
+        const double K  = 2.0 * param.fs;
+        const double wa = K * std::tan(param.wn / K);
+        const double a1 = param.a1 * (wa / param.wn);          // rescale to wa
+        const double a2 = wa * wa;
+
+        const double K2 = K * K;
+        const double A0 =  K2 + K * a1 + a2;
+        const double A1 = -2.0 * K2    + 2.0 * a2;
+        const double A2 =  K2 - K * a1 + a2;
+
+        var.da1 = A1 / A0;  var.da2 = A2 / A0;
+        var.db0 = a2 / A0;  var.db1 = 2.0 * a2 / A0;  var.db2 = a2 / A0;
+    }
+
+    output(x) {
+        const double w0 = in.x - var.da1 * state.w1 - var.da2 * state.w2;
+        out.y = var.db0 * w0 + var.db1 * state.w1 + var.db2 * state.w2;
+    }
+
+    on_step(x) {
+        const double w0 = in.x - var.da1 * state.w1 - var.da2 * state.w2;
+        next.w1 = w0;
+        next.w2 = state.w1;
+    }
+}

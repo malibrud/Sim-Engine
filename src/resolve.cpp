@@ -422,8 +422,25 @@ bool Resolver::resolve_type(const FileInfo& file, const ast::TypeRef& ref, Type&
     if (ref.is_scalar) {
         out.is_record = false;
         out.scalar = ref.scalar.empty() ? "double" : ref.scalar;
-        UnitEval eval(*file.src, diag_);
+        UnitEval eval(*file.src, diag_, unit_params_);
         if (!eval.eval(ref.unit.get(), out.unit)) return false;
+        // §4.5 — radians are the only DECLARABLE angle unit. A literal suffix
+        // may still be `(deg)`; it converts here and is gone. This is the one
+        // place the restriction belongs, because a declared unit is what a body
+        // reads through an accessor.
+        if (out.unit.nonradian_angle) {
+            // Point at the unit expression, not the declaration, so the caret
+            // spans the offending symbol the way `SE0414` does.
+            diag_.error("SE0415", *file.src, ref.unit ? ref.unit->loc : ref.loc,
+                        "`(" + out.unit.str() + ")` may not be a declared unit",
+                        "declare this in radians",
+                        {note("units are erased in bodies (§4.4), so `sin(state.theta)` "
+                              "on a degree-valued accessor is silently wrong, and no "
+                              "dimensional system can catch it"),
+                         help("declare the radian unit and convert at the literal — "
+                              "`theta (rad): double = 90 (deg);`")});
+            return false;
+        }
         // §5.1 — `bool` must be declared `(-)`. A scaled or dimensioned truth
         // value is meaningless, and catching it here beats erasing it silently.
         if (out.scalar == "bool" && !(out.unit.dimensionless() && out.unit.scale == 1.0)) {
@@ -441,6 +458,17 @@ bool Resolver::resolve_type(const FileInfo& file, const ast::TypeRef& ref, Type&
 
 RecordInfo* Resolver::resolve_record(FileInfo& file, const ast::TypeDef& def,
                                      const std::string& fq, const std::string& cpp_name) {
+    // A record is defined independently of any node and memoized across all of
+    // them, so it must not see the unit parameters of whichever node happened
+    // to reference it first. (Parametric record types are D5, a separate task.)
+    std::vector<std::string> saved;
+    saved.swap(unit_params_);
+    struct Restore {
+        std::vector<std::string>& live;
+        std::vector<std::string>& saved;
+        ~Restore() { live.swap(saved); }
+    } restore{unit_params_, saved};
+
     auto memo = record_by_def_.find(&def);
     if (memo != record_by_def_.end()) {
         RecordInfo* info = memo->second;
@@ -478,6 +506,48 @@ RecordInfo* Resolver::resolve_record(FileInfo& file, const ast::TypeDef& def,
     return info;
 }
 
+std::vector<std::string> Resolver::resolve_unit_params(const FileInfo& file,
+                                                       const ast::NodeDef& def) {
+    std::vector<std::string> out;
+    if (!def.sec_units.present) return out;
+
+    // §6.2a — leaf-only for now. A parametric composite would need unit
+    // flow-down alongside setting flow-down; this is a restriction to relax,
+    // not a rule, so no model valid today would break when it lifts.
+    if (def.is_composite()) {
+        diag_.error("SE0418", *file.src, def.sec_units.loc,
+                    "a composite may not declare unit parameters",
+                    "only a leaf node may be unit-parametric",
+                    {note("binding a composite's parameters would have to flow down "
+                          "to its children, which is a separate mechanism (§6.2a)"),
+                     help("put the unit parameters on the leaf that declares the ports")});
+        return out;
+    }
+
+    for (const ast::UnitParamDecl& p : def.unit_params) {
+        // A parameter shadows Appendix A inside this node (§6.2a), so letting
+        // one be called `m` would silently retype every length in the file.
+        Unit clash;
+        if (lookup_unit_symbol(p.name, clash)) {
+            diag_.error("SE0416", *file.src, p.loc,
+                        "unit parameter `" + p.name + "` is already a unit symbol",
+                        "shadows Appendix A",
+                        {note("a unit parameter shadows real units inside its node, so "
+                              "`(" + p.name + ")` would stop meaning what it says")});
+            continue;
+        }
+        bool dup = false;
+        for (const std::string& seen : out) dup = dup || seen == p.name;
+        if (dup) {
+            diag_.error("SE0417", *file.src, p.loc,
+                        "duplicate unit parameter `" + p.name + "`", "declared twice");
+            continue;
+        }
+        out.push_back(p.name);
+    }
+    return out;
+}
+
 NodeInfo* Resolver::resolve_node(FileInfo& file, const ast::NodeDef& def,
                                  const std::string& fq, const std::string& cpp_name) {
     auto memo = node_by_def_.find(&def);
@@ -492,6 +562,15 @@ NodeInfo* Resolver::resolve_node(FileInfo& file, const ast::NodeDef& def,
     info->composite = def.is_composite();
     program_.nodes[fq] = std::move(owned);
     node_by_def_[&def] = info;
+
+    // §6.2a — the unit parameters must be known before any declaration in this
+    // node is resolved, since every port unit may reference them.
+    info->unit_params = resolve_unit_params(file, def);
+    unit_params_ = info->unit_params;
+    struct ClearParams {
+        std::vector<std::string>& v;
+        ~ClearParams() { v.clear(); }
+    } clear_params{unit_params_};
 
     // §6.1 — one node concept, kind inferred, never both.
     if (def.is_composite() && def.has_code()) {

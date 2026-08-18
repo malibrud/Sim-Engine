@@ -1,0 +1,10 @@
+// §6.2a — a model whose wiring only type-checks if unit parameters are
+// substituted per instance. No `.expected` file, so this case must emit
+// cleanly.
+sim UParam {
+    root: uparam.UParam {};
+
+    step:     1 (ms);
+    solver:   rk4;
+    duration: 10 (ms);
+}

@@ -1,0 +1,44 @@
+﻿=== tests/ok/UnitParams.se ===
+model-file
+  package tests
+  node UnitParams  [line 9]  kind=composite
+    outputs
+      y (m/s): double
+    structure
+      node hp : Section (m/s^2)
+        wn = 3.1
+        zeta = 1.4
+      node acc : Integrate (m/s^2)
+      hp.y --> acc.x
+      acc.y --> self.y
+  node Section  [line 23]  kind=leaf
+    units
+      U
+    settings
+      wn (rad/s): double  [required]
+      zeta (-): double  [required]
+    inputs
+      x (U): double
+    outputs
+      y (U): double
+      y_dot (U/s): double
+    states
+      discrete   w1 (-): double ic=0.0
+      discrete   w2 (-): double ic=0.0
+    output(x)   [feedthrough]
+      body @line 31 (32 bytes): "out.y = in.x; out.y_dot = 0.0;"
+    on_step(x)
+      body @line 32 (37 bytes): "next.w1 = in.x; next.w2 = state.w1;"
+  node Integrate  [line 37]  kind=leaf
+    units
+      U
+    inputs
+      x (U): double
+    outputs
+      y (U*s): double
+    states
+      discrete   a (-): double ic=0.0
+    output()   [no feedthrough — sort root]
+      body @line 43 (18 bytes): "out.y = state.a;"
+    on_step(x)
+      body @line 44 (26 bytes): "next.a = state.a + in.x;"

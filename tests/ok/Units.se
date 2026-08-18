@@ -21,7 +21,9 @@ node Units {
         decay       (s^-1):      double = 0.5;
         ratio       (-):         double = 0.25;
         duty        (%):         double = 40.0;
-        heading     (deg):       double = 90.0;
+        // §4.5 — radians are the only declarable angle unit; `(deg)` is legal
+        // as the literal's suffix and converts here.
+        heading     (rad):       double = 90 (deg);
 
         // A literal may carry its own unit and be converted at elaboration.
         limit       (m/s):       double = 130 (km/h);

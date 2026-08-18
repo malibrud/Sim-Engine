@@ -1,0 +1,30 @@
+// Odd-symmetric gain with a saturation limit: y = clamp(gain*x, -limit, +limit).
+//
+// This is the two-breakpoint case of a piecewise-linear scale curve, which is
+// the only case the Reid & Nahon parameter sets actually use — every curve in
+// them is `0:0  L:K*L`, which is exactly a gain plus a limit. The general
+// multi-breakpoint curve needs array-valued settings and is deferred.
+//
+// `limit` is declared in the unit parameter, so it is checked and converted per
+// instance: bind it as `(km/h^2)` on an `(m/s^2)` instance and the conversion
+// folds at elaboration.
+package std.signal;
+
+node ScaleLimit {
+    units { U; }
+
+    settings {
+        gain  (-): double = 1.0;
+        limit (U): double;             // required: an unlimited scale is a Gain
+    }
+
+    inputs  { x (U): double; }
+    outputs { y (U): double; }
+
+    output(x) {
+        const double v = param.gain * in.x;
+        out.y = v >  param.limit ?  param.limit
+              : v < -param.limit ? -param.limit
+                                 :  v;
+    }
+}

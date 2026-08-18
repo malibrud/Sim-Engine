@@ -24,6 +24,7 @@ const char* describe(Tok k) {
         case Tok::KwOutputs:      return "`outputs`";
         case Tok::KwStates:       return "`states`";
         case Tok::KwVars:         return "`vars`";
+        case Tok::KwUnits:        return "`units`";
         case Tok::KwNative:       return "`native`";
         case Tok::KwStructure:    return "`structure`";
         case Tok::KwDeclarations: return "`declarations`";
@@ -63,6 +64,7 @@ Tok keyword_kind(std::string_view w) {
         {"self", Tok::KwSelf},                 {"settings", Tok::KwSettings},
         {"inputs", Tok::KwInputs},             {"outputs", Tok::KwOutputs},
         {"states", Tok::KwStates},             {"vars", Tok::KwVars},
+        {"units", Tok::KwUnits},
         {"native", Tok::KwNative},             {"structure", Tok::KwStructure},
         {"declarations", Tok::KwDeclarations}, {"build", Tok::KwBuild},
         {"continuous", Tok::KwContinuous},     {"discrete", Tok::KwDiscrete},

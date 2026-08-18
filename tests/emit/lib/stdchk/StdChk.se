@@ -1,0 +1,48 @@
+// Exercises the standard library's v1 signal layer end to end, on one unit
+// parameter's worth of chain:
+//
+//   ramp -> ScaleLimit -> Biquad -> Integrator -> Differentiator -> Sum
+//   (m/s^2)   (m/s^2)     (m/s^2)     (m/s)          (m/s^2)
+//
+// The units are the check. `Integrator` DERIVES (m/s) and `Differentiator`
+// derives back to (m/s^2); the `Sum` at the end only type-checks because the
+// round trip lands exactly where it started.
+package stdchk;
+
+use std.signal;
+use std.math;
+
+node StdChk {
+    outputs { y (m/s^2): double; }
+
+    structure {
+        node src : Ramp {};
+
+        // Reid & Nahon Table 5.3 block B12: s^2 / (s^2 + 8.68 s + 9.61).
+        node lim : signal.ScaleLimit    (m/s^2) { gain = 1.0; limit = 100.0; };
+        node hp  : signal.Biquad        (m/s^2) { a0 = 1.0;  a1 = 8.68;  a2 = 9.61;
+                                                  b0 = 1.0;  b1 = 0.0;   b2 = 0.0; };
+        node acc : signal.Integrator    (m/s^2) {};
+        node dif : signal.Differentiator (m/s) { wc = 12.5; };
+        node add : math.Sum             (m/s^2) {};
+        // Table 5.3 block B3, by the field's native wn/zeta parameterisation.
+        node lp  : signal.LowPass2      (m/s^2) { wn = 3.1; zeta = 1.4; };
+
+        src.y --> lim.x;
+        lim.y --> lp.x;
+        lim.y --> hp.x;
+        hp.y  --> acc.x;
+        acc.y --> dif.x;
+        dif.y --> add.a;
+        lim.y --> add.b;
+        add.y --> self.y;
+    }
+}
+
+node Ramp {
+    outputs { y (m/s^2): double; }
+    states  { discrete t (-): double = 0.0; }
+
+    output()  { out.y = state.t; }
+    on_step() { next.t = state.t + 1.0; }
+}

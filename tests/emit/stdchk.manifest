@@ -1,0 +1,63 @@
+﻿# ----------------------------------------------------------------------------
+#  GENERATED — DO NOT EDIT.
+#  Unit manifest for: Sim.generated.hpp
+#  sim: StdChk   root: stdchk.StdChk   base step: 0.001 s
+#
+#  Units are checked by the DSL compiler at every declarative site and then
+#  ERASED — the generated C++ is plain `double` throughout. This file is where
+#  the erased information goes. It is a real generator output, not
+#  documentation: it is the contract for anyone writing an external solver,
+#  feeding the root boundary, or overriding a setting from outside the model.
+#
+#  Every value named here is IN THE UNIT SHOWN. `-` means dimensionless.
+# ----------------------------------------------------------------------------
+
+[state.continuous]        # slot | model path | unit  -- the solver's ABI
+          (none)
+
+[state.discrete]          # Sim::dis; offsets from Sim::discrete_map()
+          src.t                   -           double
+          hp.w1                   -           double
+          hp.w2                   -           double
+          acc.w1                  -           double
+          dif.w1                  -           double
+          lp.w1                   -           double
+          lp.w2                   -           double
+
+[signals]                 # Sim::sig; offsets from Sim::signal_map()
+          src.y                   m/s^2       double
+          lim.y                   m/s^2       double
+          hp.y                    m/s^2       double
+          acc.y                   m/s         double
+          dif.y                   m/s^2       double
+          add.y                   m/s^2       double
+          lp.y                    m/s^2       double
+
+[boundary.in]             # root inputs the host must drive, as sig.in.*
+          (none)
+
+[boundary.out]            # root outputs the host may read
+          add.y                   m/s^2
+
+[settings]                # configurable; value is the elaborated default
+          lim.gain                -           = 1.0
+          lim.limit               m/s^2       = 100.0
+          hp.a0                   -           = 1.0
+          hp.a1                   -           = 8.68
+          hp.a2                   -           = 9.61
+          hp.b0                   -           = 1.0
+          hp.b1                   -           = 0.0
+          hp.b2                   -           = 0.0
+          hp.fs                   Hz          = 1000.0
+          acc.fs                  Hz          = 1000.0
+          dif.wc                  rad/s       = 12.5
+          dif.fs                  Hz          = 1000.0
+          lp.wn                   rad/s       = 3.1
+          lp.zeta                 -           = 1.4
+          lp.a1                   rad/s       = 8.68   <- (2.0 * lp.zeta) * lp.wn
+          lp.a2                   rad^2/s^2   = 9.610000000000001   <- lp.wn * lp.wn
+          lp.fs                   Hz          = 1000.0
+
+[rates]                   # decimations, derived from `rate` at configuration
+
+[types]

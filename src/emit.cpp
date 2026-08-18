@@ -209,7 +209,16 @@ private:
 
     // Sim-class sections.
     void sim_members();
+    void sim_resolve_settings();
     void sim_elaborate();
+    // Maps a node's model path to the C++ object holding its settings.
+    // Built once, because a leaf's identifier is only known after the
+    // collision-dedup pass and a composite has no identifier at all
+    // until one is minted here.
+    void build_param_bases();
+    std::string param_base(const std::string& owner) const;
+    std::string render_expr(const ExprCode& c) const;
+    std::map<std::string, std::string> param_base_;
     void sim_init();
     void sim_output_pass();
     void sim_derivatives();
@@ -223,6 +232,9 @@ private:
     std::string input_expr(const Leaf& leaf, const std::string& port) const;
     std::string in_braces(const Leaf& leaf, const ast::Method* method) const;
     bool needs_tick_gate(const Leaf& leaf) const;
+    // True when the leaf's decimation is a runtime value rather than 1.
+    bool dynamic_rate(const Leaf& leaf) const;
+    std::string decim_of(const Leaf& leaf) const;
 
     // One row per scalar slot of a block: { model path, C++ member path,
     // scalar type, unit }. Built once and used by BOTH the manifest and the
@@ -286,6 +298,15 @@ void Emitter::preamble(const NodeInfo& node, ast::Method::Which which, const cha
            << "   // sim.stop / sim.abort, §10.2\n";
     // Shadows the leaf's trace-only member with the full set of levels.
     o_ << ind << "const se_rt::Log log{se_path_};" << "   // every level is legal here, §10.1\n";
+
+    // §6.2b made the member writable so `Sim::resolve_settings` can assign it.
+    // `init()` is the one body that is not a const method, so without this the
+    // member's constness was all that stopped a body rewriting its own settings
+    // after configuration. Shadowing restores the guarantee where I2 says it
+    // belongs: in what the generator puts in scope, not in a type.
+    if (which == W::Init)
+        o_ << ind << "const Param& param = this->param;"
+           << "   // fixed by configuration, §6.2b\n";
 
     // §6.7 — bodies refer to natives by their bare name, and the alias exists
     // only where they are legal. Elsewhere the name is simply undeclared and
@@ -368,9 +389,8 @@ void Emitter::leaf_class(const NodeInfo& node) {
     };
 
     std::vector<Row> rows;
-    for (const auto& s : node.settings) {
-        if (s.name == "rate") continue;   // §6.2 — no runtime member
-        rows.push_back(field_row(s.name, s.type, ""));
+    for (const auto& s : node.settings) {   // §6.2b — `rate` included
+        rows.push_back(field_row(s.name, s.type, "{}"));
     }
     emit_struct(o_, "Param", rows);
 
@@ -442,7 +462,7 @@ void Emitter::leaf_class(const NodeInfo& node) {
     // not `param.x`, and not `this->param.x` either.
     o_ << "\n";
     std::vector<Row> mem;
-    mem.push_back({"const Param", "param;", "// set at construction; never writable"});
+    mem.push_back({"Param", "param;", "// written by Sim::resolve_settings"});
     mem.push_back({"const char* const", "se_path_;", "// model path, for the log tag"});
     if (!node.states.empty()) mem.push_back({"State", "state;", "// views into x / dis"});
     if (!node.vars.empty()) mem.push_back({"Var", "var{};", ""});
@@ -557,10 +577,25 @@ std::string Emitter::in_braces(const Leaf& leaf, const ast::Method* method) cons
 // so the value is identical and the branch is pure cost. A slow node WITH
 // feedthrough must be gated, or ZOH would be lost.
 bool Emitter::needs_tick_gate(const Leaf& leaf) const {
-    if (leaf.decimation <= 1) return false;
+    if (!dynamic_rate(leaf)) return false;
     const ast::Method* out = leaf.node->method(ast::Method::Which::Output);
     return out && !out->params.empty();
 }
+
+// §9.2 — whether this leaf's decimation can move after the model is compiled.
+// A node that declares `rate` owns an ordinary runtime setting (§6.2), so its
+// decimation is a member that `resolve_settings()` recomputes, and the tick
+// guards have to read it even where elaboration happened to compute 1. A node
+// that declares no `rate` runs at the base step and nothing can change that,
+// so its guards are not emitted at all.
+//
+// The test is therefore on the node's SHAPE, not on its elaborated decimation,
+// which is no longer the final word on anything.
+bool Emitter::dynamic_rate(const Leaf& leaf) const {
+    return leaf.node->setting("rate") != nullptr;
+}
+
+std::string Emitter::decim_of(const Leaf& leaf) const { return leaf.ident + "_decim"; }
 
 // ═════════════════════════════════════════════════════════════════════════════
 //  The Sim class
@@ -573,11 +608,17 @@ void Emitter::sim_members() {
     o_ << "    //  A run is `init(); while (!done()) tick(); finish();` — which is\n";
     o_ << "    //  exactly what run() does, so a host driving the boundary and the\n";
     o_ << "    //  generated batch driver use the same calls.\n";
-    o_ << "    Sim() { bind(); }\n";
+    o_ << "    //  Construction leaves every setting at the value elaboration computed\n";
+    o_ << "    //  for it (§6.2b step 1). To change one: load_settings(), then\n";
+    o_ << "    //  resolve_settings() to re-run everything derived from it, then init().\n";
+    o_ << "    Sim() { bind(); resolve_settings(); }\n";
     o_ << "    void init();\n";
     o_ << "    void tick();                             // one base step (§9.6)\n";
     o_ << "    bool done() const { return se_done_; }\n";
     o_ << "    void finish();\n";
+    o_ << "    //  Empty unless resolve_settings() rejected a value it was given\n";
+    o_ << "    //  (§16.4). init() refuses to start a run while it is set.\n";
+    o_ << "    const std::string& config_error() const { return se_cfg_error_; }\n";
     o_ << "    double time() const { return se_time_; }\n";
     o_ << "    std::uint64_t tick_index() const { return se_tick_; }\n";
     o_ << "    int run();                               // init + loop + finish\n";
@@ -653,38 +694,15 @@ void Emitter::sim_members() {
     o_ << "    void derivatives(double t);              // reads x, fills xd\n\n";
 
     o_ << "    // ---- machinery " << std::string(57, '-') << "\n";
-    o_ << "    //  Leaf instances, with their elaborated settings. A composite's own\n";
-    o_ << "    //  settings do not exist at run time: the expressions that referenced\n";
-    o_ << "    //  them folded to these literals, and any unit CONVERSION folded in with\n";
-    o_ << "    //  them, which is why nothing downstream needs conversion machinery.\n";
+    o_ << "    //  Leaf instances. Their settings are NOT baked in here: they are\n";
+    o_ << "    //  assigned by resolve_settings() (§6.2b), so a settings source can\n";
+    o_ << "    //  move them in a binary that has already been compiled. Any unit\n";
+    o_ << "    //  CONVERSION still folded at elaboration, which is why nothing here\n";
+    o_ << "    //  needs conversion machinery.\n";
     for (const Leaf& leaf : m_.leaves) {
         const std::string path = quote(leaf.path.empty() ? "<root>" : leaf.path);
-        std::size_t n_settings = 0;
-        bool has_rate = false;
-        for (const SettingValue& s : leaf.settings) {
-            if (s.name == "rate") has_rate = true;
-            else ++n_settings;
-        }
-        o_ << "    " << leaf.node->cpp_name << " " << leaf.ident << "{{";
-        if (n_settings == 0) {
-            o_ << "}, " << path << "};\n";
-            continue;
-        }
-        o_ << "\n";
-        std::size_t wv = 0;
-        for (const SettingValue& s : leaf.settings)
-            if (s.name != "rate") wv = std::max(wv, literal(s.value, s.scalar).size() + 1);
-        std::size_t seen = 0;
-        for (const SettingValue& s : leaf.settings) {
-            if (s.name == "rate") continue;
-            ++seen;
-            o_ << "        "
-               << pad(literal(s.value, s.scalar) + (seen < n_settings ? "," : ""), wv)
-               << "   // " << pad(s.name, 14) << s.unit.str() << "\n";
-        }
-        o_ << "    }, " << path << "};";
-        if (has_rate) o_ << "   // rate folds into the decimation; no member";
-        o_ << "\n";
+        o_ << "    " << pad(leaf.node->cpp_name, 28) << " " << pad(leaf.ident + "{{}, ", 18)
+           << path << "};\n";
     }
 
     bool any_der = false;
@@ -701,6 +719,62 @@ void Emitter::sim_members() {
                    << "_der;\n";
     }
 
+
+    // §6.2b — a composite's settings, the one runtime trace a composite leaves
+    // (§15.2). They hold no signal: they are the inputs to its flow-down
+    // expressions and the target of a path-addressed override.
+    {
+        std::set<std::string> done;
+        for (const Leaf& leaf : m_.leaves) done.insert(leaf.path);
+        for (const SettingSlot& s : m_.settings) {
+            if (!done.insert(s.owner).second) continue;
+            std::vector<Row> crows;
+            for (const SettingSlot& t : m_.settings) {
+                if (t.owner != s.owner) continue;
+                Row r;
+                r.type = t.scalar;
+                r.decl = t.name + "{};";
+                r.comment = "// " + t.unit.str();
+                crows.push_back(r);
+            }
+            o_ << "\n    struct {\n";
+            for (const Row& r : crows)
+                o_ << "        " << pad(r.type, 8) << " " << pad(r.decl, 20) << r.comment
+                   << "\n";
+            o_ << "    } " << param_base(s.owner) << ";   // "
+               << (s.owner.empty() ? std::string("<root>") : s.owner) << "\n";
+        }
+    }
+
+    // §9.2 — the schedule's divisors. Derived from `rate` by resolve_settings()
+    // rather than baked into the tick loop, because `rate` is an ordinary
+    // runtime setting: an override has to move the SCHEDULE and not only the
+    // coefficients that read `sample_rate`. The initialiser is what elaboration
+    // computed, and the constructor recomputes it before anything observes it.
+    {
+        std::size_t w = 0;
+        for (const Leaf& leaf : m_.leaves)
+            if (dynamic_rate(leaf)) w = std::max(w, decim_of(leaf).size());
+        bool any = false;
+        for (const Leaf& leaf : m_.leaves) {
+            if (!dynamic_rate(leaf)) continue;
+            if (!any) o_ << "\n";
+            any = true;
+            o_ << "    std::uint64_t " << pad(decim_of(leaf), w) << " = " << leaf.decimation
+               << ";   // " << leaf.path << "\n";
+        }
+    }
+
+    // One flag per setting, indexed exactly as `m_.settings` is. A §14 source
+    // sets the flag for each path it binds, and `resolve_settings` then leaves
+    // that setting alone (§13.3). One array rather than a named member each:
+    // the loader has to reach a setting by index anyway.
+    o_ << "\n    std::array<bool, " << m_.settings.size()
+       << "> se_pin_{};   // pinned by a settings source, §6.2b\n";
+    // §16.4 — the first configuration failure, recorded rather than raised.
+    // resolve_settings() runs from the constructor, where there is no run yet
+    // to fail; init() turns this into sim.fail() before any node starts.
+    o_ << "\n    std::string   se_cfg_error_;\n";
     o_ << "\n    double        se_time_ = 0.0;\n";
     o_ << "    std::uint64_t se_tick_ = 0;\n";
     o_ << "    std::size_t   se_inited_ = 0;\n";
@@ -709,6 +783,7 @@ void Emitter::sim_members() {
 
     // Everything below is defined after the class, so the class body reads as
     // an interface and a data layout rather than as a wall of code.
+    o_ << "\n    void resolve_settings();\n";
     o_ << "\n    void bind();\n";
     o_ << "    void apply_initial_conditions();\n";
     o_ << "    void output_pass(std::uint64_t k);\n";
@@ -716,6 +791,76 @@ void Emitter::sim_members() {
     o_ << "    void integrate(double t, double h);\n";
     o_ << "    void final_all(const se_rt::RunContext& ctx) const;\n";
     if (m_.record.present) o_ << "    void record_open();\n    void record_row();\n";
+}
+
+// The C++ object holding a node's settings. A leaf keeps them in its own
+// `param` member; a composite has no runtime object of its own (§15.2), so it
+// gets a bare struct that exists only to source its flow-down expressions and
+// to be the target of a path-addressed override (§6.9.1, §13.2).
+void Emitter::build_param_bases() {
+    for (const Leaf& leaf : m_.leaves) param_base_[leaf.path] = leaf.ident + ".param";
+    for (const SettingSlot& s : m_.settings) {
+        if (param_base_.count(s.owner)) continue;
+        std::string id = "se_cfg_";
+        if (s.owner.empty()) id += "root";
+        for (char c : s.owner) id += (c == '.') ? '_' : c;
+        param_base_[s.owner] = id;
+    }
+}
+
+std::string Emitter::param_base(const std::string& owner) const {
+    auto it = param_base_.find(owner);
+    return it == param_base_.end() ? std::string("se_unresolved") : it->second;
+}
+
+// One §7 expression as one C++ expression (§15.5). The tokens were built by the
+// same walk that evaluated it, so nothing is re-derived here: a reference only
+// needs the identifier its owner ended up with.
+std::string Emitter::render_expr(const ExprCode& c) const {
+    std::string r;
+    for (const ExprTok& t : c)
+        r += (t.kind == ExprTok::Kind::Text) ? t.text
+                                             : param_base(t.owner) + "." + t.text;
+    return r;
+}
+
+// §6.2b — the configuration program. Straight-line code in dependency order:
+// the sort happened at elaboration, so the runtime holds no graph and does no
+// ordering work. A setting a §14 source bound is PINNED and its expression is
+// skipped, which is how a deep override detaches from the flow-down (§13.3).
+void Emitter::sim_resolve_settings() {
+    o_ << "\n// Settings (§6.2b). Re-runnable: call it after load_settings() and\n";
+    o_ << "// every derived value follows, exactly as it does at elaboration.\n";
+    o_ << "inline void Sim::resolve_settings() {\n";
+    std::size_t w = 0;
+    for (const SettingSlot& s : m_.settings)
+        w = std::max(w, param_base(s.owner).size() + s.name.size() + 1);
+    for (std::size_t i = 0; i < m_.settings.size(); ++i) {
+        const SettingSlot& s = m_.settings[i];
+        const std::string lhs = param_base(s.owner) + "." + s.name;
+        o_ << "    if (!se_pin_[" << i << "]) " << pad(lhs, w) << " = "
+           << render_expr(s.expr) << ";"
+           << "   // " << s.unit.str() << "\n";
+    }
+
+    // §9.2 — the schedule's divisors follow `rate`, in the same pass and by the
+    // same rule as every other derived value. SE0450's check comes with them:
+    // `sec` rejected a bad elaborated default, and this rejects a bad
+    // configured one, which is the only place it can now be caught (§16.4).
+    bool any = false;
+    for (const Leaf& leaf : m_.leaves) {
+        if (!dynamic_rate(leaf)) continue;
+        if (!any) {
+            o_ << "\n    se_cfg_error_.clear();\n";
+            any = true;
+        }
+        const std::string path = leaf.path.empty() ? std::string("<root>") : leaf.path;
+        o_ << "    if (!se_rt::decimation_of(1.0 / step_seconds, " << param_base(leaf.path)
+           << ".rate, " << decim_of(leaf) << ") && se_cfg_error_.empty())\n";
+        o_ << "        se_cfg_error_ = se_rt::rate_error(" << quote(path + ".rate") << ", "
+           << param_base(leaf.path) << ".rate, 1.0 / step_seconds);\n";
+    }
+    o_ << "}\n";
 }
 
 void Emitter::sim_elaborate() {
@@ -789,10 +934,10 @@ void Emitter::sim_output_pass() {
         const std::string call = leaf.ident + ".output(" + in_braces(leaf, out) + ", sig." +
                                  leaf.ident + ");";
         if (needs_tick_gate(leaf))
-            o_ << "    if (k % " << leaf.decimation << " == 0) " << call << "\n";
-        else if (leaf.decimation > 1)
+            o_ << "    if (k % " << decim_of(leaf) << " == 0) " << call << "\n";
+        else if (dynamic_rate(leaf))
             o_ << "    " << pad(call, 54) << " // " << leaf.decimation
-               << ":1, but a function of state alone\n";
+               << ":1 by default, but a function of state alone\n";
         else
             o_ << "    " << call << "\n";
     }
@@ -826,10 +971,10 @@ void Emitter::sim_on_step() {
         std::string args = in_braces(leaf, s);
         if (leaf.has_discrete()) args += ", nxt." + leaf.ident;
         if (!leaf.node->vars.empty()) args += ", " + leaf.ident + ".var";
-        if (leaf.decimation > 1)
-            o_ << "    if (k % " << leaf.decimation << " == 0) " << leaf.ident
+        if (dynamic_rate(leaf))
+            o_ << "    if (k % " << decim_of(leaf) << " == 0) " << leaf.ident
                << ".on_step(" << args << ");"
-               << "   // " << leaf.decimation << ":1\n";
+               << "   // " << leaf.decimation << ":1 by default\n";
         else
             o_ << "    " << leaf.ident << ".on_step(" << args << ");\n";
     }
@@ -900,6 +1045,9 @@ void Emitter::sim_run() {
 
     // ── init ─────────────────────────────────────────────────────────────────
     o_ << "\ninline void Sim::init() {\n";
+    o_ << "    // §6.2b — configuration precedes init(), so a value it refused stops\n";
+    o_ << "    // the run here, before any node sees state it was never compiled for.\n";
+    o_ << "    if (!se_cfg_error_.empty()) { se_rt::control().fail(se_cfg_error_); return; }\n";
     o_ << "    apply_initial_conditions();\n";
     o_ << "    se_tick_ = 0;\n    se_time_ = 0.0;\n    se_done_ = false;\n";
     o_ << "    se_inited_ = 0;\n";
@@ -1025,8 +1173,10 @@ void Emitter::sim_class() {
     // The class body is the interface and the data layout; every body follows
     // it, so `struct Sim { … };` can be read in one screen.
     o_ << "struct Sim {\n";
+    build_param_bases();
     sim_members();
     o_ << "};\n";
+    sim_resolve_settings();
     sim_elaborate();
     sim_init();
     sim_output_pass();
@@ -1066,8 +1216,10 @@ std::vector<Emitter::SlotRow> Emitter::signal_rows() const {
         };
 
     for (const BoundaryIn& b : m_.boundary_in) go(b.path, "in." + b.ident, b.type);
+    // §6.2a — `leaf.ports_out`, not `leaf.node->outputs`: the definition only
+    // knows `(U)`, and the manifest promises a real unit.
     for (const Leaf& leaf : m_.leaves)
-        for (const Field& f : leaf.node->outputs)
+        for (const Field& f : leaf.ports_out)
             go(leaf.path.empty() ? f.name : leaf.path + "." + f.name,
                leaf.ident + "." + f.name, f.type);
     return rows;
@@ -1246,21 +1398,36 @@ std::string Emitter::manifest() {
         t << pad("", 10) << pad(b.path, 24) << b.type.unit.str() << "\n";
     if (m_.boundary_out.empty()) t << "          (none)\n";
 
-    t << "\n[settings]                # elaborated values, post-conversion\n";
-    for (const Leaf& leaf : m_.leaves)
-        for (const SettingValue& s : leaf.settings) {
-            if (s.name == "rate") continue;
-            t << pad("", 10) << pad(leaf.path + "." + s.name, 24) << pad(s.unit.str(), 12)
-              << "= " << literal(s.value, s.scalar) << "\n";
+    // §15.6 — the configuration schema (§14.1): every path a settings source may
+    // bind, the unit it is checked against, and the value elaboration produced.
+    // A derived setting also shows what it is derived FROM, path-addressed, so
+    // the file says which knobs move which values without the reader having to
+    // open the model.
+    t << "\n[settings]                # configurable; value is the elaborated default\n";
+    for (const SettingSlot& s : m_.settings) {
+        t << pad("", 10) << pad(s.path, 24) << pad(s.unit.str(), 12) << "= "
+          << literal(s.value, s.scalar);
+        if (!s.constant) {
+            std::string e;
+            for (const ExprTok& tok : s.expr)
+                e += tok.kind == ExprTok::Kind::Param
+                         ? (tok.owner.empty() ? tok.text : tok.owner + "." + tok.text)
+                         : tok.text;
+            t << "   <- " << e;
         }
+        t << "\n";
+    }
 
-    t << "\n[rates]                   # integer decimations of the base step\n";
+    // Every node that declares `rate`, not only the ones elaboration decimated:
+    // the decimation is derived at configuration (§9.2), so a node sitting at
+    // the base step today is still a node whose schedule an override can move.
+    t << "\n[rates]                   # decimations, derived from `rate` at configuration\n";
     for (const Leaf& leaf : m_.leaves) {
-        if (leaf.decimation <= 1) continue;
+        if (!dynamic_rate(leaf)) continue;
         char buf[64];
         std::snprintf(buf, sizeof buf, "%g Hz", 1.0 / (m_.step * leaf.decimation));
         t << pad("", 10) << pad(leaf.path, 24) << pad(buf, 12) << "= every "
-          << leaf.decimation << " ticks\n";
+          << leaf.decimation << (leaf.decimation == 1 ? " tick" : " ticks") << "\n";
     }
 
     t << "\n[types]\n";

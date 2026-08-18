@@ -1,0 +1,21 @@
+// Two-input adder.
+//
+// The language has a normative dependency on this node: §6.9.2 forbids fan-in
+// and tells the user to "insert an explicit `Sum` node", so `SE0442`'s suggested
+// fix is only actionable because this exists.
+//
+// Two inputs, not N: a wide adder needs `output(*)` — "reads every input" —
+// which is parked (Appendix C). Chain them until then.
+package std.math;
+
+node Sum {
+    units { U; }
+
+    inputs  { a (U): double;  b (U): double; }
+    outputs { y (U): double; }
+
+    // Reads both inputs at the sample instant, so it is feedthrough on both and
+    // cannot break a loop. That is what an adder is; put the state in the block
+    // that should have it.
+    output(a, b) { out.y = in.a + in.b; }
+}

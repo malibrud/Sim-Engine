@@ -148,6 +148,11 @@ void dump(std::ostream& o, const ast::ModelFile& f) {
         o << indent(1) << "node " << n.name << "  [line " << n.loc.line << "]  kind="
           << (n.is_composite() ? "composite" : (n.has_code() ? "leaf" : "stub")) << "\n";
 
+        if (n.sec_units.present) {
+            o << indent(2) << "units\n";
+            for (const ast::UnitParamDecl& u : n.unit_params)
+                o << indent(3) << u.name << "\n";
+        }
         if (n.sec_settings.present) {
             o << indent(2) << "settings\n";
             for (const ast::SettingDecl& s : n.settings) {
@@ -211,7 +216,11 @@ void dump(std::ostream& o, const ast::ModelFile& f) {
         if (n.sec_structure.present) {
             o << indent(2) << "structure\n";
             for (const ast::Instance& i : n.structure.instances) {
-                o << indent(3) << "node " << i.name << " : " << i.definition.str() << "\n";
+                o << indent(3) << "node " << i.name << " : " << i.definition.str();
+                for (std::size_t k = 0; k < i.unit_args.size(); ++k)
+                    o << (k ? ", " : " (") << unit_to_string(i.unit_args[k].get());
+                if (!i.unit_args.empty()) o << ")";
+                o << "\n";
                 dump_bindings(o, 4, i.bindings);
             }
             for (const ast::Wire& w : n.structure.wires) {

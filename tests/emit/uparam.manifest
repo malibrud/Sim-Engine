@@ -1,0 +1,46 @@
+﻿# ----------------------------------------------------------------------------
+#  GENERATED — DO NOT EDIT.
+#  Unit manifest for: Sim.generated.hpp
+#  sim: UParam   root: uparam.UParam   base step: 0.001 s
+#
+#  Units are checked by the DSL compiler at every declarative site and then
+#  ERASED — the generated C++ is plain `double` throughout. This file is where
+#  the erased information goes. It is a real generator output, not
+#  documentation: it is the contract for anyone writing an external solver,
+#  feeding the root boundary, or overriding a setting from outside the model.
+#
+#  Every value named here is IN THE UNIT SHOWN. `-` means dimensionless.
+# ----------------------------------------------------------------------------
+
+[state.continuous]        # slot | model path | unit  -- the solver's ABI
+          (none)
+
+[state.discrete]          # Sim::dis; offsets from Sim::discrete_map()
+          src.t                   -           double
+          acc.a                   -           double
+
+[signals]                 # Sim::sig; offsets from Sim::signal_map()
+          src.y                   m/s^2       double
+          flt.y                   m/s^2       double
+          acc.y                   m/s         double
+          dec.y                   m/s^2       double
+
+[boundary.in]             # root inputs the host must drive, as sig.in.*
+          (none)
+
+[boundary.out]            # root outputs the host may read
+          acc.y                   m/s
+
+[settings]                # configurable; value is the elaborated default
+          flt.k                   -           = 0.5
+          flt.limit               m/s^2       = 2.7777777777777777
+          flt.fs                  Hz          = 1000.0
+          dec.rate                Hz          = 200.0
+          dec.fs                  Hz          = 200.0   <- dec.rate
+          dec.dt                  s           = 0.005   <- 1.0 / dec.rate
+          dec.unity               -           = 1.0   <- dec.rate * (1.0 / dec.rate)
+
+[rates]                   # decimations, derived from `rate` at configuration
+          dec                     200 Hz      = every 5 ticks
+
+[types]
