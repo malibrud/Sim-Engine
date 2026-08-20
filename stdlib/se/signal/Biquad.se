@@ -9,11 +9,11 @@
 //
 // Instantiate this directly to enter H(s) yourself:
 //
-//     node hp : std.signal.Biquad (m/s^2) {
+//     node hp : se.signal.Biquad (m/s^2) {
 //         a0 = 1.0;  a1 = 8.68;  a2 = 9.61;      // s^2 + 8.68 s + 9.61
 //         b0 = 1.0;  b1 = 0.0;   b2 = 0.0;       // s^2          -> high-pass
 //     };
-package std.signal;
+package se.signal;
 
 node Biquad {
     units { U; }
@@ -77,7 +77,7 @@ node Biquad {
         out.y = var.db0 * w0 + var.db1 * state.w1 + var.db2 * state.w2;
     }
 
-    on_step(x) {
+    next(x) {
         const double w0 = in.x - var.da1 * state.w1 - var.da2 * state.w2;
         next.w1 = w0;
         next.w2 = state.w1;

@@ -1,0 +1,18 @@
+// Numerical check for the continuous biquad. Batch mode, so the suite does not
+// spend wall-clock time spinning at frame boundaries.
+sim ContBq {
+    root: contbq.ContBq {};
+
+    step:     1 (ms);
+    solver:   rk4;
+    duration: 2 (s);
+
+    record: {
+        file:  "contbq.csv";
+        every: 100;          // 10 Hz in the file, off a 1 kHz base step
+        signals {
+            lp.y;
+            hp.y;
+        }
+    }
+}

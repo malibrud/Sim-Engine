@@ -1,0 +1,51 @@
+// Numerical check for se.signal.ContinuousBiquad, the stdlib's first block with
+// continuous states. Both sections are driven by the same unit step and both
+// have an exact closed form, which is what tests/run.ps1 compares the recorded
+// CSV against — the same treatment `decay` gets, rather than a golden file.
+//
+// The two share poles (wn = 2 rad/s, zeta = 0.5) and differ only in numerator,
+// which is how the coefficient paths get covered between them:
+//
+//   lp:  4 / (s^2 + 2 s + 4)     exercises a1, a2, b2 and the `cw` tap
+//   hp:  s^2 / (s^2 + 2 s + 4)   exercises b0 — the direct term and the
+//                                corrections it puts on both taps
+//
+// hp is the sharper of the two: its step response starts at exactly 1, so a
+// dropped or mis-signed direct term is wrong in the very first recorded row.
+package contbq;
+
+use se.signal;
+
+node ContBq {
+    outputs {
+        lp_y (-): double;
+        hp_y (-): double;
+    }
+
+    structure {
+        node src : Step {};
+
+        node lp : signal.ContinuousBiquad (-) {
+            a0 = 1.0;  a1 = 2.0;  a2 = 4.0;
+            b0 = 0.0;  b1 = 0.0;  b2 = 4.0;
+        };
+        node hp : signal.ContinuousBiquad (-) {
+            a0 = 1.0;  a1 = 2.0;  a2 = 4.0;
+            b0 = 1.0;  b1 = 0.0;  b2 = 0.0;
+        };
+
+        src.u --> lp.x;
+        src.u --> hp.x;
+
+        lp.y --> self.lp_y;
+        hp.y --> self.hp_y;
+    }
+}
+
+// File-private: a unit step that is already high at t = 0, so the closed forms
+// hold from the first sample. Purely algebraic — no states, so no next().
+node Step {
+    outputs { u (-): double; }
+
+    output() { out.u = 1.0; }
+}

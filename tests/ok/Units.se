@@ -3,8 +3,8 @@
 // grammar admits must parse and round-trip.
 package tests;
 
-use std.mech.Damper;
-use std.mech;
+use se.mech.Damper;
+use se.mech;
 
 node Units {
     settings {

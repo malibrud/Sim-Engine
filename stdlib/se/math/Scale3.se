@@ -1,0 +1,23 @@
+// Multiply a vector by a scalar gain, changing its dimension by the gain's.
+//
+// `Vec3(U)` times `(Gain)` gives `Vec3(U*Gain)`, which is the smallest block that
+// demonstrates why unit parameters are worth having: ONE definition covers
+// every pair. Bind `Gain` dimensionless for a plain gain, `(s)` to turn a rate
+// into an increment, `(kg)` to turn an acceleration into a force.
+package se.math;
+
+use se.math;
+
+node Scale3 {
+    units    { U; Gain; }
+    settings { k (Gain): double = 1.0; }
+
+    inputs   { v: math.Vec3(U); }
+    outputs  { y: math.Vec3(U*Gain); }
+
+    output(v) {
+        out.y.x = in.v.x * param.k;
+        out.y.y = in.v.y * param.k;
+        out.y.z = in.v.z * param.k;
+    }
+}

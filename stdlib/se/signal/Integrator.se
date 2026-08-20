@@ -8,7 +8,7 @@
 // what reproduces a bilinear-designed reference. A continuous integrator — one
 // that joins the solver's state vector via `der.` — is a different block and is
 // not this one.
-package std.signal;
+package se.signal;
 
 node Integrator {
     units { U; }
@@ -33,5 +33,5 @@ node Integrator {
         out.y = var.g * (w0 + state.w1);
     }
 
-    on_step(x) { next.w1 = in.x + state.w1; }
+    next(x) { next.w1 = in.x + state.w1; }
 }

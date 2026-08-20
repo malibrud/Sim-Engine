@@ -29,7 +29,7 @@ node Section {
                discrete w2 (-): double = 0.0; }
 
     output(x)  { out.y = in.x; out.y_dot = 0.0; }
-    on_step(x) { next.w1 = in.x; next.w2 = state.w1; }
+    next(x) { next.w1 = in.x; next.w2 = state.w1; }
 }
 
 // Dimension-changing: the output unit is DERIVED from the input's, which is
@@ -41,5 +41,5 @@ node Integrate {
     states  { discrete a (-): double = 0.0; }
 
     output()   { out.y = state.a; }
-    on_step(x) { next.a = state.a + in.x; }
+    next(x) { next.a = state.a + in.x; }
 }

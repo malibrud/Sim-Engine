@@ -1,0 +1,98 @@
+﻿# ----------------------------------------------------------------------------
+#  GENERATED — DO NOT EDIT.
+#  Unit manifest for: Sim.generated.hpp
+#  sim: Vec3Chk   root: vec3.Vec3Chk   base step: 0.001 s
+#
+#  Units are checked by the DSL compiler at every declarative site and then
+#  ERASED — the generated C++ is plain `double` throughout. This file is where
+#  the erased information goes. It is a real generator output, not
+#  documentation: it is the contract for anyone writing an external solver,
+#  feeding the root boundary, or overriding a setting from outside the model.
+#
+#  Every value named here is IN THE UNIT SHOWN. `-` means dimensionless.
+# ----------------------------------------------------------------------------
+
+[state.continuous]        # slot | model path | unit  -- the solver's ABI
+x[0]      lx.w                    -
+xd[0]     lx.w'                   1/s
+x[1]      lx.wd                   -
+xd[1]     lx.wd'                  1/s
+x[2]      ly.w                    -
+xd[2]     ly.w'                   1/s
+x[3]      ly.wd                   -
+xd[3]     ly.wd'                  1/s
+x[4]      lz.w                    -
+xd[4]     lz.w'                   1/s
+x[5]      lz.wd                   -
+xd[5]     lz.wd'                  1/s
+
+[state.discrete]          # Sim::dis; offsets from Sim::discrete_map()
+          (none)
+
+[signals]                 # Sim::sig; offsets from Sim::signal_map()
+          src.a.x                 m/s^2       double
+          src.a.y                 m/s^2       double
+          src.a.z                 m/s^2       double
+          dt.y.x                  m/s         double
+          dt.y.y                  m/s         double
+          dt.y.z                  m/s         double
+          sp.x                    m/s         double
+          sp.y                    m/s         double
+          sp.z                    m/s         double
+          lx.y                    m/s         double
+          ly.y                    m/s         double
+          lz.y                    m/s         double
+          mg.v.x                  m/s         double
+          mg.v.y                  m/s         double
+          mg.v.z                  m/s         double
+          nm.y                    m/s         double
+          om.w.x                  rad/s       double
+          om.w.y                  rad/s       double
+          om.w.z                  rad/s       double
+          arm.r.x                 m           double
+          arm.r.y                 m           double
+          arm.r.z                 m           double
+          cr.y.x                  rad*m/s     double
+          cr.y.y                  rad*m/s     double
+          cr.y.z                  rad*m/s     double
+
+[boundary.in]             # root inputs the host must drive, as sig.in.*
+          (none)
+
+[boundary.out]            # root outputs the host may read
+          mg.v.x                  m/s
+          mg.v.y                  m/s
+          mg.v.z                  m/s
+          nm.y                    m/s
+          cr.y.x                  rad*m/s
+          cr.y.y                  rad*m/s
+          cr.y.z                  rad*m/s
+
+[settings]                # configurable; value is the elaborated default
+          dt.k                    s           = 0.5
+          lx.a0                   -           = 1.0
+          lx.a1                   -           = 2.0
+          lx.a2                   -           = 4.0
+          lx.b0                   -           = 0.0
+          lx.b1                   -           = 0.0
+          lx.b2                   -           = 4.0
+          ly.a0                   -           = 1.0
+          ly.a1                   -           = 2.0
+          ly.a2                   -           = 4.0
+          ly.b0                   -           = 0.0
+          ly.b1                   -           = 0.0
+          ly.b2                   -           = 4.0
+          lz.a0                   -           = 1.0
+          lz.a1                   -           = 2.0
+          lz.a2                   -           = 4.0
+          lz.b0                   -           = 0.0
+          lz.b1                   -           = 0.0
+          lz.b2                   -           = 4.0
+
+[decimation]              # derived from `rate` at configuration
+
+[types]
+se.math.Vec3                      units { U }
+se.math.Vec3.x                    U
+se.math.Vec3.y                    U
+se.math.Vec3.z                    U

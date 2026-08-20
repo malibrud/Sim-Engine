@@ -1,0 +1,62 @@
+// Classical washout — the TRANSLATIONAL CHANNEL, from Reid & Nahon (1985),
+// UTIAS Report No. 296.
+//
+// This is a partial model, and deliberately so: it is the acceptance test for
+// parametric record types (§5.2). What it has to demonstrate is that a `Vec3`
+// composes with the scalar signal library rather than standing apart from it.
+//
+// Present:  specific force in -> scale + limit -> high-pass -> platform accel.
+// Absent:   tilt coordination (needs the low-pass channel and Euler/quaternion
+//           types), the rotational channel, and the double integration to
+//           platform position (records may not be `continuous` states yet, §5.2,
+//           so that is scalar work once the states are written out).
+//
+// COORDINATE CONVENTION -- SAE, matching `se.math.Vec3` and the predecessor
+// implementation: X forward/north, Y right/east, Z down. Specific force is what
+// an accelerometer reads, f = a - g, so at rest and level it is {0, 0, -9.81}.
+// The compiler does not check this and cannot (see Vec3.se); it is a contract
+// between the model and whoever drives its boundary.
+package washout;
+
+use se.math;
+use se.signal;
+
+node Classical {
+    inputs  { f: math.Vec3(m/s^2); }        // specific force, vehicle body frame
+    outputs { a: math.Vec3(m/s^2); }        // commanded platform acceleration
+
+    structure {
+        // Per-axis scaling and limiting. `Split3` is what lets the vector meet
+        // the scalar library: a wire carries the whole record (§5.3), so the
+        // three axes have to be named before a scalar block can see them.
+        node sp : math.Split3 (m/s^2) {};
+
+        node sx : signal.ScaleLimit (m/s^2) { gain = 0.6; limit = 5.0; };
+        node sy : signal.ScaleLimit (m/s^2) { gain = 0.6; limit = 5.0; };
+        node sz : signal.ScaleLimit (m/s^2) { gain = 0.4; limit = 4.0; };
+
+        // Second-order high-pass, s^2 / (s^2 + 2*zeta*wn*s + wn^2). Continuous,
+        // so the platform states join the global solver rather than being
+        // discretised per block.
+        node hx : signal.ContinuousBiquad (m/s^2) {
+            a0 = 1.0;  a1 = 4.0;  a2 = 4.0;
+            b0 = 1.0;  b1 = 0.0;  b2 = 0.0;
+        };
+        node hy : signal.ContinuousBiquad (m/s^2) {
+            a0 = 1.0;  a1 = 4.0;  a2 = 4.0;
+            b0 = 1.0;  b1 = 0.0;  b2 = 0.0;
+        };
+        node hz : signal.ContinuousBiquad (m/s^2) {
+            a0 = 1.0;  a1 = 2.0;  a2 = 1.0;
+            b0 = 1.0;  b1 = 0.0;  b2 = 0.0;
+        };
+
+        node mg : math.Merge3 (m/s^2) {};
+
+        self.f --> sp.v;
+        sp.x --> sx.x;   sp.y --> sy.x;   sp.z --> sz.x;
+        sx.y --> hx.x;   sy.y --> hy.x;   sz.y --> hz.x;
+        hx.y --> mg.x;   hy.y --> mg.y;   hz.y --> mg.z;
+        mg.v --> self.a;
+    }
+}

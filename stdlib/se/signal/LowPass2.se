@@ -12,7 +12,7 @@
 // (§4.3), so `2 zeta wn` has to come out in rad/s and `wn^2` in (rad/s)^2.
 // Invert one of them, or drop a factor of wn, and it is a compile error rather
 // than a filter that runs and is wrong.
-package std.signal;
+package se.signal;
 
 node LowPass2 {
     units { U; }
@@ -66,7 +66,7 @@ node LowPass2 {
         out.y = var.db0 * w0 + var.db1 * state.w1 + var.db2 * state.w2;
     }
 
-    on_step(x) {
+    next(x) {
         const double w0 = in.x - var.da1 * state.w1 - var.da2 * state.w2;
         next.w1 = w0;
         next.w2 = state.w1;

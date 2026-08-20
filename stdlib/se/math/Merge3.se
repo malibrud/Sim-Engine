@@ -1,0 +1,18 @@
+// Three scalars -> Vec3. The inverse of `Split3`; see its header for why the
+// pair exists.
+package se.math;
+
+use se.math;
+
+node Merge3 {
+    units { U; }
+
+    inputs  { x (U): double;  y (U): double;  z (U): double; }
+    outputs { v: math.Vec3(U); }
+
+    output(x, y, z) {
+        out.v.x = in.x;
+        out.v.y = in.y;
+        out.v.z = in.z;
+    }
+}

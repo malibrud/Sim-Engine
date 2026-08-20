@@ -78,7 +78,8 @@ private:
     bool parse_node_def(ast::NodeDef& out);
     bool parse_node_item(ast::NodeDef& node);
     bool parse_field_list(std::vector<ast::FieldDecl>& out, const char* what,
-                          bool allow_records);
+                          bool allow_records, ast::SectionMark* sec_units = nullptr,
+                          std::vector<ast::UnitParamDecl>* unit_params = nullptr);
     bool parse_unit_param_list(std::vector<ast::UnitParamDecl>& out);
     bool parse_setting_list(std::vector<ast::SettingDecl>& out);
     bool parse_state_list(std::vector<ast::StateDecl>& out);

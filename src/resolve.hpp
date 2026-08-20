@@ -68,6 +68,9 @@ private:
     bool resolve_type(const FileInfo& file, const ast::TypeRef& ref, Type& out);
     // Validates `units { … }` and returns the names, in declaration order.
     std::vector<std::string> resolve_unit_params(const FileInfo& file,
+                                                 const ast::SectionMark& sec,
+                                                 const std::vector<ast::UnitParamDecl>& params);
+    std::vector<std::string> resolve_unit_params(const FileInfo& file,
                                                  const ast::NodeDef& def);
     std::vector<std::string> unit_params_;
 

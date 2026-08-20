@@ -27,7 +27,7 @@ node Decay {
         state.x = param.x0;
     }
 
-    rates() {
+    derivative() {
         der.x = -param.k * state.x;
     }
 

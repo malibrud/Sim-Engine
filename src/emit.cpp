@@ -222,6 +222,7 @@ private:
     void sim_init();
     void sim_output_pass();
     void sim_derivatives();
+    void sim_next();
     void sim_on_step();
     void sim_integrate();
     void sim_record();
@@ -286,8 +287,9 @@ void Emitter::verbatim(const Verbatim& v, const std::string& src_path) {
 // `state` is const through `this`. What is left is purely names being brought
 // into scope where §8.4 says they are legal, and withheld where it does not.
 //
-// `output()` and `rates()` get nothing at all: the leaf already holds a
-// trace-only `log` member, so their bodies are verbatim from brace to brace.
+// The three pure methods -- `output()`, `derivative()` and `next()` -- get
+// nothing at all: the leaf already holds a trace-only `log` member, so their
+// bodies are verbatim from brace to brace.
 void Emitter::preamble(const NodeInfo& node, ast::Method::Which which, const char* ind) {
     using W = ast::Method::Which;
     const bool mutating = which == W::Init || which == W::OnStep || which == W::Final;
@@ -418,7 +420,7 @@ void Emitter::leaf_class(const NodeInfo& node) {
     }
     if (node.has_discrete()) {
         // This node's slice of the discrete block. It is also the type of
-        // `on_step`'s `next` out-parameter — the x+ = h(t,x,u) buffer is the
+        // `next()`'s `next` out-parameter — the x+ = h(t,x,u) buffer is the
         // same shape as the storage, which is what makes one whole-block
         // `dis = nxt` a simultaneous update across the entire model (§6.4).
         rows.clear();
@@ -441,9 +443,11 @@ void Emitter::leaf_class(const NodeInfo& node) {
     for (const ast::Method& meth : node.def->methods) {
         using W = ast::Method::Which;
         if (meth.which == W::Init || meth.which == W::Final) continue;
-        const std::string name = std::string("In_") + (meth.which == W::Output  ? "output"
-                                                       : meth.which == W::Rates ? "rates"
-                                                                                : "step");
+        const std::string name =
+            std::string("In_") + (meth.which == W::Output       ? "output"
+                                  : meth.which == W::Derivative ? "derivative"
+                                  : meth.which == W::Next       ? "next"
+                                                                : "step");
         rows.clear();
         for (const std::string& p : meth.params) {
             const Field* f = node.input(p);
@@ -507,12 +511,18 @@ void Emitter::leaf_class(const NodeInfo& node) {
             case W::Output:
                 o_ << "    void output(const In_output& in, Out& out) const {\n";
                 break;
-            case W::Rates:
-                o_ << "    void rates(const In_rates& in, Der& der) const {\n";
+            case W::Derivative:
+                o_ << "    void derivative(const In_derivative& in, Der& der) const {\n";
+                break;
+            case W::Next:
+                // The parameter shadows this member function's own name. Legal,
+                // and invisible to authors: §11 copies bodies verbatim, so what a
+                // body writes is `next.<state>`, which resolves to the parameter.
+                // The accessor token has to be spelled `next` (§6.10).
+                o_ << "    void next(const In_next& in, Store& next) const {\n";
                 break;
             case W::OnStep:
                 o_ << "    void on_step(const In_step& in"
-                   << (node.has_discrete() ? ", Store& next" : "")
                    << (has_vars ? ", Var& var" : "") << ") const {\n";
                 break;
             case W::Final: {
@@ -787,6 +797,7 @@ void Emitter::sim_members() {
     o_ << "\n    void bind();\n";
     o_ << "    void apply_initial_conditions();\n";
     o_ << "    void output_pass(std::uint64_t k);\n";
+    o_ << "    void next_tick(std::uint64_t k);\n";
     o_ << "    void on_step_tick(std::uint64_t k);\n";
     o_ << "    void integrate(double t, double h);\n";
     o_ << "    void final_all(const se_rt::RunContext& ctx) const;\n";
@@ -886,7 +897,8 @@ void Emitter::sim_elaborate() {
                << pad(literal(s.initial, s.scalar) + ";", 10) << " // " << s.unit.str()
                << "\n";
         }
-    if (any_discrete) o_ << "    nxt = dis;   // so the first commit is a no-op\n";
+    if (any_discrete)
+        o_ << "    nxt = dis;   // so the first `dis = nxt` is a no-op\n";
     o_ << "}\n";
 }
 
@@ -950,26 +962,47 @@ void Emitter::sim_derivatives() {
     o_ << "inline void Sim::derivatives(double t) {\n    (void)t;\n";
     o_ << "    output_pass(se_tick_);\n";
     for (const Leaf& leaf : m_.leaves) {
-        const ast::Method* r = leaf.node->method(ast::Method::Which::Rates);
+        const ast::Method* r = leaf.node->method(ast::Method::Which::Derivative);
         if (!r || !leaf.has_continuous()) continue;
-        o_ << "    " << leaf.ident << ".rates(" << in_braces(leaf, r) << ", "
+        o_ << "    " << leaf.ident << ".derivative(" << in_braces(leaf, r) << ", "
            << leaf.ident << "_der);\n";
     }
     o_ << "}\n";
 }
 
+// x+ = h(t,x,u), once per accepted base step, after outputs have propagated.
+void Emitter::sim_next() {
+    o_ << "\n// Every next() reads `dis` and writes `nxt`; tick() then does one\n";
+    o_ << "// whole-block `dis = nxt`, which is what makes the update simultaneous\n";
+    o_ << "// across the MODEL and not merely within a node (§6.4). A node that did\n";
+    o_ << "// not sample this tick left its slice of `nxt` equal to `dis`, so the\n";
+    o_ << "// assignment is a no-op for it.\n";
+    o_ << "inline void Sim::next_tick(std::uint64_t k) {\n    (void)k;\n";
+    for (const Leaf& leaf : m_.leaves) {
+        const ast::Method* s = leaf.node->method(ast::Method::Which::Next);
+        if (!s || !leaf.has_discrete()) continue;
+        const std::string args = in_braces(leaf, s) + ", nxt." + leaf.ident;
+        if (dynamic_rate(leaf))
+            o_ << "    if (k % " << decim_of(leaf) << " == 0) " << leaf.ident
+               << ".next(" << args << ");"
+               << "   // " << leaf.decimation << ":1 by default\n";
+        else
+            o_ << "    " << leaf.ident << ".next(" << args << ");\n";
+    }
+    o_ << "}\n";
+}
+
+// The mutating per-step hook: `var`, natives, logging. It carries no equation,
+// which is why it is named for its moment rather than for an accessor (§8.1).
 void Emitter::sim_on_step() {
-    o_ << "\n// Once per accepted base step, after outputs have propagated. Every\n";
-    o_ << "// on_step() reads `dis` and writes `nxt`; tick() then does one whole-block\n";
-    o_ << "// `dis = nxt`, which is what makes the update simultaneous across the\n";
-    o_ << "// MODEL and not merely within a node (§6.4). A node that did not sample\n";
-    o_ << "// this tick left its slice of `nxt` equal to `dis`, so it is a no-op.\n";
+    o_ << "\n// Once per accepted base step, at each node's sample instants. Runs\n";
+    o_ << "// after next(), and like every other method in the tick it observes the\n";
+    o_ << "// tick's ENTRY state: both `dis` and `x` advance at the end of tick().\n";
     o_ << "inline void Sim::on_step_tick(std::uint64_t k) {\n    (void)k;\n";
     for (const Leaf& leaf : m_.leaves) {
         const ast::Method* s = leaf.node->method(ast::Method::Which::OnStep);
         if (!s) continue;
         std::string args = in_braces(leaf, s);
-        if (leaf.has_discrete()) args += ", nxt." + leaf.ident;
         if (!leaf.node->vars.empty()) args += ", " + leaf.ident + ".var";
         if (dynamic_rate(leaf))
             o_ << "    if (k % " << decim_of(leaf) << " == 0) " << leaf.ident
@@ -1068,14 +1101,18 @@ void Emitter::sim_run() {
     // ── tick ─────────────────────────────────────────────────────────────────
     o_ << "\n// One base tick, normatively (§9.6). A host drives the root boundary\n";
     o_ << "// through `sig.in` immediately before calling this.\n";
+    o_ << "//\n";
+    o_ << "// Every method here observes the tick's ENTRY state, and so does the\n";
+    o_ << "// recorder: one row is one consistent sample of the model at t[k]. Both\n";
+    o_ << "// state kinds advance together at the bottom, below the exit, so a run\n";
+    o_ << "// that stops is left holding a valid checkpoint (§15.5).\n";
     o_ << "inline void Sim::tick() {\n";
     o_ << "    se_time_ = static_cast<double>(se_tick_) * step_seconds;\n";
     o_ << "    se_rt::sim_time() = se_time_;\n";
     o_ << "    output_pass(se_tick_);\n";
     o_ << "    if (!se_rt::control().halted()) {\n";
+    if (any_discrete) o_ << "        next_tick(se_tick_);\n";
     o_ << "        on_step_tick(se_tick_);\n";
-    if (any_discrete)
-        o_ << "        dis = nxt;   // simultaneous update, whole model (§6.4)\n";
     o_ << "    }\n";
     if (m_.record.present) {
         if (m_.record.every > 1)
@@ -1085,6 +1122,8 @@ void Emitter::sim_run() {
     }
     o_ << "    if (se_rt::control().halted() || se_tick_ >= tick_count) {\n";
     o_ << "        se_done_ = true;\n        return;\n    }\n";
+    if (any_discrete)
+        o_ << "    dis = nxt;   // simultaneous update, whole model (§6.4)\n";
     o_ << "    integrate(se_time_, step_seconds);\n";
     if (m_.realtime && m_.sync_steps > 0)
         o_ << "    if ((se_tick_ + 1) % " << m_.sync_steps
@@ -1181,6 +1220,7 @@ void Emitter::sim_class() {
     sim_init();
     sim_output_pass();
     sim_derivatives();
+    sim_next();
     sim_on_step();
     sim_integrate();
     sim_record();
@@ -1212,7 +1252,7 @@ std::vector<Emitter::SlotRow> Emitter::signal_rows() const {
                 return;
             }
             for (const Field& f : ty.record->fields)
-                go(p + "." + f.name, mem + "." + f.name, f.type);
+                go(p + "." + f.name, mem + "." + f.name, field_type(ty, f));
         };
 
     for (const BoundaryIn& b : m_.boundary_in) go(b.path, "in." + b.ident, b.type);
@@ -1274,7 +1314,7 @@ std::string Emitter::hpp() {
     o_ << "\n//\n";
     o_ << "//  Reading this file: everything is generated EXCEPT the body of each\n";
     o_ << "//  lifecycle method, which is copied byte for byte from the `.se` source\n";
-    o_ << "//  named in the `#line` directive above it. `output()` and `rates()` have\n";
+    o_ << "//  named in the `#line` directive above it. The pure methods have\n";
     o_ << "//  no generated lines at all — brace to brace, they are the model author's.\n";
     o_ << "// " << std::string(76, '-') << "\n";
     o_ << "#pragma once\n\n";
@@ -1421,7 +1461,7 @@ std::string Emitter::manifest() {
     // Every node that declares `rate`, not only the ones elaboration decimated:
     // the decimation is derived at configuration (§9.2), so a node sitting at
     // the base step today is still a node whose schedule an override can move.
-    t << "\n[rates]                   # decimations, derived from `rate` at configuration\n";
+    t << "\n[decimation]              # derived from `rate` at configuration\n";
     for (const Leaf& leaf : m_.leaves) {
         if (!dynamic_rate(leaf)) continue;
         char buf[64];
@@ -1430,11 +1470,22 @@ std::string Emitter::manifest() {
           << leaf.decimation << (leaf.decimation == 1 ? " tick" : " ticks") << "\n";
     }
 
+    // Field units are shown AS DECLARED, so a parametric record reports `U`
+    // rather than any one binding. The substituted units are the per-field rows
+    // in [signals] and [boundary.*], which is where a host reads them; this
+    // section says what the type is, not how one reference bound it (§5.2).
     t << "\n[types]\n";
-    for (const RecordInfo* r : m_.program->record_order)
+    for (const RecordInfo* r : m_.program->record_order) {
+        if (!r->unit_params.empty()) {
+            std::string ps;
+            for (std::size_t i = 0; i < r->unit_params.size(); ++i)
+                ps += (i ? ", " : "") + r->unit_params[i];
+            t << pad(r->fq, 34) << "units { " << ps << " }\n";
+        }
         for (const Field& f : r->fields)
             t << pad(r->fq + "." + f.name, 34)
               << (f.type.is_record ? f.type.record->fq : f.type.unit.str()) << "\n";
+    }
 
     if (m_.record.present) {
         t << "\n[recorded]                # columns of " << m_.record.file << "\n";

@@ -1,0 +1,21 @@
+// Euclidean magnitude: `Vec3(U) -> (U)`.
+//
+// Dimension-preserving, which is the assertion worth making here -- a magnitude
+// carries its components' unit, so a speed's magnitude is a speed. The unit
+// parameter is what lets that be stated once rather than per dimension.
+package se.math;
+
+use se.math;
+
+node Norm3 {
+    units { U; }
+
+    inputs  { v: math.Vec3(U); }
+    outputs { y (U): double; }
+
+    // `std::sqrt` needs no include: units are erased, so this is arithmetic on
+    // plain `double` and <cmath> is already in scope of a generated body.
+    output(v) {
+        out.y = std::sqrt(in.v.x * in.v.x + in.v.y * in.v.y + in.v.z * in.v.z);
+    }
+}

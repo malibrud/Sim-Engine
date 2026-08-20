@@ -8,7 +8,7 @@
 // `limit` is declared in the unit parameter, so it is checked and converted per
 // instance: bind it as `(km/h^2)` on an `(m/s^2)` instance and the conversion
 // folds at elaboration.
-package std.signal;
+package se.signal;
 
 node ScaleLimit {
     units { U; }

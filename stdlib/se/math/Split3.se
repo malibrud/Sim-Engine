@@ -1,0 +1,29 @@
+// Vec3 -> three scalars.
+//
+// This is what lets a `Vec3` meet the scalar signal library. Every filter in
+// `se.signal` is a scalar block, and a wire carries the WHOLE record (§5.3):
+// `v.x --> hp.x` is reserved syntax that stage 3 rejects (`SE0311`). So a
+// three-axis filter chain is `Split3` -> three sections -> `Merge3`.
+//
+// That division is not a workaround so much as the honest shape. A `Vec3` earns
+// its keep at the model boundary and in operations that are genuinely vector --
+// cross products, tilt coordination, rotation -- while per-axis filtering is
+// scalar by nature and gains nothing from travelling bundled.
+package se.math;
+
+use se.math;
+
+node Split3 {
+    units { U; }
+
+    inputs  { v: math.Vec3(U); }
+    outputs { x (U): double;  y (U): double;  z (U): double; }
+
+    // Feedthrough on `v`: it is a rename, not a delay. Putting state here would
+    // hide a sample of latency inside what reads as pure plumbing.
+    output(v) {
+        out.x = in.v.x;
+        out.y = in.v.y;
+        out.z = in.v.z;
+    }
+}

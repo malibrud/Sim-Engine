@@ -1,0 +1,24 @@
+// Vector cross product: `Vec3(A) x Vec3(B) -> Vec3(A*B)`.
+//
+// The block that most justifies the whole mechanism. Without unit parameters on
+// a record type this is one definition per pair of dimensions it might be asked
+// to multiply -- omega x r, r x F, v x B -- and closed to every pair its author
+// did not think of. With them it is written once.
+//
+// Right-handed, matching the SAE convention `Vec3` documents.
+package se.math;
+
+use se.math;
+
+node Cross3 {
+    units { P; Q; }
+
+    inputs  { a: math.Vec3(P);  b: math.Vec3(Q); }
+    outputs { y: math.Vec3(P*Q); }
+
+    output(a, b) {
+        out.y.x = in.a.y * in.b.z - in.a.z * in.b.y;
+        out.y.y = in.a.z * in.b.x - in.a.x * in.b.z;
+        out.y.z = in.a.x * in.b.y - in.a.y * in.b.x;
+    }
+}

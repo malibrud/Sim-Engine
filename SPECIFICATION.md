@@ -126,7 +126,7 @@ is the C++ namespace path:
 
 ```
 <root>/drivetrain/Wheel.se        ->  package drivetrain, node drivetrain.Wheel
-<root>/std/mech/Damper.se         ->  package std.mech, node std.mech.Damper
+<root>/se/mech/Damper.se          ->  package se.mech, node se.mech.Damper
 ```
 
 The **standard library is one root** shipped with the toolchain, with no special
@@ -181,14 +181,14 @@ match.
 `use` declarations follow `package` and precede all definitions.
 
 ```
-use std.mech.Damper;      // per-symbol: bare `Damper` in this file
-use std.mech;             // package alias: `mech.Damper` in this file
+use se.mech.Damper;      // per-symbol: bare `Damper` in this file
+use se.mech;             // package alias: `mech.Damper` in this file
 ```
 
 - **Per-symbol import** binds the last segment as a bare name.
 - **Package alias import** binds the last segment as a package alias; members
   are then named `alias.Member`.
-- **No wildcard imports.** `use std.mech.*` is rejected (`SE0210`) so that every
+- **No wildcard imports.** `use se.mech.*` is rejected (`SE0210`) so that every
   name's origin is traceable from the `use` block, and so a later stdlib
   addition can never silently capture or collide with an existing name.
 - A fully-qualified name may always be used without any `use`.
@@ -276,7 +276,7 @@ Only these words are **reserved** everywhere:
 package  use  type  node  self
 settings units inputs outputs states vars native structure declarations build
 continuous discrete
-init output rates on_step final
+init output derivative next on_step final
 sim
 ```
 
@@ -414,7 +414,7 @@ Every one of these is a declarative site, checked at stage 4:
 2. A setting binding at instantiation against the child setting's unit.
 3. A state default against the state's unit.
 4. A wire: the producing port's unit against the consuming port's — per field,
-   for records.
+   for records, and per unit argument for a parametric record (§5.2).
 5. A sim-file or `.settings` value against its target's unit.
 6. A recorded signal's unit, for the CSV header and the manifest.
 
@@ -522,6 +522,33 @@ type WheelState {
 - A record field line is **syntactically identical to a scalar port line**, so a
   port is either `name (unit): ctype;` or `name: TypeName;`. One grammar, two
   shapes.
+- **A record may be parametric over its field units**, with the same `units { U; }`
+  section a node uses (§6.2a):
+
+  ```
+  type Vec3 {
+      units { U; }
+      x (U): double;  y (U): double;  z (U): double;
+  }
+  ```
+
+  One declaration then serves `Vec3(m)`, `Vec3(m/s)`, `Vec3(m/s^2)` and
+  `Vec3(rad/s)`. **The binding site is every reference, not an instantiation** —
+  a type is never instantiated — so the arguments ride the port declaration:
+  `force: math.Vec3(N);`. Arity is checked there (`SE0313`).
+- **Two references that bound a record differently are different types.** Wiring
+  `Vec3(m)` into `Vec3(m/s)` is `SE0410`, matching §6.2a's rule for
+  differently-bound node instances. Unlike a scalar port it cannot be *converted*
+  on the way through: a record travels as one value and coincides with the
+  producer's storage (§15.3).
+- **Arguments may be unit expressions over the referring node's own parameters.**
+  Inside `units { P; Q; }` a port may read `c: math.Vec3(P*Q)`, which is what
+  makes one `Cross3` cover every pair of dimensions instead of one per pair. Such
+  an argument is itself parametric and is bound again when that node is
+  instantiated.
+- **A parametric field threads down through nesting.** In
+  `type Pose { units { U; } p: Vec3(U); heading (rad): double; }` a reference to
+  `Pose(m)` substitutes into `Vec3` as well, so `p.x` reports `(m)`.
 - Fields may themselves be records; a cycle in the field graph is an error
   (`SE0310`).
 - Records lower to a plain C++ struct with one member per field, each annotated
@@ -561,8 +588,9 @@ node Wheel {
 
     init()      { … }
     output(…)   { … }
-    rates(…)    { … }
-    on_step(…)  { … }
+    derivative(…) { … }
+    next(…)       { … }
+    on_step(…)    { … }
     final(…)    { … }
 
     double helper(double x) const { … }   // verbatim private member
@@ -673,6 +701,14 @@ exactly what §4.3 exists to insert.
 Each unit variable is a bare identifier, `;`-terminated, in a `units` section.
 Declaring one that shadows an Appendix A symbol is an error (`SE0416`); so is
 declaring the same name twice (`SE0417`).
+
+**The same section serves a `type` declaration** (§5.2), with one difference
+that follows from what a type is. A node is *instantiated*, so it binds once, in
+`structure`. A type is only ever *referenced*, so it binds at every reference —
+on the port declaration, `v: math.Vec3(m/s)`. Everything else carries over
+unchanged: the same expressions, the same per-binding identity, the same
+`SE0416`/`SE0417`. Only the arity error differs, `SE0313` against `SE0419`,
+because the two name different things in their message.
 
 **Why the library needs this.** Without unit parameters a filter is written once
 per dimension it might carry — five definitions for two concepts in the motion-
@@ -817,21 +853,23 @@ to the solver.
 
 | | write accessor | written in | in the solver state vector |
 |---|---|---|---|
-| `continuous` | `der.<name>` | `rates()` | **yes** |
-| `discrete` | `next.<name>` | `on_step()` | no |
+| `continuous` | `der.<name>` | `derivative()` | **yes** |
+| `discrete` | `next.<name>` | `next()` | no |
 
 - The **write accessor is symmetric and separately enforced.** The generated
-  `Der` struct carries only continuous fields and the `Next` struct only discrete
-  ones, so `der.ticks` and `next.omega` are "no such member" compile errors with
-  no body parsing whatsoever (I2).
+  `Der` struct carries only continuous fields and the `Store` struct only
+  discrete ones, so `der.ticks` and `next.omega` are "no such member" compile
+  errors with no body parsing whatsoever (I2). (`Store`, not `Next`: the same
+  type is both the committed block `dis` and the buffer `nxt`, so naming it for
+  the buffer would be wrong half the time it is used — §15.5.)
 - **`next.` means simultaneous update.** A direct `state.x = …` mutation would be
-  *sequential*, making results depend on statement order inside `on_step()`. With
+  *sequential*, making results depend on statement order inside `next()`. With
   `next.`, every discrete state reads the old value and writes the new one, which
   is what the state-space form x⁺ = h(t,x,u) actually says. The lowering gives
   the whole model one discrete block and one buffer of the same shape (§15.5):
-  every `on_step()` reads `dis` and writes `nxt`, and the tick ends with a single
+  every `next()` reads `dis` and writes `nxt`, and the tick ends with a single
   `dis = nxt`. Simultaneity is therefore a property of the **model**, not of each
-  node in turn, and there is no per-node `commit()`. A node that did not sample
+  node in turn, and there is no per-node commit step. A node that did not sample
   this tick left its slice of `nxt` equal to `dis`, so the whole-block assignment
   is a no-op for it.
 - Only `double` may be `continuous` (`SE0431`); the state vector is a flat
@@ -852,12 +890,14 @@ Per-instance persistent storage that is **not state**: private C++ members,
 outside the solver vector and outside the override channel.
 
 - **Readable in every method; writable only in `init()` and `on_step()`.**
+  `next()` is pure and cannot write one: it carries the transition equation and
+  nothing else (§8.1).
 - A `var` needs no default; it is zero-initialised and is expected to be computed
   in `init()`.
 - Records are permitted as `vars`.
 
 The write restriction is the same rule as everywhere else in §8: `output()` and
-`rates()` are evaluated four times per RK4 step at trial states the trajectory
+`derivative()` are evaluated four times per RK4 step at trial states the trajectory
 never visits. A peak detector written as
 
 ```
@@ -865,7 +905,8 @@ output() { var.max_v = max(var.max_v, state.velocity); }   // rejected
 ```
 
 would report a maximum that never physically happened and that changes with the
-solver. Confining writes to `on_step()` makes that unrepresentable.
+solver. Confining writes to `on_step()` — which runs exactly once per accepted
+step — makes that unrepresentable.
 
 ### 6.6 `declarations`
 
@@ -910,7 +951,7 @@ native {
   the accessor design of §6.10: the prefixes exist because one name can be both
   a state and an output, and a native has no such twin.
 - **Natives are in scope only in `init()`, `on_step()`, and `final()`.** In
-  `output()` and `rates()` the generator simply does not emit the alias, so the
+  `output()`, `derivative()` and `next()` the generator simply does not emit the alias, so the
   name is undeclared and the C++ compiler says so, with `#line` pointing at the
   `.se` line. The reason is in §8.4. Note that `const` cannot do this job: a
   `const SOCKET` is still perfectly usable by `recv()`, so the purity mechanism
@@ -1015,8 +1056,8 @@ Inside a verbatim body, node data is reached through **namespaced accessors**:
 | `in.<name>` | methods that declare it | never |
 | `out.<name>` | — | `output()` |
 | `state.<name>` | every method | `init()` |
-| `der.<name>` | — | `rates()` |
-| `next.<name>` | — | `on_step()` |
+| `der.<name>` | — | `derivative()` |
+| `next.<name>` | — | `next()` |
 | `var.<name>` | every method | `init()`, `on_step()` |
 | bare name (`native`) | `init`, `on_step`, `final` | same |
 
@@ -1051,16 +1092,22 @@ functions:
 | If the node has… | it must define… | else |
 |---|---|---|
 | `outputs` | `output()` | `SE0340` |
-| any `continuous` state | `rates()` | `SE0341` |
-| any `discrete` state | `on_step()` | `SE0342` |
+| any `continuous` state | `derivative()` | `SE0341` |
+| any `discrete` state | `next()` | `SE0342` |
 
-The converse is also checked: `rates()` in a node with no continuous states
-(`SE0343`) and `output()` in a node with no outputs (`SE0344`) are errors, since
-neither could do anything.
+The converse is checked for all three, since none could do anything: `output()`
+in a node with no outputs (`SE0344`), `derivative()` in a node with no continuous
+states (`SE0343`), and `next()` in a node with no discrete states (`SE0345`).
 
-`init()` and `final()` are always optional. Note that these rules are per-kind,
-not blanket: a purely continuous node needs no `on_step()`, and a purely
-algebraic node needs no `rates()`.
+The table is symmetric because each row pairs one state kind with the one pure
+method that writes it. `init()`, `on_step()` and `final()` are always optional and
+have no converse rule — they carry no equation, so whether a body does anything is
+not decidable without parsing it, which I1 forbids.
+
+Note that the rules are per-kind, not blanket: a purely continuous node needs no
+`next()`, and a purely algebraic node needs no `derivative()`. Neither needs an
+`on_step()`, though either may have one to do per-step `var`, native or logging
+work.
 
 ---
 
@@ -1155,41 +1202,59 @@ it would need run-time signals here, which is a much larger change than it looks
 
 This is the load-bearing part of the design.
 
-### 8.1 The five methods
+### 8.1 The six methods
 
 | Method | Equation | Purity | When it runs |
 |---|---|---|---|
 | `init()` | — | mutating | Once, at run start, in elaboration order. |
 | `output()` | y = g(t, x, u) | **pure** | Whenever signals propagate — many times per step. |
-| `rates()` | ẋ = f(t, x, u) | **pure** | Every minor step (4× per RK4 step). |
-| `on_step()` | x⁺ = h(t, x, u) | mutating | Once per accepted step, at the node's sample instants. |
+| `derivative()` | ẋ = f(t, x, u) | **pure** | Every minor step (4× per RK4 step). |
+| `next()` | x⁺ = h(t, x, u) | **pure** | Once per accepted step, at the node's sample instants. |
+| `on_step()` | — | mutating | Once per accepted step, immediately after `next()`. |
 | `final(ctx)` | — | mutating | Once at run end, in reverse init order. |
 
 Write permissions, exactly:
 
 - `init()` writes `state` (the IC escape hatch) and `var`; may touch natives; may log.
 - `output()` writes `out` only.
-- `rates()` writes `der` only.
-- `on_step()` writes `next` and `var`; may touch natives; may log.
+- `derivative()` writes `der` only.
+- `next()` writes `next` only.
+- `on_step()` writes `var`; may touch natives; may log.
 - `final(ctx)` writes nothing model-visible; may touch natives; may log.
 
+**The naming rule is the purity column.** The three methods that carry an
+equation are pure and are named for the accessor they write — `out.` → `output()`,
+`der.` → `derivative()`, `next.` → `next()`. The three that carry none have no
+quantity to be named for, so they are named for the moment they fire: `init()`,
+`on_step()`, `final()`. Nothing else in the language is prefixed, and the singular
+follows the accessor rather than the section, which is why `output()` is singular
+though `outputs {}` is plural.
+
+`on_step()` earns its name by having no equation. It is the model's only general
+per-step mutating hook — `var`, natives, logging — and a node may define it with
+no `discrete` state at all. It is *not* the discrete counterpart of
+`derivative()`; `next()` is. Keeping the two apart is what lets `next()` be pure
+and lets [§6.12](#612-consistency-rules) check it in both directions.
+
 "Mutating" above describes what the method may change in the *model*, not the
-constness of the generated C++ member. All four of `output`, `rates`, `on_step`
-and `final` lower to `const` members, and each receives what it may write as an
-out-parameter — `out`, `der`, `next`, `var`. Only `init()` is non-const, because
-it writes its own storage directly. See §15.4: that uniformity is what makes the
-write permissions above compile-time facts rather than documented conventions.
+constness of the generated C++ member. All five of `output`, `derivative`, `next`,
+`on_step` and `final` lower to `const` members, and each receives what it may
+write as an out-parameter — `out`, `der`, `next`, `var`. Only `init()` is
+non-const, because it writes its own storage directly. See §15.4: that uniformity
+is what makes the write permissions above compile-time facts rather than
+documented conventions.
 
-`on_step` is named for the `on_` prefix reading as "fires at a specific moment" —
-`update()` says nothing about when, and `commit()` describes the mechanism rather
-than the event.
+`next()`'s out-parameter is named `next`, shadowing the member function inside its
+own body. That is deliberate and harmless: §11 copies bodies verbatim, so a body
+writes `next.<state>` and it resolves to the parameter. The accessor token cannot
+be spelled anything else (§6.10).
 
-### 8.2 Why `output()` and `rates()` are separate
+### 8.2 Why `output()` and `derivative()` are separate
 
 They cannot be merged, and this is not a stylistic point: **the split is the only
 reason feedback loops are simulable.** A node with no feedthrough has an
 `output()` that needs only `state`, so it can be called *before its inputs are
-known* — which is exactly what unwedges a closed loop. If `rates()` also set
+known* — which is exactly what unwedges a closed loop. If `derivative()` also set
 outputs, every node would look like a feedthrough node and loop-breaking would be
 destroyed everywhere in the model.
 
@@ -1198,8 +1263,9 @@ destroyed everywhere in the model.
 ```
 output(cmd)      { out.force = state.force + param.kff * in.cmd; }  // feedthrough on cmd
 output()         { out.velocity = state.velocity; }                 // breaks loops
-rates(cmd, load) { … }                                              // constrains nothing
-on_step(ws)      { … }                                              // constrains nothing
+derivative(cmd, load) { … }                                         // constrains nothing
+next()                { … }                                         // constrains nothing
+on_step(ws)           { … }                                         // constrains nothing
 ```
 
 - **A method's parameter list is exactly the set of inputs it reads.** The names
@@ -1211,17 +1277,17 @@ on_step(ws)      { … }                                              // constra
   error, not a silently wrong number. No runtime debug proxy is needed, and the
   question "what value should an undeclared input have?" never arises.
 - **Granularity is per-port, not per-node.** Node-level marking produces *false*
-  algebraic loops whenever a node has one feedthrough input and one rates-only
+  algebraic loops whenever a node has one feedthrough input and one derivative-only
   input.
 - **"Algebraic" and "feedthrough" are orthogonal.** A node can have states *and*
   feedthrough — a PID, or any state-space block with D ≠ 0 — so feedthrough
   cannot be derived from the leaf/composite inference.
-- Only `output()`'s list constrains ordering. `rates()` and `on_step()` run after
+- Only `output()`'s list constrains ordering. `derivative()`, `next()` and `on_step()` run after
   outputs have propagated, so their lists are documentation plus enforcement.
 
 ### 8.4 Why mutation is confined
 
-`output()` and `rates()` are evaluated **four times per RK4 step, at trial states
+`output()` and `derivative()` are evaluated **four times per RK4 step, at trial states
 the trajectory never visits**. Any side effect there fires four times, at values
 that are not on the solution. That single fact is the reason for three separate
 restrictions, which are really one restriction wearing three hats:
@@ -1241,7 +1307,7 @@ Build a graph over the nodes active on the current tick:
 > **edge M → N** iff M sources one of N's **feedthrough** inputs.
 
 - `output()` runs in **topological order** of that graph.
-- `rates()` may run in **any** order once outputs have propagated.
+- `derivative()` and `next()` may run in **any** order once outputs have propagated.
 - A node whose `In_output` is empty is a **sort root** and needs no predecessor.
   Registered discrete nodes, unit delays, and integrators are all sort roots by
   the same single mechanism, not three special cases.
@@ -1276,7 +1342,7 @@ error[SE0510]: algebraic loop through 3 nodes
    = cycle: plant.y -> ctl.e -> ctl.cmd -> act.u -> act.f -> plant.f -> plant.y
    = note: ctl.output(e) declares feedthrough on `e`      [Controller.se:22]
    = note: act.output(u) declares feedthrough on `u`      [Actuator.se:18]
-   = help: drop `u` from `act.output(u)` and latch it in on_step(), or
+   = help: drop `u` from `act.output(u)` and latch it in next(), or
            insert a unit delay / integrator anywhere in the cycle
 ```
 
@@ -1310,7 +1376,7 @@ constraint in the design:
 It also retroactively justifies rejecting algebraic loops (§8.6) — a Newton solve
 has no statable worst-case execution time.
 
-### 9.2 Rates
+### 9.2 Sampling rates and decimation
 
 `rate` is a reserved setting (§6.2) set at instantiation, flowed down through the
 expression language, and **constant from configuration onward** (§6.2b). A 100 Hz
@@ -1413,21 +1479,41 @@ across one state vector was deliberately kept closed. Normative values are
 
 ### 9.6 The tick
 
-One base tick, normatively:
+One base tick at index *k*, normatively:
 
-1. Determine the active set — base-rate nodes, plus nodes whose decimation
-   divides the tick index.
-2. **Minor steps.** For each solver stage: propagate `output()` in topological
-   order over the active set, then call `rates()` on every node with continuous
-   states, in any order. Held outputs are constants throughout.
-3. **Accept the step.** Advance `x` by the solver's combination of stage rates,
-   and advance time.
-4. **Propagate outputs** once more at the accepted state.
-5. **`on_step()`** on every active node that has discrete states or writes
-   `var`, then `commit()` the `next` buffers.
-6. **Record** (§13.5) if this tick is a recording tick.
-7. If `mode: realtime` and this tick closes a frame, spin to the frame boundary
+1. **Set the time** to *t*[k], and determine the active set — base-rate nodes,
+   plus nodes whose decimation divides *k*.
+2. **Propagate outputs.** `output()` in topological order over the active set,
+   at the tick's entry state. Held outputs are constants throughout.
+3. **`next()`** on every active node with discrete states, in any order. Each
+   reads `dis` and writes `nxt`.
+4. **`on_step()`** on every active node that defines it, in any order.
+5. **Record** (§13.5) if this tick is a recording tick.
+6. **Exit** if the run has been halted (§10.2) or *k* is the last tick.
+7. **Advance both state kinds.** `dis = nxt` for the discrete block, then
+   `x` by the solver's combination of stage rates — which is where `output()`
+   and `derivative()` are evaluated, once per solver stage, at trial states the
+   trajectory never visits (§9.5).
+8. If `mode: realtime` and this tick closes a frame, spin to the frame boundary
    and update the metrics.
+
+Two properties are load-bearing, and both come from advancing at the end.
+
+**The whole tick observes one state.** Steps 2–5 all see *x*[k] and *dis*[k], so
+one recorded row is one consistent sample of the model at *t*[k] — signals,
+continuous states and discrete states alike. It is also why `output()` sees
+*dis*[k] rather than *dis*[k+1]: y[k] = g(x[k]) precedes x⁺ = h(x[k], u[k]),
+which is what discrete-time state space says.
+
+**A stopped run holds a valid checkpoint.** The exit at step 6 is above both
+advances, so a run ending on `sim.stop`, on `sim.abort` or on the tick count
+leaves `x` + `sig` + `dis` mutually consistent — the completeness §15.5 claims
+for that triple.
+
+`next()` precedes `on_step()`, and both read the same `dis`[k], so the order
+matters only through `var`: a value `on_step()` learns from a native at tick *k*
+is stashed in a `var` and reaches a discrete state through `next()` at tick
+*k+1*. For I/O that is an honest one-sample transport delay.
 
 ---
 
@@ -1446,7 +1532,7 @@ log.trace(fmt, args…)   log.debug(…)   log.info(…)   log.warn(…)   log.e
 - `{}` positional formatting. The engine **auto-tags** every record with sim
   time, node path, and level — those are never arguments.
 - **Restricted to `init()`, `on_step()`, and `final()`** for the reason in §8.4.
-- **Escape hatch:** `log.trace` alone is permitted in `rates()` and `output()`.
+- **Escape hatch:** `log.trace` alone is permitted in the three pure methods.
   It is tagged with the substep index and suppressed unless a verbose flag is
   set, so the four-evaluations-per-step hazard is visible in the output rather
   than hidden.
@@ -1833,6 +1919,10 @@ Layering: declared state default → `init()` code → external override.
 
 ### 13.5 Recording
 
+A recorded row is the model at *t*[k] for **every** kind of value it names —
+signals, continuous states and discrete states alike. Recording happens before
+either state kind advances (§9.6 steps 5 and 7), so a row never mixes vintages.
+
 Recording is **quantitative**: an aligned numeric time-series table, distinct from
 logging in every respect.
 
@@ -2036,7 +2126,7 @@ fails, but `this->state.x = …` still compiles. A guarantee with a one-token
 escape hatch is not a guarantee, so the storage itself carries the constness.
 
 - **Purity is `const` on the method, and the writable thing is an
-  out-parameter.** `output()`, `rates()`, `on_step()` and `final()` are all const
+  out-parameter.** `output()`, `derivative()`, `next()`, `on_step()` and `final()` are all const
   members, so no body can write `state`, `var` or `param` through `this`. What a
   method may write, it receives: `Out& out`, `Der& der`, `Store& next`, `Var&
   var`. This is one rule, applied uniformly, and it is why `on_step()` can write
@@ -2065,7 +2155,7 @@ struct Wheel {
     struct State     { state_ref omega; };               // a view into Sim::x
     struct Der       { state_ref omega; };               // a view into Sim::xd
     struct Out       { WheelState ws{}; };
-    struct In_rates  { double drive_torque{}; };
+    struct In_derivative { double drive_torque{}; };
     struct In_output { double drive_torque{}; double ground_speed{}; };
 
     const Param           param;          // set at construction; never writable
@@ -2075,13 +2165,13 @@ struct Wheel {
     const se_rt::TraceLog log{se_path_};  // log.trace only (§10.1)
 
     void init();                                              // mutating
-    void rates (const In_rates&  in, Der& der) const;         // pure
+    void derivative(const In_derivative& in, Der& der) const; // pure
     void output(const In_output& in, Out& out) const;         // pure
 };
 ```
 
 A consequence worth stating, because it is the property a reader of generated
-code most wants: **`output()` and `rates()` need no preamble at all.** The
+code most wants: **the three pure methods need no preamble at all.** The
 trace-only `log` is a member, and everything else they may touch is already
 const through `this`, so between their braces there is nothing but the verbatim
 body.
@@ -2208,7 +2298,14 @@ xd[0]     whl.omega'            rad/s^2
 
 [types]
 drivetrain.WheelState.speed     rad/s
+se.math.Vec3                   units { U }
+se.math.Vec3.x                 U
 ```
+
+Field units in `[types]` are shown **as declared**, so a parametric record (§5.2)
+reports its parameter rather than any one binding — the type is shared, and no
+single binding would be true of it. The substituted units are the per-field rows
+in `[signals]` and `[boundary.*]`, which is where a host reads what to send.
 
 Paths are **root-relative** (§13.2): the `root:` entry names a definition, not an
 instance, so there is no prefix for the root itself.
@@ -2338,14 +2435,16 @@ Codes are stable. `SE01xx` lexical, `SE02xx` syntactic, `SE03xx` resolution,
 | `SE0310` | 3 | Cycle in record field types |
 | `SE0311` | 3 | Field-level wire endpoints are not supported |
 | `SE0312` | 4 | Recursive instantiation: a node transitively contains itself |
+| `SE0313` | 3 | Wrong number of unit arguments on a record reference |
 | `SE0320` | 3 | Node has both code and a `structure` block |
 | `SE0330` | 3 | Duplicate member name in a node |
 | `SE0331` | 3 | Member name shadows a generated accessor |
 | `SE0340` | 3 | `outputs` declared but no `output()` |
-| `SE0341` | 3 | Continuous state declared but no `rates()` |
-| `SE0342` | 3 | Discrete state declared but no `on_step()` |
-| `SE0343` | 3 | `rates()` in a node with no continuous states |
+| `SE0341` | 3 | Continuous state declared but no `derivative()` |
+| `SE0342` | 3 | Discrete state declared but no `next()` |
+| `SE0343` | 3 | `derivative()` in a node with no continuous states |
 | `SE0344` | 3 | `output()` in a node with no outputs |
+| `SE0345` | 3 | `next()` in a node with no discrete states |
 | `SE0350` | 3 | Method parameter is not a declared input |
 | `SE0351` | 3 | Duplicate method parameter |
 | `SE0402` | 4 | Lossy literal conversion to an integer target |
@@ -2405,9 +2504,10 @@ definition      = type_def | node_def ;
 
 (* ─── record types ───────────────────────────────────────────────────── *)
 
-type_def        = "type" IDENT "{" { field_decl } "}" ;
+type_def        = "type" IDENT "{" [ units_sec ] { field_decl } "}" ;
 field_decl      = IDENT unit ":" scalar_type ";"
-                | IDENT ":" qualified_name ";" ;
+                | IDENT ":" record_ref ";" ;
+record_ref      = qualified_name [ "(" unit_expr { "," unit_expr } ")" ] ;
 
 (* ─── nodes ──────────────────────────────────────────────────────────── *)
 
@@ -2428,7 +2528,7 @@ unit_param      = IDENT ";" ;
 inputs_sec      = "inputs"  "{" { port_decl } "}" ;
 outputs_sec     = "outputs" "{" { port_decl } "}" ;
 port_decl       = IDENT unit ":" scalar_type ";"
-                | IDENT ":" qualified_name ";" ;
+                | IDENT ":" record_ref ";" ;
 
 states_sec      = "states" "{" { state_decl } "}" ;
 state_decl      = state_kind IDENT unit ":" scalar_type [ "=" expression ] ";" ;
@@ -2465,8 +2565,9 @@ endpoint_head   = "self" | IDENT ;
 lifecycle_method= "init"    "(" ")"                VERBATIM_BLOCK
                 | "final"   "(" [ IDENT ] ")"      VERBATIM_BLOCK
                 | "output"  "(" [ ident_list ] ")" VERBATIM_BLOCK
-                | "rates"   "(" [ ident_list ] ")" VERBATIM_BLOCK
-                | "on_step" "(" [ ident_list ] ")" VERBATIM_BLOCK ;
+                | "derivative" "(" [ ident_list ] ")" VERBATIM_BLOCK
+                | "next"       "(" [ ident_list ] ")" VERBATIM_BLOCK
+                | "on_step"    "(" [ ident_list ] ")" VERBATIM_BLOCK ;
 ident_list      = IDENT { "," IDENT } ;
 
 (* A helper is any other item: verbatim C++ up to its opening brace,
@@ -2562,10 +2663,10 @@ An unknown symbol is `SE0414`, and the diagnostic must suggest near matches —
 ## Appendix B — Reserved words
 
 ```
-build       continuous  declarations  discrete  final   init      inputs
-native      node        on_step       output    outputs package   rates
-self        settings    sim           states    structure  type   units
-use         vars
+build       continuous  declarations  derivative  discrete   final     init
+inputs      native      next          node        on_step    output    outputs
+package     self        settings      sim         states     structure type
+units       use         vars
 ```
 
 `param`, `in`, `out`, `state`, `der`, `next`, `var`, `log`, and `sim` are
@@ -2591,12 +2692,23 @@ Recorded so that their absence is visibly deliberate.
    the `init`/`on_step`/`final` confinement excludes it. A real need with no
    mechanism yet.
 3. **Field-level wires** (§5.3) — `whl.ws.speed --> tc.u`. The grammar admits it;
-   the semantics currently reject it.
-4. **Platform atom vocabulary** (§12.2) — the exact set, and how extensible it is.
-5. **The fixed-step solver menu** (§9.5) beyond `euler`/`rk2`/`rk4`.
-6. **`name:` display metadata** — an optional human-readable label distinct from
+   the semantics currently reject it. `se.math.Split3`/`Merge3` cover the need
+   meanwhile, at the cost of two nodes per bundle.
+4. **Coordinate bases for record types.** A `Vec3(m/s)` in a body frame and one
+   in an inertial frame are the same type today, and adding them is a modelling
+   error nothing catches. A *checked* tag is the only shape available: unlike a
+   unit, a frame transform cannot be inserted automatically, because it needs
+   the current attitude — a run-time value — where §4.2 promises conversions
+   fold to a compile-time constant. So a mismatch could only ever be an error the
+   modeller fixes with an explicit transform node, never a silent conversion.
+   Deliberately unresolved; the standard library documents one convention (SAE)
+   instead. **If it is ever taken up, do not call it `frame`** — that word is the
+   real-time `sync`/`window` machinery of §13.6. `basis` or `axes`.
+5. **Platform atom vocabulary** (§12.2) — the exact set, and how extensible it is.
+6. **The fixed-step solver menu** (§9.5) beyond `euler`/`rk2`/`rk4`.
+7. **`name:` display metadata** — an optional human-readable label distinct from
    the type identifier. Never ruled on; currently absent.
-7. **Log file format** (§13.7) — plain text versus structured JSONL.
+8. **Log file format** (§13.7) — plain text versus structured JSONL.
 
 **Deliberately deferred, each a pure extension:**
 

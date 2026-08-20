@@ -251,19 +251,28 @@ foreach ($f in (Get-ChildItem -Path (Join-Path $root 'tests\emit') -File -Filter
     }
 }
 
-# The worked example must emit cleanly too.
-$exDir = Join-Path $emitOut 'drivetrain'
-if (Test-Path $exDir) { Remove-Item -Recurse -Force $exDir }
-New-Item -ItemType Directory -Force $exDir | Out-Null
-& $sec --no-color --quiet --emit -I examples -o ($exDir -replace '\\', '/') `
-       examples/drivetrain/Drivetrain.sim
-if ($LASTEXITCODE -eq 0) {
-    Write-Host "ok   examples/drivetrain/Drivetrain.sim --emit" -ForegroundColor Green
-    $script:pass++
-    $emitDirs['drivetrain'] = $exDir
-} else {
-    Write-Host "FAIL examples/drivetrain/Drivetrain.sim --emit" -ForegroundColor Red
-    $script:fail++
+# The worked examples must emit cleanly too. `washout` needs the stdlib on the
+# path as well: it is the first example built out of library blocks rather than
+# out of nodes it declares itself.
+$examples = @(
+    @{ name = 'drivetrain'; sim = 'examples/drivetrain/Drivetrain.sim'; roots = @('examples') },
+    @{ name = 'washout';    sim = 'examples/washout/Washout.sim';       roots = @('examples', 'stdlib') }
+)
+foreach ($ex in $examples) {
+    $exDir = Join-Path $emitOut $ex.name
+    if (Test-Path $exDir) { Remove-Item -Recurse -Force $exDir }
+    New-Item -ItemType Directory -Force $exDir | Out-Null
+    $rootArgs = @()
+    foreach ($r in $ex.roots) { $rootArgs += '-I'; $rootArgs += $r }
+    & $sec --no-color --quiet --emit @rootArgs -o ($exDir -replace '\\', '/') $ex.sim
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host ("ok   " + $ex.sim + " --emit") -ForegroundColor Green
+        $script:pass++
+        $emitDirs[$ex.name] = $exDir
+    } else {
+        Write-Host ("FAIL " + $ex.sim + " --emit") -ForegroundColor Red
+        $script:fail++
+    }
 }
 
 # -----------------------------------------------------------------------------
@@ -345,6 +354,63 @@ if (-not $cl) {
             $script:pass++
         } else {
             Write-Host ("FAIL build/emit/Decay : max error " + $worst) -ForegroundColor Red
+            $script:fail++
+        }
+    }
+
+    # ContBq drives two continuous biquads from a unit step -- same poles
+    # (wn = 2 rad/s, zeta = 0.5), different numerators -- and both step
+    # responses have an exact closed form. This is the check that a
+    # canonical-form section actually integrates: `der.w = state.wd` is a bare
+    # accessor-to-accessor write, and while value_ref got that wrong it
+    # rebound the proxy instead of storing, leaving the low-pass column
+    # identically zero. Nothing else in the suite writes one state accessor
+    # straight into another.
+    #
+    #   sigma = zeta*wn = 1,  wd = wn*sqrt(1 - zeta^2) = sqrt(3)
+    #   lp   4/(s^2 + 2s + 4):  1 - e^-sigma*t (cos wd t + (sigma/wd) sin wd t)
+    #   hp s^2/(s^2 + 2s + 4):      e^-sigma*t (cos wd t - (sigma/wd) sin wd t)
+    #
+    # The second follows from the first by H_hp + H_bp + H_lp = 1, so it is a
+    # derivation rather than a second magic constant. hp starts at exactly 1,
+    # which is the assertion on the direct term b0.
+    if ($emitDirs.ContainsKey('ContBq')) {
+        $cbDir = $emitDirs['ContBq']
+        Push-Location $cbDir
+        & '.\ContBq.exe' 2>&1 | Out-Null
+        $ran = ($LASTEXITCODE -eq 0)
+        Pop-Location
+        $worst = 0.0
+        $csv = Join-Path $cbDir 'contbq.csv'
+        if ($ran -and (Test-Path $csv)) {
+            $sigma = 1.0
+            $wd    = [Math]::Sqrt(3.0)
+            $rows = Get-Content $csv | Select-Object -Skip 1
+            foreach ($line in $rows) {
+                if (-not $line) { continue }
+                $c  = $line -split ','
+                $t  = [double]$c[0]
+                $e  = [Math]::Exp(-$sigma * $t)
+                $cs = [Math]::Cos($wd * $t)
+                $sn = [Math]::Sin($wd * $t)
+                $q  = ($sigma / $wd) * $sn
+                $errs = @([Math]::Abs([double]$c[1] - (1.0 - $e * ($cs + $q))),
+                          [Math]::Abs([double]$c[2] - (      $e * ($cs - $q))))
+                foreach ($err in $errs) { if ($err -gt $worst) { $worst = $err } }
+            }
+        } else {
+            $worst = [double]::PositiveInfinity
+        }
+        # Looser than Decay's 1e-9, for a reason that is not the solver: the
+        # recorder writes %.9g and the low-pass overshoots past 1, so at that
+        # magnitude the FILE resolves only about 5e-9. rk4's own error here is
+        # nearer 1e-12. A wrong coefficient is O(0.1), so 1e-7 still catches it.
+        if ($worst -lt 1e-7) {
+            Write-Host ("ok   build/emit/ContBq : rk4 matches both step responses, max error " +
+                        $worst.ToString('E2')) -ForegroundColor Green
+            $script:pass++
+        } else {
+            Write-Host ("FAIL build/emit/ContBq : max error " + $worst) -ForegroundColor Red
             $script:fail++
         }
     }

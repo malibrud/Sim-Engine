@@ -113,6 +113,9 @@ private:
     // states and ports alike.
     std::vector<Unit> unit_binding_;
     Unit bound(const Unit& u) const { return unit_bind(u, unit_binding_); }
+    // §5.2 — the record-aware form: a record port binds the ARGUMENTS it passes
+    // to its type, so `v: Vec3(U)` in a node bound `(m/s)` becomes `Vec3(m/s)`.
+    Type bound_type(const Type& t) const { return bind_type(t, unit_binding_); }
 
     // §10.4 — `sample_rate` / `time_step`. `base_rate_` is 1/step from the sim
     // file; `effective_rate_` is the node currently being elaborated, which is

@@ -6,7 +6,7 @@
 //
 // Two inputs, not N: a wide adder needs `output(*)` — "reads every input" —
 // which is parked (Appendix C). Chain them until then.
-package std.math;
+package se.math;
 
 node Sum {
     units { U; }

@@ -58,6 +58,11 @@ struct Type {
     const RecordInfo* record = nullptr;   // record
     Unit unit;                            // scalar — evaluated
     std::string scalar = "double";        // scalar — the C++ spelling
+    // §5.2 — a parametric record binds its units at the REFERENCE, so the
+    // arguments belong to this use of the type, not to the type. They may
+    // themselves be parametric (`Vec3(A*B)` inside a node with `units {A; B;}`),
+    // in which case they are bound again when that node is instantiated.
+    std::vector<Unit> unit_args;
     Loc loc;
 
     const char* cpp() const { return scalar.c_str(); }
@@ -74,10 +79,36 @@ struct RecordInfo {
     std::string cpp_name;              // "drivetrain::WheelState"
     const ast::TypeDef* def = nullptr;
     const FileInfo* file = nullptr;
+    // §5.2 — the record's own unit parameters, in declaration order. A field
+    // declared `(U)` carries `param_exp` indexed against this list, exactly as a
+    // node's ports do (§6.2a); `unit_bind` substitutes at each reference.
+    std::vector<std::string> unit_params;
     std::vector<Field> fields;
     bool resolved = false;             // guards the §5.2 cycle check
     bool resolving = false;
 };
+
+// §5.2/§6.2a — a parametric type binds its units at the site that references
+// it, so a declared type only becomes concrete once that site's arguments are
+// substituted in. A scalar binds its own unit; a record binds the arguments it
+// passes on, leaving its fields alone — those live in the record's own scope.
+inline Type bind_type(const Type& t, const std::vector<Unit>& binding) {
+    if (binding.empty()) return t;
+    Type r = t;
+    if (t.is_record) {
+        for (Unit& u : r.unit_args) u = unit_bind(u, binding);
+    } else {
+        r.unit = unit_bind(t.unit, binding);
+    }
+    return r;
+}
+
+// The type of field `f` as seen through the reference `rec`. Descending a
+// nested record threads that record's already-substituted arguments down, which
+// is what makes `type Pose { p: Vec3(U); }` work.
+inline Type field_type(const Type& rec, const Field& f) {
+    return bind_type(f.type, rec.unit_args);
+}
 
 struct NodeInfo {
     std::string fq;                    // "drivetrain.Wheel"

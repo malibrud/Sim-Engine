@@ -19,7 +19,7 @@ warning[SE0221]: `on_setp` is not a lifecycle method; it will be copied verbatim
    |
 27 |     on_setp(u) { }
    |     ^^^^^^^ did you mean `on_step`?
-   = note: the lifecycle methods are init, output, rates, on_step, final (§8.1)
+   = note: the lifecycle methods are init, output, derivative, next, on_step, final (§8.1)
 
 error[SE0241]: `init` takes no parameters
   --> tests/err/methods.se:35:10

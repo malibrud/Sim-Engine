@@ -77,6 +77,25 @@ public:
         *slot_ = v;
         return *this;
     }
+
+    // Copy-ASSIGNMENT moves the value, not the binding — `der.w = state.wd;`
+    // writes the derivative slot, which is the only thing that line can mean.
+    //
+    // This overload is not optional and must never be deleted back to the
+    // implicit one. Declaring `operator=(T)` does NOT suppress the compiler's
+    // copy-assignment, and between the two the implicit one wins outright on a
+    // proxy-to-proxy assignment: it is an exact match, while `operator=(T)`
+    // needs the user-defined `operator T()`. The implicit one copies `slot_`,
+    // so the write silently REBINDS the target at the source's slot instead of
+    // storing anything — the derivative stays zero and the state never moves.
+    // It compiles clean and it is wrong at run time, which is the worst
+    // combination available. Copy-CONSTRUCTION still shares the slot: a copy of
+    // a view is a view, and only assignment through one is a write.
+    value_ref(const value_ref&) = default;
+    value_ref& operator=(const value_ref& o) {
+        *slot_ = *o.slot_;
+        return *this;
+    }
 };
 
 using state_ref = value_ref<double>;
@@ -228,7 +247,7 @@ public:
         }
     }
 
-    // section 10.1 — trace in output()/rates() is suppressed unless this is set,
+    // section 10.1 — trace in the pure methods is suppressed unless this is set,
     // so the four-evaluations-per-step hazard is visible rather than hidden.
     bool trace_enabled = false;
 
@@ -268,7 +287,7 @@ struct Log {
     }
 };
 
-// The restricted form for output() and rates(): `log.trace` alone (section
+// The restricted form for the pure methods: `log.trace` alone (section
 // 10.1). `log.info` there is "no such member".
 //
 // Every leaf holds one of these as a member called `log`, so a pure method

@@ -1260,12 +1260,12 @@ void Elaborator::instantiate(const NodeInfo* def, const std::string& path,
     // non-parametric node `bound` is the identity, so this is a copy.
     for (const Field& f : def->inputs) {
         Field g = f;
-        g.type.unit = bound(f.type.unit);
+        g.type = bound_type(f.type);
         leaf.ports_in.push_back(std::move(g));
     }
     for (const Field& f : def->outputs) {
         Field g = f;
-        g.type.unit = bound(f.type.unit);
+        g.type = bound_type(f.type);
         leaf.ports_out.push_back(std::move(g));
     }
 
@@ -1298,6 +1298,26 @@ bool Elaborator::port_conversion(const Field& from, const Field& to, const Sourc
                         "`" + from.type.record->fq + "` -> `" + to.type.record->fq + "`",
                         {note("a wire carries the whole record and coincides with the "
                               "producer's storage (§5.3, §15.3)")});
+            return false;
+        }
+        // §5.2 — two references to one parametric record are the same type only
+        // if they bound it the same way. `Vec3(m)` into `Vec3(m/s)` is the same
+        // mistake as `(m)` into `(m/s)` on a scalar port, and gets the same
+        // error: unlike a scalar it cannot be converted, because a record wire
+        // coincides with the producer's storage.
+        for (std::size_t i = 0; i < from.type.unit_args.size(); ++i) {
+            const Unit& a = from.type.unit_args[i];
+            const Unit& b = to.type.unit_args[i];
+            if (compatible(a, b) && a.scale == b.scale) continue;
+            const std::string& pname = from.type.record->unit_params[i];
+            diag_.error("SE0410", src, loc,
+                        "incompatible unit arguments across a wire",
+                        "`(" + a.str() + ")` -> `(" + b.str() + ")`",
+                        {note("both ports are `" + from.type.record->fq +
+                              "`, but bound `" + pname + "` differently"),
+                         note("a record travels as one value and is not copied "
+                              "(§15.3), so its fields cannot be converted per wire "
+                              "the way a scalar's can")});
             return false;
         }
         return true;
@@ -1387,7 +1407,7 @@ void Elaborator::collect_wires(const NodeInfo* def, const std::string& path, Mod
         out_field = *field;
         auto bit = child_binding.find(inst);
         if (bit != child_binding.end())
-            out_field.type.unit = unit_bind(field->type.unit, bit->second);
+            out_field.type = bind_type(field->type, bit->second);
         key = sub(sub(path, inst), port);
         return true;
     };
@@ -1529,7 +1549,7 @@ void Elaborator::resolve_boundary(const NodeInfo* root, Model& m) {
                     return;
                 }
                 for (const Field& sf : t.record->fields)
-                    expand(path + "." + sf.name, expr + "." + sf.name, sf.type);
+                    expand(path + "." + sf.name, expr + "." + sf.name, field_type(t, sf));
             };
         expand(sub(leaf.path, port->name), "sig." + leaf.ident + "." + port->name,
                port->type);
@@ -1688,7 +1708,7 @@ void Elaborator::resolve_record(const ast::RecordBlock& block, const Source& src
                     break;
                 }
                 s.expr += "." + rest[i];
-                t = sf->type;
+                t = field_type(t, *sf);
             }
             if (!ok || t.is_record) {
                 diag_.error("SE0304", src, p.loc,

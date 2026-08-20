@@ -9,8 +9,8 @@
 // round trip lands exactly where it started.
 package stdchk;
 
-use std.signal;
-use std.math;
+use se.signal;
+use se.math;
 
 node StdChk {
     outputs { y (m/s^2): double; }
@@ -44,5 +44,5 @@ node Ramp {
     states  { discrete t (-): double = 0.0; }
 
     output()  { out.y = state.t; }
-    on_step() { next.t = state.t + 1.0; }
+    next() { next.t = state.t + 1.0; }
 }

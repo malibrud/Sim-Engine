@@ -34,6 +34,10 @@ void dump_type(std::ostream& o, const ast::TypeRef& t) {
         o << " (" << unit_to_string(t.unit.get()) << "): " << t.scalar;
     } else {
         o << ": " << t.record.str();
+        // §5.2 — a parametric record binds its units at the reference site.
+        for (std::size_t k = 0; k < t.unit_args.size(); ++k)
+            o << (k ? ", " : "(") << unit_to_string(t.unit_args[k].get());
+        if (!t.unit_args.empty()) o << ")";
     }
 }
 
@@ -137,6 +141,11 @@ void dump(std::ostream& o, const ast::ModelFile& f) {
 
     for (const ast::TypeDef& t : f.types) {
         o << indent(1) << "type " << t.name << "  [line " << t.loc.line << "]\n";
+        if (t.sec_units.present) {
+            o << indent(2) << "units\n";
+            for (const ast::UnitParamDecl& u : t.unit_params)
+                o << indent(3) << u.name << "\n";
+        }
         for (const ast::FieldDecl& fd : t.fields) {
             o << indent(2) << fd.name;
             dump_type(o, fd.type);

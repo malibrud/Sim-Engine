@@ -35,9 +35,9 @@ bool schedule(Diagnostics& diag, Model& m) {
         const Leaf& leaf = m.leaves[i];
         const ast::Method* out = leaf.node->method(ast::Method::Which::Output);
         if (!out) continue;
-        // Only `output()`'s list constrains ordering. `rates()` and `on_step()`
-        // run after outputs have propagated, so their lists are documentation
-        // plus enforcement (§8.3).
+        // Only `output()`'s list constrains ordering. `derivative()`, `next()`
+        // and `on_step()` run after outputs have propagated, so their lists are
+        // documentation plus enforcement (§8.3).
         for (const std::string& p : out->params) {
             auto it = leaf.inputs.find(p);
             if (it == leaf.inputs.end()) continue;
@@ -157,7 +157,7 @@ bool schedule(Diagnostics& diag, Model& m) {
     }
     if (!fix_node.empty())
         att.push_back(help("drop `" + fix_port + "` from `" + fix_node + ".output(" +
-                           fix_port + ")` and latch it in `on_step()`, or insert a unit "
+                           fix_port + ")` and latch it in `next()`, or insert a unit "
                            "delay / integrator anywhere in the cycle"));
     att.push_back(note("an algebraic loop is an implicit equation z = f(z) with no valid "
                        "ordering; it is rejected rather than solved, because most are "

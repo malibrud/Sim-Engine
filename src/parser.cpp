@@ -47,7 +47,8 @@ const std::vector<const char*>& section_names() {
 }
 
 const std::vector<const char*>& lifecycle_names() {
-    static const std::vector<const char*> v = {"init", "output", "rates", "on_step", "final"};
+    static const std::vector<const char*> v = {"init",    "output", "derivative",
+                                              "next",    "on_step", "final"};
     return v;
 }
 
@@ -182,7 +183,8 @@ void Parser::recover_in_node_body() {
                 case Tok::KwStructure:
                 case Tok::KwInit:
                 case Tok::KwOutput:
-                case Tok::KwRates:
+                case Tok::KwDerivative:
+                case Tok::KwNext:
                 case Tok::KwOnStep:
                 case Tok::KwFinal:
                     return;
@@ -228,8 +230,8 @@ bool Parser::parse_path(ast::Path& out, bool allow_keywords) {
         if (at(Tok::Star)) {
             err("SE0210", tok_.loc, "wildcard import is not supported", "remove the `.*`",
                 {note("every name's origin must be traceable from the `use` block (\xc2\xa7""2.4)"),
-                 help("import the symbols you need (`use std.mech.Damper;`) or alias the "
-                      "package (`use std.mech;`)")});
+                 help("import the symbols you need (`use se.mech.Damper;`) or alias the "
+                      "package (`use se.mech;`)")});
             advance();
             return false;
         }
@@ -444,6 +446,25 @@ bool Parser::parse_type_ref(ast::TypeRef& out, const char* what) {
                  help("write `" + std::string(what) + " (-): " + out.record.segs[0] +
                       ";` if it really is dimensionless")});
             return false;
+        }
+        // §5.2 — a parametric record binds its units HERE, at the reference,
+        // because a type is never instantiated. The path is complete and a `(`
+        // can be nothing but a unit argument list, so this costs no lookahead —
+        // the same reasoning as an instance's arguments (§6.9.1).
+        if (at(Tok::LParen)) {
+            out.unit_args_loc = tok_.loc;
+            advance();
+            for (;;) {
+                ast::UnitPtr u = parse_unit_expr();
+                if (!u) return false;
+                out.unit_args.push_back(std::move(u));
+                if (at(Tok::Comma)) {
+                    advance();
+                    continue;
+                }
+                break;
+            }
+            if (!expect(Tok::RParen, "SE0201", "to close the unit arguments")) return false;
         }
         return true;
     }
@@ -744,7 +765,10 @@ bool Parser::parse_type_def(ast::TypeDef& out) {
     out.name = tok_.text;
     out.loc = tok_.loc;
     advance();
-    return parse_field_list(out.fields, "record field", true);
+    // A record body is a field list that may also carry one `units` section
+    // (§5.2), so it shares the field loop rather than duplicating its recovery.
+    return parse_field_list(out.fields, "record field", true, &out.sec_units,
+                            &out.unit_params);
 }
 
 bool Parser::mark_section(ast::SectionMark& m, const char* name, Loc loc) {
@@ -849,7 +873,8 @@ bool Parser::parse_node_item(ast::NodeDef& node) {
 
         case Tok::KwInit:
         case Tok::KwOutput:
-        case Tok::KwRates:
+        case Tok::KwDerivative:
+        case Tok::KwNext:
         case Tok::KwOnStep:
         case Tok::KwFinal:
             return parse_method(node);
@@ -896,8 +921,8 @@ bool Parser::parse_node_item(ast::NodeDef& node) {
                          "`" + tok_.text + "` is not a lifecycle method; it will be copied "
                          "verbatim as a helper function",
                          "did you mean `" + did + "`?",
-                         {note("the lifecycle methods are init, output, rates, on_step, "
-                               "final (\xc2\xa7""8.1)")});
+                         {note("the lifecycle methods are init, output, derivative, next, "
+                               "on_step, final (\xc2\xa7""8.1)")});
             }
             return parse_helper(node);
         }
@@ -910,14 +935,22 @@ bool Parser::parse_node_item(ast::NodeDef& node) {
 // ─── Declaration lists ───────────────────────────────────────────────────────
 
 bool Parser::parse_field_list(std::vector<ast::FieldDecl>& out, const char* what,
-                              bool allow_records) {
+                              bool allow_records, ast::SectionMark* sec_units,
+                              std::vector<ast::UnitParamDecl>* unit_params) {
     if (!expect(Tok::LBrace, "SE0201", "to open the section")) return false;
 
     while (!at(Tok::RBrace) && !at_end()) {
         const std::uint32_t before = tok_.loc.offset;
         ast::FieldDecl f;
 
-        if (!at(Tok::Ident)) {
+        // Only a record body passes these; a port section has no `units` of its
+        // own, since a node declares its parameters at node level (§6.2a).
+        if (sec_units && at(Tok::KwUnits)) {
+            const Loc uloc = tok_.loc;
+            if (!mark_section(*sec_units, "units", uloc)) return false;
+            advance();
+            if (!parse_unit_param_list(*unit_params)) return false;
+        } else if (!at(Tok::Ident)) {
             std::vector<Attachment> att;
             if (tok_.is_keyword())
                 att.push_back(note("`" + tok_.text + "` is a reserved word (Appendix B)"));
@@ -1378,11 +1411,12 @@ bool Parser::parse_method(ast::NodeDef& node) {
     ast::Method m;
     m.loc = tok_.loc;
     switch (tok_.kind) {
-        case Tok::KwInit:   m.which = ast::Method::Which::Init;   break;
-        case Tok::KwOutput: m.which = ast::Method::Which::Output; break;
-        case Tok::KwRates:  m.which = ast::Method::Which::Rates;  break;
-        case Tok::KwOnStep: m.which = ast::Method::Which::OnStep; break;
-        default:            m.which = ast::Method::Which::Final;  break;
+        case Tok::KwInit:       m.which = ast::Method::Which::Init;       break;
+        case Tok::KwOutput:     m.which = ast::Method::Which::Output;     break;
+        case Tok::KwDerivative: m.which = ast::Method::Which::Derivative; break;
+        case Tok::KwNext:       m.which = ast::Method::Which::Next;       break;
+        case Tok::KwOnStep:     m.which = ast::Method::Which::OnStep;     break;
+        default:                m.which = ast::Method::Which::Final;      break;
     }
     const std::string name = tok_.text;
     advance();

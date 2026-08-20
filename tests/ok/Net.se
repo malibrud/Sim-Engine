@@ -20,6 +20,7 @@ node Net {
     }
     vars {
         last_rx (-): double;
+        arrived (-): double;
     }
 
     // Opaque C++ handles. The type text is verbatim, scanned to the `;`, so a
@@ -46,20 +47,30 @@ node Net {
     }
 
     // Natives use their BARE name, and are in scope only here, in on_step and
-    // in final -- never in output() or rates().
+    // in final -- never in output(), derivative() or next(), which are pure.
     init() {
         sock = socket(AF_INET, SOCK_DGRAM, 0);
         var.last_rx = 0.0;
+        var.arrived = 0.0;
         log.info("listening on {}", param.port);
     }
 
+    // The I/O half. `on_step()` carries no equation -- it is the mutating hook
+    // for `var`, natives and logging -- so what the socket learns has to be
+    // stashed in a `var` for the transition to read.
     on_step(tx) {
         sendto(sock, &in.tx, sizeof(double), 0, nullptr, 0);
         const int n = recv(sock, buf.data(), buf.size(), 0);
-        if (n > 0) {
-            var.last_rx = scale(static_cast<double>(n));
-            next.packets = state.packets + 1;
-        }
+        var.arrived = (n > 0) ? 1.0 : 0.0;
+        if (n > 0) var.last_rx = scale(static_cast<double>(n));
+    }
+
+    // The equation half: x+ = h(t,x,u), pure, writing only `next.`. It runs
+    // BEFORE on_step() in the tick, so `var.arrived` is what the previous tick
+    // observed -- an honest one-sample transport delay on the packet count,
+    // which is the visible price of keeping the two jobs apart.
+    next() {
+        next.packets = state.packets + static_cast<int>(var.arrived);
     }
 
     // Registered: no feedthrough, so this is a sort root and breaks loops.

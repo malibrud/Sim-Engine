@@ -1,0 +1,22 @@
+// Two-input vector adder -- the `Vec3` counterpart of `se.math.Sum`, and it
+// exists for the same normative reason: §6.9.2 forbids fan-in and tells the
+// user to insert an explicit sum node.
+//
+// Two inputs, not N, matching `Sum`: a wide adder needs `output(*)`, which is
+// parked (Appendix C). Chain them until then.
+package se.math;
+
+use se.math;
+
+node Sum3 {
+    units { U; }
+
+    inputs  { a: math.Vec3(U);  b: math.Vec3(U); }
+    outputs { y: math.Vec3(U); }
+
+    output(a, b) {
+        out.y.x = in.a.x + in.b.x;
+        out.y.y = in.a.y + in.b.y;
+        out.y.z = in.a.z + in.b.z;
+    }
+}

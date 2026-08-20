@@ -72,7 +72,7 @@ struct Wheel {
     // FEEDTHROUGH IS THIS: one In view per method, holding exactly the inputs
     // that method's DSL signature listed. Reading an input you did not declare
     // is not a stale value — it is "no such member", a compile error.
-    struct In_rates  { double drive_torque; };    // N*m
+    struct In_derivative { double drive_torque; };   // N*m
     struct In_output { double drive_torque;       // N*m
                        double ground_speed; };    // m/s
 
@@ -88,7 +88,7 @@ struct Wheel {
 
     // PURITY IS THIS: `const` on the method. The body physically cannot write
     // state, var, or param. `der` is the sole out-param.
-    void rates(const In_rates& in, Der& der) const {
+    void derivative(const In_derivative& in, Der& der) const {
 #line 30 "examples/drivetrain/Wheel.se"
         der.omega = in.drive_torque * var.inertia_inv;
     }
@@ -118,19 +118,24 @@ struct TractionController {
 
     // The x+ = h(t,x,u) buffer. Separate storage is what makes `next.` a
     // SIMULTANEOUS update: every discrete state reads the old value and writes
-    // the new one, so results do not depend on statement order in on_step().
-    struct Next  { double cut; };   // N*m
+    // the new one, so results do not depend on statement order in next().
+    // Named `Store`, not `Next`: the same type is both the committed block and
+    // the buffer, so naming it for the buffer would be wrong half the time.
+    struct Store { double cut; };   // N*m
 
     struct Out   { double torque_cut; };   // N*m
 
-    struct In_step   { WheelState ws; };
+    struct In_next   { WheelState ws; };
     struct In_output {};                    // empty => sort root => breaks loops
 
     Param param;
     State state;
 
-    // const: cannot touch `state` directly. Discrete writes go through `next`.
-    void on_step(const In_step& in, Next& next) const {
+    // const and PURE: it carries the transition equation and writes nothing
+    // else. `var`, natives and logging would live in on_step(), which this node
+    // does not need. The out-parameter shadows the method name, which is fine —
+    // the body is verbatim, so `next.cut` resolves to the parameter (§8.1).
+    void next(const In_next& in, Store& next) const {
 #line 24 "examples/drivetrain/TractionController.se"
         auto excess = in.ws.slip - param.slip_limit;
         next.cut = excess > 0.0 ? param.gain * excess : 0.0;
@@ -141,8 +146,10 @@ struct TractionController {
         out.torque_cut = state.cut;
     }
 
-    // Generated, not user-written: the simultaneous-update commit.
-    void commit(const Next& next) { state.cut = next.cut; }
+    // There is deliberately no per-node commit (§6.4): the real emitter holds
+    // one `Discrete` block and one `nxt` buffer of the same shape for the whole
+    // model, and the tick ends with a single `dis = nxt`. Simultaneity is a
+    // property of the MODEL, not of each node in turn.
 };
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -183,7 +190,7 @@ struct Sim {
     //  `der` is not node data: it is evaluated 4x per RK4 step at trial states
     //  the trajectory never visits, then discarded. Sim owns it.
     Wheel::Der               fl_whl_der;
-    TractionController::Next fl_tc_next;
+    TractionController::Store fl_tc_next;
 
     // ── root boundary ────────────────────────────────────────────────────────
     double src_axle_torque{};    // N*m
@@ -212,7 +219,7 @@ struct Sim {
         fl_whl.param.radius    = 0.31;    // m
         fl_tc.param.slip_limit = 0.10;    // -
         fl_tc.param.gain       = 400.0;   // N*m
-        // fl.tc.rate = 200 Hz on a 1 kHz base => decimation 5, see on_step_tick.
+        // fl.tc.rate = 200 Hz on a 1 kHz base => decimation 5, see next_tick.
     }
 
     // Declarative state defaults, including discrete ones. Writing through the
@@ -250,17 +257,30 @@ struct Sim {
     // clean layout, not zero copying.
     void derivatives(double /*t*/) {
         output_pass();
-        fl_whl.rates({src_axle_torque}, fl_whl_der);
+        fl_whl.derivative({src_axle_torque}, fl_whl_der);
     }
 
-    // Once per accepted base step, after outputs have propagated.
-    void on_step_tick(std::uint64_t k) {
+    // x+ = h(t,x,u), once per accepted base step, after outputs have
+    // propagated. `on_step()` — the mutating hook for `var`, natives and
+    // logging — would run in its own pass immediately after this one; neither
+    // node here needs it.
+    void next_tick(std::uint64_t k) {
         output_pass();
         if (k % 5 == 0) {                                  // 200 Hz on 1 kHz base
             // The wire: one member read, no copy.
-            fl_tc.on_step({fl_whl_out.ws}, fl_tc_next);
-            fl_tc.commit(fl_tc_next);                      // simultaneous update
+            fl_tc.next({fl_whl_out.ws}, fl_tc_next);
         }
+    }
+
+    // Both state kinds advance HERE, at the bottom of the tick — below the
+    // recorder and below the termination exit — so every method above observed
+    // the same t[k], x[k] and dis[k], and a run that stops is left holding a
+    // consistent checkpoint (§9.6). The real emitter does one whole-model
+    // `dis = nxt`; this file keeps a per-node buffer only because it predates
+    // the discrete block.
+    void advance(double t, double h) {
+        fl_tc.state.cut = fl_tc_next.cut;                  // stands in for dis = nxt
+        solver_step(t, h);                                 // rk4 over `x`, §9.5
     }
 };
 

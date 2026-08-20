@@ -18,9 +18,9 @@ node TractionController {
     }
 
     // update at the 200 Hz sample tick; `next.` makes it simultaneous, order-independent.
-    // `ws` is listed because the body reads it -- but on_step runs after outputs have
+    // `ws` is listed because the body reads it -- but next() runs after outputs have
     // propagated, so unlike output() this constrains nothing for the sort.
-    on_step(ws) {
+    next(ws) {
         auto excess = in.ws.slip - param.slip_limit;                 // dimensionless
         // plain double: units are checked at declarative sites and erased, so a
         // zero is just a zero -- no `0.0 * (N*m)` literal ceremony.

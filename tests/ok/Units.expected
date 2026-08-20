@@ -1,8 +1,8 @@
 ﻿=== tests/ok/Units.se ===
 model-file
   package tests
-  use std.mech.Damper
-  use std.mech
+  use se.mech.Damper
+  use se.mech
   node Units  [line 9]  kind=leaf
     settings
       total_mass (kg): double  [required]

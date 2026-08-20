@@ -35,7 +35,7 @@ node Tricky {
         (void)s; (void)c; (void)q; (void)big; (void)bigger; (void)raw; (void)raw2;
     }
 
-    rates() {
+    derivative() {
         der.x = -param.gain * state.x;
     }
 

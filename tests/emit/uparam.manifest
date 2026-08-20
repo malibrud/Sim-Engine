@@ -40,7 +40,7 @@
           dec.dt                  s           = 0.005   <- 1.0 / dec.rate
           dec.unity               -           = 1.0   <- dec.rate * (1.0 / dec.rate)
 
-[rates]                   # decimations, derived from `rate` at configuration
+[decimation]              # derived from `rate` at configuration
           dec                     200 Hz      = every 5 ticks
 
 [types]

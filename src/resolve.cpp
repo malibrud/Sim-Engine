@@ -452,15 +452,58 @@ bool Resolver::resolve_type(const FileInfo& file, const ast::TypeRef& ref, Type&
         return true;
     }
     out.is_record = true;
+    // §5.2 — evaluate the arguments in the REFERRING scope, before resolving the
+    // record. `Vec3(A*B)` inside a node with `units {A; B;}` yields parametric
+    // arguments, which are bound again when that node is instantiated; the
+    // record's own parameters are a different scope entirely.
+    {
+        UnitEval eval(*file.src, diag_, unit_params_);
+        for (const ast::UnitPtr& u : ref.unit_args) {
+            Unit evaluated;
+            if (!eval.eval(u.get(), evaluated)) return false;
+            out.unit_args.push_back(evaluated);
+        }
+    }
     out.record = resolve_record_ref(file, ref.record, *file.src, ref.loc);
-    return out.record != nullptr;
+    if (!out.record) return false;
+
+    const std::size_t want = out.record->unit_params.size();
+    const std::size_t got = out.unit_args.size();
+    if (want != got) {
+        std::vector<Attachment> att;
+        if (want == 0) {
+            att.push_back(note("`" + out.record->fq + "` declares no `units` section, so "
+                               "its field units are fixed at its declaration"));
+        } else {
+            std::string names;
+            for (std::size_t i = 0; i < want; ++i) {
+                if (i) names += ", ";
+                names += "`" + out.record->unit_params[i] + "`";
+            }
+            att.push_back(note("`" + out.record->fq + "` declares " + std::to_string(want) +
+                               (want == 1 ? " unit parameter: " : " unit parameters: ") +
+                               names));
+            att.push_back(help("write `" + ref.record.str() + "(" +
+                               (want == 1 ? "unit" : "unit, ...") +
+                               ")` — a record binds its units at every reference, since "
+                               "it is never instantiated (§5.2)"));
+        }
+        diag_.error("SE0313", *file.src, got ? ref.unit_args_loc : ref.loc,
+                    "`" + out.record->fq + "` takes " + std::to_string(want) +
+                        " unit argument" + (want == 1 ? "" : "s") + ", " +
+                        std::to_string(got) + " given",
+                    std::to_string(got) + " given", std::move(att));
+        return false;
+    }
+    return true;
 }
 
 RecordInfo* Resolver::resolve_record(FileInfo& file, const ast::TypeDef& def,
                                      const std::string& fq, const std::string& cpp_name) {
     // A record is defined independently of any node and memoized across all of
     // them, so it must not see the unit parameters of whichever node happened
-    // to reference it first. (Parametric record types are D5, a separate task.)
+    // to reference it first. It resolves under its OWN parameters instead
+    // (§5.2), which `unit_bind` substitutes at each reference.
     std::vector<std::string> saved;
     saved.swap(unit_params_);
     struct Restore {
@@ -489,6 +532,8 @@ RecordInfo* Resolver::resolve_record(FileInfo& file, const ast::TypeDef& def,
     info->cpp_name = cpp_name;
     info->def = &def;
     info->file = &file;
+    info->unit_params = resolve_unit_params(file, def.sec_units, def.unit_params);
+    unit_params_ = info->unit_params;
     info->resolving = true;
     program_.records[fq] = std::move(owned);
     record_by_def_[&def] = info;
@@ -506,25 +551,31 @@ RecordInfo* Resolver::resolve_record(FileInfo& file, const ast::TypeDef& def,
     return info;
 }
 
+// §6.2a — leaf-only for nodes. A parametric composite would need unit
+// flow-down alongside setting flow-down; this is a restriction to relax, not a
+// rule, so no model valid today would break when it lifts. Records have no such
+// restriction: they have no children to flow anything down to.
 std::vector<std::string> Resolver::resolve_unit_params(const FileInfo& file,
                                                        const ast::NodeDef& def) {
-    std::vector<std::string> out;
-    if (!def.sec_units.present) return out;
-
-    // §6.2a — leaf-only for now. A parametric composite would need unit
-    // flow-down alongside setting flow-down; this is a restriction to relax,
-    // not a rule, so no model valid today would break when it lifts.
-    if (def.is_composite()) {
+    if (def.sec_units.present && def.is_composite()) {
         diag_.error("SE0418", *file.src, def.sec_units.loc,
                     "a composite may not declare unit parameters",
                     "only a leaf node may be unit-parametric",
                     {note("binding a composite's parameters would have to flow down "
                           "to its children, which is a separate mechanism (§6.2a)"),
                      help("put the unit parameters on the leaf that declares the ports")});
-        return out;
+        return {};
     }
+    return resolve_unit_params(file, def.sec_units, def.unit_params);
+}
 
-    for (const ast::UnitParamDecl& p : def.unit_params) {
+std::vector<std::string> Resolver::resolve_unit_params(
+    const FileInfo& file, const ast::SectionMark& sec,
+    const std::vector<ast::UnitParamDecl>& params) {
+    std::vector<std::string> out;
+    if (!sec.present) return out;
+
+    for (const ast::UnitParamDecl& p : params) {
         // A parameter shadows Appendix A inside this node (§6.2a), so letting
         // one be called `m` would silently retype every length in the file.
         Unit clash;
@@ -719,8 +770,8 @@ void Resolver::check_methods(const NodeInfo& info) {
     const ast::NodeDef& def = *info.def;
 
     const ast::Method* out_m = info.method(ast::Method::Which::Output);
-    const ast::Method* rates_m = info.method(ast::Method::Which::Rates);
-    const ast::Method* step_m = info.method(ast::Method::Which::OnStep);
+    const ast::Method* der_m = info.method(ast::Method::Which::Derivative);
+    const ast::Method* next_m = info.method(ast::Method::Which::Next);
 
     // §6.12 — typo safety, per kind, in both directions.
     if (!info.composite) {
@@ -729,28 +780,38 @@ void Resolver::check_methods(const NodeInfo& info) {
                         "node `" + def.name + "` declares outputs but no `output()`",
                         "no `output()`",
                         {note("nothing else could compute them (§6.12)")});
-        if (info.has_continuous() && !rates_m)
+        if (info.has_continuous() && !der_m)
             diag_.error("SE0341", src, def.loc,
                         "node `" + def.name +
-                            "` has a `continuous` state but no `rates()`",
-                        "no `rates()`",
+                            "` has a `continuous` state but no `derivative()`",
+                        "no `derivative()`",
                         {note("a continuous state is written through `der.` in "
-                              "`rates()` (§6.4)")});
-        if (info.has_discrete() && !step_m)
+                              "`derivative()` (§6.4)")});
+        if (info.has_discrete() && !next_m)
             diag_.error("SE0342", src, def.loc,
-                        "node `" + def.name + "` has a `discrete` state but no `on_step()`",
-                        "no `on_step()`",
+                        "node `" + def.name + "` has a `discrete` state but no `next()`",
+                        "no `next()`",
                         {note("a discrete state is written through `next.` in "
-                              "`on_step()` (§6.4)")});
+                              "`next()` (§6.4)")});
     }
-    if (rates_m && !info.has_continuous())
-        diag_.error("SE0343", src, rates_m->loc,
-                    "`rates()` in a node with no `continuous` states", "nothing to write",
-                    {note("`rates()` may write only `der.`, and `Der` is empty here")});
+    if (der_m && !info.has_continuous())
+        diag_.error("SE0343", src, der_m->loc,
+                    "`derivative()` in a node with no `continuous` states",
+                    "nothing to write",
+                    {note("`derivative()` may write only `der.`, and `Der` is empty here")});
     if (out_m && info.outputs.empty())
         diag_.error("SE0344", src, out_m->loc,
                     "`output()` in a node with no outputs", "nothing to write",
                     {note("`output()` may write only `out.`, and `Out` is empty here")});
+    // §6.12 — the converse for `next()`. This check only became possible once
+    // `on_step()` stopped carrying the discrete equation: while one method did
+    // both jobs, a body with no discrete states could still be doing var work.
+    if (next_m && !info.has_discrete())
+        diag_.error("SE0345", src, next_m->loc,
+                    "`next()` in a node with no `discrete` states", "nothing to write",
+                    {note("`next()` may write only `next.`, and `Store` is empty here"),
+                     help("per-step work that is not a state transition belongs in "
+                          "`on_step()` (§8.1)")});
 
     // §8.3 — a method's parameter list is exactly the set of inputs it reads.
     // `init()` takes none (SE0241) and `final(ctx)`'s one parameter is the run

@@ -13,6 +13,6 @@ node Frames {
         continuous v (-): double = 1.0;
     }
 
-    rates()  { der.v = -param.gain * state.v; }
+    derivative()  { der.v = -param.gain * state.v; }
     output() { out.y = state.v; }
 }

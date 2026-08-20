@@ -26,7 +26,7 @@ node Wheel {
 
     // continuous dynamics: I*omega_dot = tau
     // der.omega is (rad/s^2), derived from the state's unit -- never declared.
-    rates(drive_torque) {
+    derivative(drive_torque) {
         der.omega = in.drive_torque * var.inertia_inv;
     }
 

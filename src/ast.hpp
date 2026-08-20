@@ -92,6 +92,11 @@ struct TypeRef {
     UnitPtr unit;              // scalar only
     std::string scalar;        // "double" | "float" | "int" | "bool", as written
     Path record;               // record only
+    // §5.2 — unit arguments for a parametric record, positional, in the type's
+    // `units` order: `force: math.Vec3(N);`. A type has no instantiation site,
+    // so unlike a node's (§6.2a) these are bound at every REFERENCE.
+    std::vector<UnitPtr> unit_args;
+    Loc unit_args_loc;
     Loc loc;
 };
 
@@ -135,7 +140,7 @@ struct BuildStmt {            // §12.1
 };
 
 struct Method {               // §8.1
-    enum class Which { Init, Output, Rates, OnStep, Final };
+    enum class Which { Init, Output, Derivative, Next, OnStep, Final };
     Which which = Which::Init;
     std::vector<std::string> params;   // the feedthrough set for output()
     std::vector<Loc> param_locs;
@@ -144,11 +149,12 @@ struct Method {               // §8.1
 
     const char* name() const {
         switch (which) {
-            case Which::Init:   return "init";
-            case Which::Output: return "output";
-            case Which::Rates:  return "rates";
-            case Which::OnStep: return "on_step";
-            case Which::Final:  return "final";
+            case Which::Init:       return "init";
+            case Which::Output:     return "output";
+            case Which::Derivative: return "derivative";
+            case Which::Next:       return "next";
+            case Which::OnStep:     return "on_step";
+            case Which::Final:      return "final";
         }
         return "?";
     }
@@ -217,17 +223,21 @@ struct SectionMark {
 
 // ─── Definitions ─────────────────────────────────────────────────────────────
 
-struct TypeDef {              // §5.2
+// One unit parameter — a name that stands for a unit inside a node's port,
+// state and var declarations (§6.2a), or inside a record's field declarations
+// (§5.2). It has no type and no default: a unit variable ranges over units, not
+// values. A node binds its parameters once, at instantiation; a record binds
+// them at every reference, since a record is never instantiated.
+struct UnitParamDecl {
     std::string name;
-    std::vector<FieldDecl> fields;
     Loc loc;
 };
 
-// One unit parameter — a name that stands for a unit inside this node's port,
-// state and var declarations, bound at instantiation (§6.2a). It has no type
-// and no default: a unit variable ranges over units, not values.
-struct UnitParamDecl {
+struct TypeDef {              // §5.2
     std::string name;
+    SectionMark sec_units;
+    std::vector<UnitParamDecl> unit_params;
+    std::vector<FieldDecl> fields;
     Loc loc;
 };
 

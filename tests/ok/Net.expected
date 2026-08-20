@@ -14,6 +14,7 @@ model-file
       discrete   packets (-): int ic=0
     vars
       last_rx (-): double
+      arrived (-): double
     native
       sock: `SOCKET`
       buf: `std::array<char, 1024>`
@@ -25,14 +26,16 @@ model-file
       include_dir "vendor/asio/include"
       define "ASIO_STANDALONE"
       cflag "/bigobj" when windows
-    declarations @line 42 (107 bytes): "#include <array> #include <memory> namespace ..."
+    declarations @line 43 (107 bytes): "#include <array> #include <memory> namespace ..."
     init()
-      body @line 50 (128 bytes): "sock = socket(AF_INET, SOCK_DGRAM, 0); var.la..."
+      body @line 51 (155 bytes): "sock = socket(AF_INET, SOCK_DGRAM, 0); var.la..."
     on_step(tx)
-      body @line 56 (261 bytes): "sendto(sock, &in.tx, sizeof(double), 0, nullp..."
+      body @line 61 (234 bytes): "sendto(sock, &in.tx, sizeof(double), 0, nullp..."
+    next()
+      body @line 72 (75 bytes): "next.packets = state.packets + static_cast<in..."
     output()   [no feedthrough — sort root]
-      body @line 66 (35 bytes): "out.rx = var.last_rx;"
+      body @line 77 (35 bytes): "out.rx = var.last_rx;"
     final(ctx)
-      body @line 70 (101 bytes): "log.info("closing after {} at t={}", ctx.mess..."
+      body @line 81 (101 bytes): "log.info("closing after {} at t={}", ctx.mess..."
     helper `double scale(double v) const`
-      body @line 76 (36 bytes): "return v * (1.0 - param.deadband);"
+      body @line 87 (36 bytes): "return v * (1.0 - param.deadband);"

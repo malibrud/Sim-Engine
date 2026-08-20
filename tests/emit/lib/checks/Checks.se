@@ -14,6 +14,15 @@ node Checks {
         node e : Both     {};
         node f : DegUnit  {};
         node g : OmegaHz  {};
+        node h : IdleNext {};
+        node i : VecArity {};
+        node j : VecSrc   {};
+        node k : VecSink  {};
+
+        // SE0410 — one `Vec3`, two bindings. A record travels as one value and
+        // coincides with the producer's storage (§15.3), so unlike a scalar
+        // port it cannot be converted on the way through.
+        j.v --> k.v;
 
         a.z --> self.y;
     }
@@ -29,14 +38,51 @@ node BadUnit {
 node BadState {
     // SE0431 — the solver's ABI is a flat `double` array.
     states  { continuous n (-): int = 0; }
-    rates() { der.n = 0.0; }
+    derivative() { der.n = 0.0; }
 }
 
 node NoOutput {
     // SE0340 — nothing else could compute an output.
     outputs { z (-): double; }
     states  { discrete k (-): int = 0; }
-    on_step() { next.k = 1; }
+    next() { next.k = 1; }
+}
+
+node IdleNext {
+    // SE0345 — `next()` may write only `next.`, and there is no discrete state
+    // for it to write. The check only became possible once `on_step()` stopped
+    // carrying the equation: while one method did both jobs, a body with no
+    // discrete states could still be doing legitimate `var` work.
+    outputs { z (-): double; }
+    next()   { }
+    output() { out.z = 0.0; }
+}
+
+// §5.2 — a parametric record binds its units at every REFERENCE, since a type
+// is never instantiated. These three exercise the binding's two failure modes.
+type Vec3 {
+    units { U; }
+    x (U): double;
+    y (U): double;
+    z (U): double;
+}
+
+node VecArity {
+    // SE0313 — `Vec3` takes one unit argument and is given none.
+    inputs   { v: Vec3; }
+    outputs  { z (-): double; }
+    output(v) { out.z = in.v.x; }
+}
+
+node VecSrc {
+    outputs  { v: Vec3(m); }
+    output() { out.v.x = 0.0; out.v.y = 0.0; out.v.z = 0.0; }
+}
+
+node VecSink {
+    inputs   { v: Vec3(m/s); }
+    outputs  { z (-): double; }
+    output(v) { out.z = in.v.x; }
 }
 
 node BadParam {

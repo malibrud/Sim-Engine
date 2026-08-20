@@ -1,0 +1,9 @@
+// Drives the translational channel from the root boundary: a host writes the
+// specific force into `sig.in`, reads the commanded platform acceleration back.
+sim Washout {
+    root: washout.Classical {};
+
+    step:     1 (ms);
+    solver:   rk4;
+    duration: 2 (s);
+}

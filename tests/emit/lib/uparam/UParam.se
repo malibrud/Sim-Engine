@@ -29,7 +29,7 @@ node Ramp {
     states  { discrete t (-): double = 0.0; }
 
     output()   { out.y = state.t; }
-    on_step()  { next.t = state.t + 1.0; }
+    next()  { next.t = state.t + 1.0; }
 }
 
 // Dimension-preserving: `U -> U` for whatever U turns out to be.
@@ -72,5 +72,5 @@ node Integrate {
     states  { discrete a (-): double = 0.0; }
 
     output()   { out.y = state.a; }
-    on_step(x) { next.a = state.a + in.x; }
+    next(x) { next.a = state.a + in.x; }
 }

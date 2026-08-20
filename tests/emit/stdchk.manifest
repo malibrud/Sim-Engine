@@ -58,6 +58,6 @@
           lp.a2                   rad^2/s^2   = 9.610000000000001   <- lp.wn * lp.wn
           lp.fs                   Hz          = 1000.0
 
-[rates]                   # decimations, derived from `rate` at configuration
+[decimation]              # derived from `rate` at configuration
 
 [types]

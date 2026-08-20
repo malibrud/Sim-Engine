@@ -1,0 +1,10 @@
+// Parametric record types (§5.2) end to end: one `Vec3` declaration bound to
+// five different units, a dimension-changing scale and cross product, and the
+// Split3/Merge3 bridge into the scalar signal library.
+sim Vec3Chk {
+    root: vec3.Vec3Chk {};
+
+    step:     1 (ms);
+    solver:   rk4;
+    duration: 10 (ms);
+}
