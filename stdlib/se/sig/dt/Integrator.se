@@ -6,9 +6,9 @@
 //
 // This is the DISCRETE integrator, which is what a fixed-rate cascade wants and
 // what reproduces a bilinear-designed reference. A continuous integrator — one
-// that joins the solver's state vector via `der.` — is a different block and is
-// not this one.
-package se.signal;
+// that joins the solver's state vector via `der.` — is a different block, and
+// the package path says so: it would be `se.sig.ct.Integrator`, not yet written.
+package se.sig.dt;
 
 node Integrator {
     units { U; }

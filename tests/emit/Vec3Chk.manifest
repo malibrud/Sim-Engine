@@ -33,9 +33,9 @@ xd[5]     lz.wd'                  1/s
           src.a.x                 m/s^2       double
           src.a.y                 m/s^2       double
           src.a.z                 m/s^2       double
-          dt.y.x                  m/s         double
-          dt.y.y                  m/s         double
-          dt.y.z                  m/s         double
+          sc.y.x                  m/s         double
+          sc.y.y                  m/s         double
+          sc.y.z                  m/s         double
           sp.x                    m/s         double
           sp.y                    m/s         double
           sp.z                    m/s         double
@@ -69,7 +69,7 @@ xd[5]     lz.wd'                  1/s
           cr.y.z                  rad*m/s
 
 [settings]                # configurable; value is the elaborated default
-          dt.k                    s           = 0.5
+          sc.k                    s           = 0.5
           lx.a0                   -           = 1.0
           lx.a1                   -           = 2.0
           lx.a2                   -           = 4.0

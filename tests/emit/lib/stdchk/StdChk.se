@@ -4,12 +4,17 @@
 //   ramp -> ScaleLimit -> Biquad -> Integrator -> Differentiator -> Sum
 //   (m/s^2)   (m/s^2)     (m/s^2)     (m/s)          (m/s^2)
 //
-// The units are the check. `Integrator` DERIVES (m/s) and `Differentiator`
-// derives back to (m/s^2); the `Sum` at the end only type-checks because the
+// It spans all three library packages: `ScaleLimit` is memoryless and sits in
+// `se.sig`, the four filters are discrete and sit in `se.sig.dt`, and `Sum` is
+// `se.math`.
+//
+// The units are the check. `dt.Integrator` DERIVES (m/s) and `dt.Differentiator`
+// derives back to (m/s^2); the `math.Sum` at the end only type-checks because the
 // round trip lands exactly where it started.
 package stdchk;
 
-use se.signal;
+use se.sig;
+use se.sig.dt;
 use se.math;
 
 node StdChk {
@@ -19,14 +24,14 @@ node StdChk {
         node src : Ramp {};
 
         // Reid & Nahon Table 5.3 block B12: s^2 / (s^2 + 8.68 s + 9.61).
-        node lim : signal.ScaleLimit    (m/s^2) { gain = 1.0; limit = 100.0; };
-        node hp  : signal.Biquad        (m/s^2) { a0 = 1.0;  a1 = 8.68;  a2 = 9.61;
-                                                  b0 = 1.0;  b1 = 0.0;   b2 = 0.0; };
-        node acc : signal.Integrator    (m/s^2) {};
-        node dif : signal.Differentiator (m/s) { wc = 12.5; };
-        node add : math.Sum             (m/s^2) {};
+        node lim : sig.ScaleLimit    (m/s^2) { gain = 1.0; limit = 100.0; };
+        node hp  : dt.Biquad         (m/s^2) { a0 = 1.0;  a1 = 8.68;  a2 = 9.61;
+                                               b0 = 1.0;  b1 = 0.0;   b2 = 0.0; };
+        node acc : dt.Integrator     (m/s^2) {};
+        node dif : dt.Differentiator (m/s)   { wc = 12.5; };
+        node add : math.Sum          (m/s^2) {};
         // Table 5.3 block B3, by the field's native wn/zeta parameterisation.
-        node lp  : signal.LowPass2      (m/s^2) { wn = 3.1; zeta = 1.4; };
+        node lp  : dt.LowPass2       (m/s^2) { wn = 3.1; zeta = 1.4; };
 
         src.y --> lim.x;
         lim.y --> lp.x;

@@ -3,17 +3,17 @@
 //
 // Taking analog rather than pre-transformed discrete coefficients is what makes
 // the design layer (LowPass2, HighPass2, ...) realization-agnostic: every design
-// computes an s-domain numerator and denominator and hands them here. A
-// continuous realization consuming the identical spec can be added later without
-// touching any design.
+// computes an s-domain numerator and denominator and hands them here. That is
+// what let `ct.Biquad` consume the identical spec without touching any design,
+// and it is why the two share a name rather than a prefix.
 //
 // Instantiate this directly to enter H(s) yourself:
 //
-//     node hp : se.signal.Biquad (m/s^2) {
+//     node hp : se.sig.dt.Biquad (m/s^2) {
 //         a0 = 1.0;  a1 = 8.68;  a2 = 9.61;      // s^2 + 8.68 s + 9.61
 //         b0 = 1.0;  b1 = 0.0;   b2 = 0.0;       // s^2          -> high-pass
 //     };
-package se.signal;
+package se.sig.dt;
 
 node Biquad {
     units { U; }

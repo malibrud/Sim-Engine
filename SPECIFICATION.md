@@ -135,6 +135,28 @@ whatever is on disk at that path; pinning is delegated to whatever already
 manages filesystem contents (vendoring, a submodule), not to a DSL-native
 package-version resolver.
 
+**Standard-library naming.** Within the shipped library, **package segments are
+abbreviated and declaration names are spelled out** — `se.sig.dt.Biquad`, not
+`se.signal.discrete.Biquad`. A package path is paid at every use site and it
+stacks, so the segments stay short; a declaration is read far more often than it
+is typed, so it stays whole. This is a convention for the library's own contents,
+not a rule the compiler enforces on anyone's packages.
+
+The library uses the second level to split blocks by **time character**, which is
+the property that decides whether a node's states join the solver's vector or
+advance on a rate:
+
+```
+<root>/se/sig/ScaleLimit.se       ->  se.sig.ScaleLimit      memoryless
+<root>/se/sig/ct/Biquad.se        ->  se.sig.ct.Biquad       continuous
+<root>/se/sig/dt/Biquad.se        ->  se.sig.dt.Biquad       discrete
+```
+
+Two realizations of one transfer function therefore share a name and differ by
+one segment. Note also that `continuous` and `discrete` are reserved words
+(Appendix B) and a package path takes identifiers only, so those two segments
+could not be spelled out even if the convention allowed it.
+
 **Root collisions.** A package path that resolves in more than one root is an
 error (`SE0305`). A root may be marked `override` in the manifest, which permits
 it to shadow nodes at the same path in earlier roots. Shadowing is therefore
@@ -728,7 +750,7 @@ Unit arguments are **positional**, in the order the `units` section declares
 them, and are written **after the definition path**:
 
 ```
-node acc : signal.Integrator (m/s^2) { };   // y is (m/s^2 * s) = (m/s)
+node acc : dt.Integrator (m/s^2) { };   // y is (m/s^2 * s) = (m/s)
 ```
 
 Supplying the wrong number of arguments is an error (`SE0419`).

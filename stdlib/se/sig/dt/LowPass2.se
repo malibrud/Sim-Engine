@@ -12,7 +12,7 @@
 // (§4.3), so `2 zeta wn` has to come out in rad/s and `wn^2` in (rad/s)^2.
 // Invert one of them, or drop a factor of wn, and it is a compile error rather
 // than a filter that runs and is wrong.
-package se.signal;
+package se.sig.dt;
 
 node LowPass2 {
     units { U; }

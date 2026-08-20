@@ -1,29 +1,30 @@
-// The continuous realization of one second-order section: the same H(s) the
-// discrete `Biquad` takes, integrated by the global solver instead of mapped
-// through the bilinear transform.
+// The continuous realization of one second-order section: the same H(s) that
+// `dt.Biquad` takes, integrated by the global solver instead of mapped through
+// the bilinear transform.
 //
-// `Biquad` takes ANALOG coefficients precisely so that a continuous realization
-// could consume the identical spec, and this is it. The two nodes have the same
-// six settings and the same U -> U ports, so moving a block between them is a
-// change of node path and nothing else.
+// `dt.Biquad` takes ANALOG coefficients precisely so that a continuous
+// realization could consume the identical spec, and this is it. The two nodes
+// have the same six settings and the same U -> U ports, and now the same name:
+// moving a block between them is a change of one package segment and nothing
+// else.
 //
 // Reach for this one when the filter is part of the plant rather than part of
 // the signal processing: its states join the solver's state vector, so they are
 // integrated at the solver's order alongside the dynamics they interact with,
 // and a stiff section is the step size's problem rather than a design that was
-// silently warped. Reach for `Biquad` when you want a fixed-rate filter whose
+// silently warped. Reach for `dt.Biquad` when you want a fixed-rate filter whose
 // coefficients are pinned once and whose response does not move when the sim's
 // step or solver changes.
 //
 // Instantiate this directly to enter H(s) yourself:
 //
-//     node hp : se.signal.ContinuousBiquad (m/s^2) {
+//     node hp : se.sig.ct.Biquad (m/s^2) {
 //         a0 = 1.0;  a1 = 8.68;  a2 = 9.61;      // s^2 + 8.68 s + 9.61
 //         b0 = 1.0;  b1 = 0.0;   b2 = 0.0;       // s^2          -> high-pass
 //     };
-package se.signal;
+package se.sig.ct;
 
-node ContinuousBiquad {
+node Biquad {
     units { U; }
 
     settings {
@@ -34,7 +35,7 @@ node ContinuousBiquad {
         // spell. The dimensional contract lives entirely in the ports: this
         // node is U -> U, and nothing about the coefficients can change that.
         //
-        // Identical to `Biquad`'s, deliberately: the shared surface is what
+        // Identical to `dt.Biquad`'s, deliberately: the shared surface is what
         // makes the two interchangeable.
         a0 (-): double = 1.0;
         a1 (-): double = 0.0;
@@ -45,7 +46,7 @@ node ContinuousBiquad {
 
         // NO `fs`, and no `rate`. There is no discretization here, so there is
         // no sample rate to design against — the one setting that separates
-        // this node from `Biquad` is the one that is missing. Accuracy is the
+        // this node from `dt.Biquad` is the one that is missing. Accuracy is the
         // sim file's `step` and `solver`, and a continuous node is by
         // definition a base-rate node that happens to have integrated states.
     }
@@ -55,9 +56,9 @@ node ContinuousBiquad {
 
     // Controllable canonical form: `w` is the inner state, `wd` its derivative.
     // Two states whatever the section is; a first-order design does NOT belong
-    // here — see Integrator, Differentiator and HighPass1.
+    // here — see dt.Integrator, dt.Differentiator and HighPass1.
     //
-    // `(-)` for the same reason Biquad's Direct Form II states are: a canonical
+    // `(-)` for the same reason dt.Biquad's Direct Form II states are: a canonical
     // form state has no honest unit when the coefficients carry none. Note that
     // these names are public surface — they are the slot map in
     // `[state.continuous]` and the path an initial condition overrides.

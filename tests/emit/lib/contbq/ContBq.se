@@ -1,4 +1,4 @@
-// Numerical check for se.signal.ContinuousBiquad, the stdlib's first block with
+// Numerical check for se.sig.ct.Biquad, the stdlib's first block with
 // continuous states. Both sections are driven by the same unit step and both
 // have an exact closed form, which is what tests/run.ps1 compares the recorded
 // CSV against — the same treatment `decay` gets, rather than a golden file.
@@ -14,7 +14,7 @@
 // dropped or mis-signed direct term is wrong in the very first recorded row.
 package contbq;
 
-use se.signal;
+use se.sig.ct;
 
 node ContBq {
     outputs {
@@ -25,11 +25,11 @@ node ContBq {
     structure {
         node src : Step {};
 
-        node lp : signal.ContinuousBiquad (-) {
+        node lp : ct.Biquad (-) {
             a0 = 1.0;  a1 = 2.0;  a2 = 4.0;
             b0 = 0.0;  b1 = 0.0;  b2 = 4.0;
         };
-        node hp : signal.ContinuousBiquad (-) {
+        node hp : ct.Biquad (-) {
             a0 = 1.0;  a1 = 2.0;  a2 = 4.0;
             b0 = 1.0;  b1 = 0.0;  b2 = 0.0;
         };

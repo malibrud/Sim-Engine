@@ -1,7 +1,7 @@
 // Vec3 -> three scalars.
 //
 // This is what lets a `Vec3` meet the scalar signal library. Every filter in
-// `se.signal` is a scalar block, and a wire carries the WHOLE record (§5.3):
+// `se.sig` is a scalar block, and a wire carries the WHOLE record (§5.3):
 // `v.x --> hp.x` is reserved syntax that stage 3 rejects (`SE0311`). So a
 // three-axis filter chain is `Split3` -> three sections -> `Merge3`.
 //

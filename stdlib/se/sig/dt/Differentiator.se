@@ -7,7 +7,7 @@
 // The roll-off is not a shortcut. Differentiating a signal that already
 // contains a high-passed input means the exact derivative would require the
 // input's own derivative, which the model does not carry.
-package se.signal;
+package se.sig.dt;
 
 node Differentiator {
     units { U; }
