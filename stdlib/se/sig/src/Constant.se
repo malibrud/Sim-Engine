@@ -1,0 +1,21 @@
+// A constant signal. The degenerate source, and the one worth having anyway:
+// every model eventually needs a fixed reference on a wire, and writing it as
+// a file-private node in each one is exactly the duplication `se.sig.src`
+// exists to remove.
+//
+// Memoryless, so it has no `rate` and no time state. That is not an omission —
+// a constant has no time character at all, which is why it is the one source
+// here that would sit equally well in any of the three signal packages.
+package se.sig.src;
+
+node Constant {
+    units { U; }
+
+    settings { value (U): double = 0.0; }
+
+    outputs { y (U): double; }
+
+    // No inputs, so `output()` takes an empty list and the node is a sort root
+    // (§8.5): it needs no predecessor and can break an algebraic loop.
+    output() { out.y = param.value; }
+}

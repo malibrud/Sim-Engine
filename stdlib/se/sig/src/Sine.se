@@ -1,0 +1,74 @@
+// A sine wave: y = offset + amplitude * sin(2*pi*f*t + phase).
+//
+// PHASE IS THE STATE, NORMALISED TO [0, 1) — not time, and not radians. Three
+// things fall out of that one choice:
+//
+//   * the increment is `f / rate` with no 2*pi in it at all;
+//   * wrapping is one exact `floor` subtraction, correct for any `f`, where a
+//     conditional single subtract silently breaks above the sample rate;
+//   * precision does not decay. `sin(2*pi*f*t)` loses mantissa bits as `t`
+//     grows, so a long run drifts out of phase with its own reference; a
+//     wrapped accumulator never carries a phase larger than one turn.
+//
+// The state is public surface (§13.4), so a sim file can start the run
+// mid-cycle by overriding `u`. That is a real capability, and it is one a
+// closed-form `sin(2*pi*f*t)` source could not offer.
+//
+// This is a DISCRETE source: the output is held across a step, so a continuous
+// consumer sees a staircase and RK4 is first-order across that path. See the
+// package's own note — there is no `ct` twin, deliberately.
+package se.sig.src;
+
+node Sine {
+    units { U; }
+
+    settings {
+        amplitude (U):   double = 1.0;
+        f         (Hz):  double = 1.0;
+        phase     (rad): double = 0.0;    // radians is the only declarable
+                                          // angle unit (§4.5)
+        offset    (U):   double = 0.0;
+
+        rate (Hz): double = sample_rate;
+    }
+
+    outputs { y (U): double; }
+
+    // Normalised phase, one turn per period.
+    states { discrete u (-): double = 0.0; }
+
+    vars {
+        du (-): double;      // turns per sample
+        p0 (-): double;      // `phase`, in turns
+    }
+
+    // The 2*pi lives here, on erased units, for `LowPass2`'s reason: once angle
+    // is a base dimension, `param.phase / (2*pi)` is angle divided by a
+    // dimensionless constant and cannot be written as a derived setting whose
+    // declared unit is `(-)`. It is honest arithmetic on erased units (§4.4),
+    // so it belongs in a body.
+    //
+    // An aliased generator is the commonest way one of these is used wrongly,
+    // and `init()` is one of the three methods where logging is legal (§10.1),
+    // so it is worth one line to say so. Observational only: logging never
+    // affects control flow and never halts a run.
+    init() {
+        var.du = param.f / param.rate;
+        var.p0 = param.phase / 6.283185307179586;
+        if (param.f >= 0.5 * param.rate)
+            log.warn("f = {} Hz is at or above the Nyquist of this node's {} Hz rate",
+                     param.f, param.rate);
+    }
+
+    output() {
+        out.y = param.offset
+              + param.amplitude * std::sin(6.283185307179586 * (state.u + var.p0));
+    }
+
+    // `floor` rather than a conditional subtract: exact, branch-free, and right
+    // for any `du`.
+    next() {
+        const double v = state.u + var.du;
+        next.u = v - std::floor(v);
+    }
+}

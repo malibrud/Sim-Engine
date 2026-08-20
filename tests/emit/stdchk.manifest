@@ -16,7 +16,7 @@
           (none)
 
 [state.discrete]          # Sim::dis; offsets from Sim::discrete_map()
-          src.t                   -           double
+          ramp.t                  s           double
           hp.w1                   -           double
           hp.w2                   -           double
           acc.w1                  -           double
@@ -25,7 +25,7 @@
           lp.w2                   -           double
 
 [signals]                 # Sim::sig; offsets from Sim::signal_map()
-          src.y                   m/s^2       double
+          ramp.y                  m/s^2       double
           lim.y                   m/s^2       double
           hp.y                    m/s^2       double
           acc.y                   m/s         double
@@ -40,6 +40,10 @@
           add.y                   m/s^2
 
 [settings]                # configurable; value is the elaborated default
+          ramp.slope              m/s^3       = 1.0
+          ramp.initial            m/s^2       = 0.0
+          ramp.t_start            s           = 0.0
+          ramp.rate               Hz          = 1000.0
           lim.gain                -           = 1.0
           lim.limit               m/s^2       = 100.0
           hp.a0                   -           = 1.0
@@ -59,5 +63,6 @@
           lp.fs                   Hz          = 1000.0
 
 [decimation]              # derived from `rate` at configuration
+          ramp                    1000 Hz     = every 1 tick
 
 [types]

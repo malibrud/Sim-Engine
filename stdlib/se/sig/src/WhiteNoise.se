@@ -1,0 +1,109 @@
+// Gaussian white noise, drawn once per sample and held.
+//
+// THE DRAW IS A PURE FUNCTION OF (seed, sample index). There is no generator
+// word carried in state and no RNG object: the value at sample k is a hash of
+// k, so `next()` -- which is pure and may write nothing but `next.` -- can
+// produce it. That is not a workaround, it is the only shape that fits. A
+// `native { rng: std::mt19937 }` is out of scope in `next()` (§6.7), so a
+// stateful generator would have to be advanced from `on_step()`, which §8.1
+// reserves for methods that carry no equation.
+//
+// What the choice buys beyond legality: the sequence is reproducible from any
+// point, not just from the start. Two runs that begin at different sample
+// indices see the same noise on the same samples, and a run restarted from a
+// recorded IC resumes the sequence it would have had.
+//
+// BANDWIDTH IS THIS NODE'S RATE. The output is held between sample instants
+// (§9.3), so the noise is white only up to the node's own Nyquist. Declare
+// `rate` to place that corner deliberately; leaving it at the base step ties
+// the spectrum to the solver's step size, which is the trap `psd` below exists
+// to make visible.
+package se.sig.src;
+
+node WhiteNoise {
+    units { U; }
+
+    settings {
+        rate (Hz): double = sample_rate;
+
+        // THREE KNOBS, ONE QUANTITY, in dependency order. Bind any one and the
+        // ones below it follow; binding pins (§6.2), so the expression stops
+        // running for whatever you bound.
+        //
+        //   bind nothing -> sigma = 1 U, at any rate
+        //   bind `psd`   -> a spec-sheet noise density; sigma follows the rate
+        //   bind `sigma` -> a per-sample standard deviation, rate-independent
+        //
+        // `sigma0` exists only to seed the chain, and it has to exist: `psd`
+        // cannot carry a rate-consistent default of its own. A unit parameter
+        // is not spellable as a literal suffix -- `2.0 (U^2)` is `SE0414`,
+        // because a literal's unit is evaluated without the enclosing node's
+        // unit parameters in scope -- and a bare literal adopts its site's unit
+        // only when the WHOLE expression is bare, so `2.0 * <a period>` cannot
+        // be coerced to `U^2/Hz` either. Making `sigma` and `psd` derive from
+        // each other would be a cycle (`SE0421`). A third, plainly-defaulted
+        // setting is what breaks it.
+        sigma0 (U):      double = 1.0;
+        psd    (U^2/Hz): double = 2.0 * param.sigma0 * param.sigma0 / param.rate;
+        sigma  (U):      double = sqrt(param.psd * param.rate / 2.0);
+
+        mean (U): double = 0.0;
+        seed (-): int    = 12345;
+    }
+
+    outputs { y (U): double; }
+
+    states {
+        discrete k (-): int    = 0;      // sample index -- the only RNG state
+        discrete z (-): double = 0.0;    // this sample's standard normal
+    }
+
+    declarations {
+        #include <cstdint>
+        #include <cmath>
+        namespace {
+
+        // lowbias32 (Chris Wellons). A bijection on uint32, so distinct inputs
+        // never collide -- which is what makes indexing it by sample number
+        // sound rather than merely convenient.
+        //
+        // Named for this node: `declarations` is guarded per node (§6.6) but
+        // every node lands in ONE translation unit, so four sources sharing a
+        // helper name would be four definitions of it.
+        inline std::uint32_t wn_hash(std::uint32_t x) {
+            x ^= x >> 16;  x *= 0x7feb352du;
+            x ^= x >> 15;  x *= 0x846ca68bu;
+            x ^= x >> 16;  return x;
+        }
+
+        // Half-open (0, 1): the +0.5 keeps it off zero, which `log` needs.
+        inline double wn_u01(std::uint32_t h) {
+            return (static_cast<double>(h) + 0.5) * (1.0 / 4294967296.0);
+        }
+
+        }
+    }
+
+    // Box-Muller on two words indexed 2k and 2k+1, so the pair for one sample
+    // cannot overlap the pair for its neighbour. Only the cosine leg is used;
+    // keeping the sine leg would halve the hashing at the cost of a state to
+    // park it in, and the hash is cheaper than the state slot.
+    double wn_draw(int seed, int k) const {
+        const std::uint32_t s = static_cast<std::uint32_t>(seed) * 0x9e3779b9u;
+        const std::uint32_t i = static_cast<std::uint32_t>(k) * 2u;
+        const double u1 = wn_u01(wn_hash(s + i));
+        const double u2 = wn_u01(wn_hash(s + i + 1u));
+        return std::sqrt(-2.0 * std::log(u1)) * std::cos(6.283185307179586 * u2);
+    }
+
+    // `init()` may write `state` -- the IC escape hatch (§6.4) -- so sample 0
+    // is drawn here and `next()` stays exactly one sample ahead thereafter.
+    init() { state.z = wn_draw(param.seed, 0); }
+
+    output() { out.y = param.mean + param.sigma * state.z; }
+
+    next() {
+        next.k = state.k + 1;
+        next.z = wn_draw(param.seed, state.k + 1);
+    }
+}

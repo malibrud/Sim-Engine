@@ -415,6 +415,128 @@ if (-not $cl) {
         }
     }
 
+    # SrcChk drives all twelve se.sig.src blocks for 20 s at 1 kHz and records
+    # every sample. Eight of them have an EXACT closed form and are checked
+    # against it; the stochastic four are checked on the properties that define
+    # them, because a hash-by-hash golden file would freeze an implementation
+    # detail rather than the contract.
+    #
+    # ASCII only in this file, so: the periodic blocks run at 50 Hz on a 1 kHz
+    # step, which is exactly 20 samples per period. That makes the normalised
+    # phase u = (n * 50 / 1000) mod 1 land on an exact binary fraction, so the
+    # closed forms hold at every sample with no phase ambiguity to allow for.
+    if ($emitDirs.ContainsKey('SrcChk')) {
+        $scDir = $emitDirs['SrcChk']
+        Push-Location $scDir
+        & '.\SrcChk.exe' 2>&1 | Out-Null
+        $ran = ($LASTEXITCODE -eq 0)
+        Pop-Location
+        $csv = Join-Path $scDir 'srcchk.csv'
+        if ($ran -and (Test-Path $csv)) {
+            $rows = Get-Content $csv | Select-Object -Skip 1
+            $twoPi = 2.0 * [Math]::PI
+            $worst = 0.0
+            $wn = New-Object 'System.Collections.Generic.List[double]'
+            $un = New-Object 'System.Collections.Generic.List[double]'
+            $pn = New-Object 'System.Collections.Generic.List[double]'
+            $pr = New-Object 'System.Collections.Generic.List[double]'
+            $n = 0
+            foreach ($line in $rows) {
+                if (-not $line) { continue }
+                $c = $line -split ','
+                $t = [double]$c[0]
+                # Normalised phase of the 50 Hz group.
+                $u = ($n * 50.0 / 1000.0) % 1.0
+                $tri = if ($u -lt 0.25) { 4.0 * $u }
+                       elseif ($u -lt 0.75) { 2.0 - 4.0 * $u }
+                       else { 4.0 * $u - 4.0 }
+                # Chirp: phase is the integral of a linear sweep, restarted
+                # every `sweep` seconds. kq = (f1 - f0) / (2 * sweep) = 190.
+                $tc = $t % 0.5
+                $errs = @(
+                    [Math]::Abs([double]$c[1] - 2.5),
+                    [Math]::Abs([double]$c[2] - $(if ($t -lt 0.25) { -1.0 } else { 3.0 })),
+                    [Math]::Abs([double]$c[3] - (1.0 + 4.0 * $t)),
+                    [Math]::Abs([double]$c[4] - 2.0 * [Math]::Sin($twoPi * $u)),
+                    [Math]::Abs([double]$c[5] - $(if ($u -lt 0.25) { 1.5 } else { -1.5 })),
+                    [Math]::Abs([double]$c[6] - 3.0 * $tri),
+                    [Math]::Abs([double]$c[7] - (0.5 + 2.0 * $u - 1.0)),
+                    [Math]::Abs([double]$c[8] -
+                        [Math]::Sin($twoPi * (10.0 * $tc + 190.0 * $tc * $tc))))
+                foreach ($e in $errs) { if ($e -gt $worst) { $worst = $e } }
+                $wn.Add([double]$c[9]); $un.Add([double]$c[10])
+                $pn.Add([double]$c[11]); $pr.Add([double]$c[12])
+                $n++
+            }
+        } else {
+            $worst = [double]::PositiveInfinity
+        }
+
+        # 1e-7 for ContBq's reason and not the solver's: the recorder writes
+        # %.9g, so a value near 3 resolves only to about 5e-9 in the FILE. These
+        # are closed-form evaluations with no integration error at all, so
+        # anything above file resolution is a real defect.
+        if ($worst -lt 1e-7) {
+            Write-Host ("ok   build/emit/SrcChk : 8 waveforms match their closed forms, max error " +
+                        $worst.ToString('E2')) -ForegroundColor Green
+            $script:pass++
+        } else {
+            Write-Host ("FAIL build/emit/SrcChk : max waveform error " + $worst) -ForegroundColor Red
+            $script:fail++
+        }
+
+        # The stochastic four. Tolerances are STATISTICAL, not numerical: over
+        # 20000 samples a sample standard deviation sits within roughly 1% of
+        # the true one, so 3% never flakes while still catching a dropped scale
+        # factor, a wrong mean, or a broken Box-Muller -- all of which are O(1)
+        # errors, not O(1%) ones.
+        if ($worst -lt [double]::PositiveInfinity) {
+            function Stat($v) {
+                $m = 0.0; foreach ($x in $v) { $m += $x }; $m /= $v.Count
+                $s = 0.0; foreach ($x in $v) { $s += ($x - $m) * ($x - $m) }
+                return @($m, [Math]::Sqrt($s / $v.Count))
+            }
+            $bad = @()
+            $s1 = Stat $wn      # sigma = 2.0, mean = 0.5
+            if ([Math]::Abs($s1[0] - 0.5) -gt 0.06) { $bad += "wn mean $($s1[0])" }
+            if ([Math]::Abs($s1[1] - 2.0) -gt 0.06) { $bad += "wn sd $($s1[1])" }
+            $s2 = Stat $un      # lo = -3, hi = 1 -> mean -1, sd 4/sqrt(12)
+            if ([Math]::Abs($s2[0] + 1.0) -gt 0.05) { $bad += "un mean $($s2[0])" }
+            if ([Math]::Abs($s2[1] - (4.0 / [Math]::Sqrt(12.0))) -gt 0.05) {
+                $bad += "un sd $($s2[1])"
+            }
+            # Pink noise: sd only. Its MEAN is deliberately not asserted -- 1/f
+            # power means most of the energy is at the lowest resolvable
+            # frequencies, so the sample mean over any finite window is itself a
+            # random walk and does not converge. That is the definition of pink,
+            # not a defect, and asserting on it would produce a flaky test.
+            $s3 = Stat $pn
+            if ([Math]::Abs($s3[1] - 1.0) -gt 0.10) { $bad += "pn sd $($s3[1])" }
+
+            # PRBS: the two properties that make it an identification signal.
+            # Order 9, so one period is 2^9 - 1 = 511 samples, and it must repeat
+            # EXACTLY -- a wrong tap set still produces a plausible-looking
+            # bitstream, just with a shorter period, which this catches and no
+            # statistical check would.
+            $lv = ($pr | Sort-Object -Unique)
+            if ($lv.Count -ne 2 -or $lv[0] -ne -1.0 -or $lv[1] -ne 1.0) {
+                $bad += "pr levels $($lv -join '/')"
+            }
+            $per = 511
+            for ($i = 0; $i -lt ($pr.Count - $per); $i++) {
+                if ($pr[$i] -ne $pr[$i + $per]) { $bad += "pr period broken at $i"; break }
+            }
+            if ($bad.Count -eq 0) {
+                Write-Host ("ok   build/emit/SrcChk : noise statistics and PRBS period " +
+                            "match their specifications") -ForegroundColor Green
+                $script:pass++
+            } else {
+                Write-Host ("FAIL build/emit/SrcChk : " + ($bad -join '; ')) -ForegroundColor Red
+                $script:fail++
+            }
+        }
+    }
+
     # tests/emit/host.cpp is a hand-written host: it includes the generated
     # HEADER, drives the root boundary that the batch driver cannot, and checks
     # the block offset tables and the 200 Hz decimation. It fails to link if the

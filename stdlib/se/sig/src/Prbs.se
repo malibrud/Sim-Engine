@@ -1,0 +1,122 @@
+// A maximal-length pseudo-random binary sequence: `+amplitude` or `-amplitude`,
+// one bit per sample, repeating every 2^order - 1 samples.
+//
+// The standard system-identification excitation. A PRBS has an almost flat
+// spectrum up to its bit rate and a near-ideal autocorrelation -- a single
+// spike at zero lag -- which is what makes a correlation-based impulse-response
+// estimate work. It is also DETERMINISTIC and periodic, so an identification
+// run is exactly repeatable and can be averaged over whole periods to reject
+// noise. That is the property `WhiteNoise` cannot offer and the reason both
+// exist.
+//
+// THE BIT RATE IS THE NODE'S `rate`, which is the knob that actually matters:
+// it sets the excitation bandwidth. Choose it a few times above the fastest
+// dynamics of interest, and choose `order` so one period
+// (2^order - 1 bits) is longer than the plant's settling time -- otherwise the
+// sequence wraps into itself and the estimate smears.
+//
+// Unlike the other sources here, this one is a shift register rather than a
+// counter-based hash: a PRBS is DEFINED by its recurrence, and its spectral
+// properties come from that specific structure. A hash would produce random
+// bits with none of the guarantees above.
+package se.sig.src;
+
+node Prbs {
+    units { U; }
+
+    settings {
+        amplitude (U): double = 1.0;
+        offset    (U): double = 0.0;
+
+        // Register width. One period is 2^order - 1 samples: at order 11 and a
+        // 1 kHz rate that is 2.047 s.
+        order (-): int = 11;
+
+        // Any nonzero value; the all-zero register is the one state a maximal
+        // LFSR cannot leave, which `init()` rejects.
+        seed (-): int = 1;
+
+        rate (Hz): double = sample_rate;
+    }
+
+    outputs { y (U): double; }
+
+    // The shift register, held masked to `order` bits so it is always a small
+    // positive `int`. That is the point of masking rather than letting it run:
+    // there is no uint32-through-int round trip anywhere in this node, which
+    // would be implementation-defined before C++20.
+    states { discrete reg (-): int = 1; }
+
+    vars {
+        mask (-): int;      // (1 << order) - 1
+        taps (-): int;      // XOR feedback mask, maximal for this order
+    }
+
+    // Tap sets for the standard maximal-length polynomials. A `switch` rather
+    // than a table so an unsupported order is impossible to reach silently.
+    //
+    // `sim.abort` on a bad order rather than a clamp or a default: a PRBS with
+    // the wrong period is a wrong experiment that still produces plausible
+    // plots. `init()` is one of the two methods where halting is legal (§10.2),
+    // and configuration runs before the first tick, so this fails with nothing
+    // having executed.
+    init() {
+        switch (param.order) {
+            case  7: var.taps = 0x60;       break;   // x^7  + x^6  + 1
+            case  9: var.taps = 0x110;      break;   // x^9  + x^5  + 1
+            case 11: var.taps = 0x500;      break;   // x^11 + x^9  + 1
+            case 15: var.taps = 0x6000;     break;   // x^15 + x^14 + 1
+            case 17: var.taps = 0x12000;    break;   // x^17 + x^14 + 1
+            case 20: var.taps = 0x90000;    break;   // x^20 + x^17 + 1
+            case 23: var.taps = 0x420000;   break;   // x^23 + x^18 + 1
+            case 31: var.taps = 0x48000000; break;   // x^31 + x^28 + 1
+            default:
+                log.error("order {} has no maximal-length tap set; "
+                          "supported: 7 9 11 15 17 20 23 31", param.order);
+                sim.abort("se.sig.src.Prbs: unsupported order");
+                return;
+        }
+        // Built in UNSIGNED: `1 << 31` overflows a signed int, which is UB,
+        // and order 31 is a supported case. The result masks to 0x7fffffff at
+        // most, so the conversion back is in range and well defined.
+        var.mask = static_cast<int>((1u << param.order) - 1u);
+
+        const int s = param.seed & var.mask;
+        if (s == 0) {
+            log.error("seed {} is all-zero in {} bits; a maximal LFSR cannot "
+                      "leave that state", param.seed, param.order);
+            sim.abort("se.sig.src.Prbs: zero seed");
+            return;
+        }
+        // The IC escape hatch (§6.4): the declared default is a placeholder and
+        // the real initial register is the masked seed.
+        state.reg = s;
+    }
+
+    // The low bit, mapped to +/-amplitude. Bipolar for `Square`'s reason: a
+    // zero-mean excitation is what an identification run wants, and `offset`
+    // buys the unipolar case back.
+    output() {
+        out.y = param.offset + ((state.reg & 1) ? param.amplitude : -param.amplitude);
+    }
+
+    // Fibonacci LFSR: fold the tapped bits to their parity, shift left, and
+    // drop the parity into the bottom.
+    //
+    // The arithmetic is UNSIGNED throughout and masked before it comes back.
+    // `state.reg << 1` would overflow a signed int at order 31 -- the register
+    // reaches 0x7fffffff there -- and signed overflow is UB, not a wrap. The
+    // masked result always fits, so the conversion back to `int` is in range
+    // rather than implementation-defined.
+    next() {
+        const unsigned r = static_cast<unsigned>(state.reg);
+        unsigned v = r & static_cast<unsigned>(var.taps);
+        v ^= v >> 16;
+        v ^= v >> 8;
+        v ^= v >> 4;
+        v ^= v >> 2;
+        v ^= v >> 1;
+        next.reg = static_cast<int>(((r << 1) | (v & 1u))
+                                    & static_cast<unsigned>(var.mask));
+    }
+}

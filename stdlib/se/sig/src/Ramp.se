@@ -1,0 +1,39 @@
+// A linear ramp: held at `initial` until `t_start`, then `slope` per second.
+//
+// `slope` is `(U/s)` and is REQUIRED, which is the dimensional assertion worth
+// making — a ramp is defined by its rate of change, and declaring it in the
+// output's unit instead would make `Ramp(m)` and `Ramp(m/s)` accept the same
+// number for two different physical claims.
+//
+// Computed from elapsed time rather than accumulated into the output, so the
+// value never drifts: an accumulator adds `slope * ts` once per step and
+// carries every rounding with it, while `slope * (t - t_start)` is one
+// multiply against a clock that is itself exact to the step count.
+package se.sig.src;
+
+node Ramp {
+    units { U; }
+
+    settings {
+        slope   (U/s): double;              // required
+        initial (U):   double = 0.0;
+        t_start (s):   double = 0.0;
+
+        rate (Hz): double = sample_rate;
+    }
+
+    outputs { y (U): double; }
+
+    states { discrete t (s): double = 0.0; }
+
+    vars { ts (s): double; }
+
+    init() { var.ts = 1.0 / param.rate; }
+
+    output() {
+        const double e = state.t - param.t_start;
+        out.y = e > 0.0 ? param.initial + param.slope * e : param.initial;
+    }
+
+    next() { next.t = state.t + var.ts; }
+}

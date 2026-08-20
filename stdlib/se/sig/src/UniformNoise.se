@@ -1,0 +1,67 @@
+// Uniform white noise on [lo, hi), drawn once per sample and held.
+//
+// A separate node from `WhiteNoise` rather than a `distribution` setting on it:
+// a setting that switches which formula a body runs is behaviour hidden behind
+// a value, and the two blocks do not even share a parameterisation -- a
+// uniform is named by its bounds and a Gaussian by its moments. What they share
+// is the counter-based draw, and that is eight lines.
+//
+// Cheaper than `WhiteNoise` by a `log`, a `sqrt` and a `cos`, which is the
+// reason to reach for it when the distribution genuinely does not matter --
+// dither, a randomised initial condition, a crude disturbance. When it does
+// matter, note that a sum of uniforms is not a Gaussian and that the tails are
+// hard-bounded, which is exactly wrong for modelling sensor noise.
+//
+// See `WhiteNoise` for why the draw is a pure function of the sample index and
+// for what the node's `rate` does to the spectrum.
+package se.sig.src;
+
+node UniformNoise {
+    units { U; }
+
+    settings {
+        lo (U): double = -1.0;
+        hi (U): double =  1.0;
+
+        seed (-): int = 12345;
+
+        rate (Hz): double = sample_rate;
+    }
+
+    outputs { y (U): double; }
+
+    states { discrete k (-): int = 0; }
+
+    declarations {
+        #include <cstdint>
+        namespace {
+
+        // lowbias32, as in WhiteNoise. Named for THIS node: `declarations` is
+        // guarded per node (§6.6) but the whole model is one translation unit,
+        // so a shared name would be a redefinition.
+        inline std::uint32_t un_hash(std::uint32_t x) {
+            x ^= x >> 16;  x *= 0x7feb352du;
+            x ^= x >> 15;  x *= 0x846ca68bu;
+            x ^= x >> 16;  return x;
+        }
+
+        }
+    }
+
+    // One word per sample, so no 2k indexing is needed here.
+    double un_draw(int seed, int k) const {
+        const std::uint32_t h = un_hash(static_cast<std::uint32_t>(seed) * 0x9e3779b9u
+                                        + static_cast<std::uint32_t>(k));
+        return static_cast<double>(h) * (1.0 / 4294967296.0);   // [0, 1)
+    }
+
+    // No held sample state: the value is a function of `k` alone and `output()`
+    // is pure, so recomputing it across the four RK4 trial evaluations returns
+    // the identical number. `WhiteNoise` parks its draw in a state because
+    // Box-Muller is worth not repeating; one hash is not.
+    output() {
+        out.y = param.lo + (param.hi - param.lo) * un_draw(param.seed, state.k);
+    }
+
+    next() { next.k = state.k + 1; }
+}

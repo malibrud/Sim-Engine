@@ -1,0 +1,76 @@
+// Exercises `se.sig.src`, the standard library's signal-source layer, end to
+// end: every one of the twelve blocks is instantiated, unit-parametric on
+// `(m/s^2)`, and brought out to the root boundary.
+//
+// Most of these have an EXACT closed form, which is what tests/run.ps1 checks
+// the recorded CSV against -- the treatment `decay` and `contbq` get, rather
+// than a golden file. The generators are driven at frequencies that divide the
+// base rate evenly so the closed forms hold at every sample with no phase
+// ambiguity: 50 Hz on a 1 kHz step is exactly 20 samples per period.
+//
+// `wn` is checked statistically instead. Its mean and standard deviation over
+// the recorded column must match `mean` and `sigma`, which is the assertion
+// that catches a dropped scale factor or a broken Box-Muller while staying
+// insensitive to the particular hash.
+//
+// `pn` and `pr` are here to prove they elaborate, emit and compile. A spectral
+// assertion on pink noise and an autocorrelation assertion on a PRBS both need
+// an FFT the suite does not have; their numerical properties are argued in
+// their headers rather than tested here, and that is a real gap.
+package srcchk;
+
+use se.sig.src;
+
+node SrcChk {
+    outputs {
+        ct (m/s^2): double;     // constant
+        st (m/s^2): double;     // step
+        rp (m/s^2): double;     // ramp
+        sn (m/s^2): double;     // sine
+        sq (m/s^2): double;     // square
+        tr (m/s^2): double;     // triangle
+        sw (m/s^2): double;     // sawtooth
+        cp (m/s^2): double;     // chirp
+        wn (m/s^2): double;     // white noise
+        un (m/s^2): double;     // uniform noise
+        pn (m/s^2): double;     // pink noise
+        pr (m/s^2): double;     // prbs
+    }
+
+    structure {
+        node n_ct : src.Constant (m/s^2) { value = 2.5; };
+        node n_st : src.Step     (m/s^2) { initial = -1.0; target = 3.0;
+                                           t_step  = 0.25; };
+        node n_rp : src.Ramp     (m/s^2) { slope = 4.0; initial = 1.0; };
+
+        // 50 Hz on a 1 kHz base step: 20 samples per period, exactly.
+        node n_sn : src.Sine     (m/s^2) { amplitude = 2.0;  f = 50.0; };
+        node n_sq : src.Square   (m/s^2) { amplitude = 1.5;  f = 50.0; duty = 0.25; };
+        node n_tr : src.Triangle (m/s^2) { amplitude = 3.0;  f = 50.0; };
+        node n_sw : src.Sawtooth (m/s^2) { amplitude = 1.0;  f = 50.0; offset = 0.5; };
+
+        node n_cp : src.Chirp    (m/s^2) { amplitude = 1.0; f0 = 10.0; f1 = 200.0;
+                                           sweep = 0.5; };
+
+        // Bound by `sigma`, which PINS it (§6.2) and leaves `psd` reporting the
+        // density `sigma0` implies. Binding `psd` instead drives `sigma` the
+        // other way; the manifest records which of the two actually ran.
+        node n_wn : src.WhiteNoise   (m/s^2) { sigma = 2.0; mean = 0.5; };
+        node n_un : src.UniformNoise (m/s^2) { lo = -3.0; hi = 1.0; seed = 777; };
+        node n_pn : src.PinkNoise    (m/s^2) { sigma = 1.0; f_lo = 2.0; f_hi = 200.0; };
+        node n_pr : src.Prbs         (m/s^2) { amplitude = 1.0; order = 9; };
+
+        n_ct.y --> self.ct;
+        n_st.y --> self.st;
+        n_rp.y --> self.rp;
+        n_sn.y --> self.sn;
+        n_sq.y --> self.sq;
+        n_tr.y --> self.tr;
+        n_sw.y --> self.sw;
+        n_cp.y --> self.cp;
+        n_wn.y --> self.wn;
+        n_un.y --> self.un;
+        n_pn.y --> self.pn;
+        n_pr.y --> self.pr;
+    }
+}

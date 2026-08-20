@@ -1,0 +1,55 @@
+// A square wave: `+amplitude` for the first `duty` of each period, then
+// `-amplitude`, about `offset`.
+//
+// BIPOLAR, not 0/1. A square wave is odd-symmetric by definition, and a
+// zero-mean excitation is what a frequency response wants; `offset` buys the
+// unipolar case back — `amplitude = 0.5; offset = 0.5;` is the 0-to-1 clock.
+// The reverse choice does not compose: a 0/1 default forces every spectral use
+// to cancel a DC term the block put there.
+//
+// Phase-aligned with `Sine`: at u = 0 both leave zero going positive.
+//
+// A square wave's edges are its point, and this is a DISCRETE source — an edge
+// lands on a sample instant, so the true transition time is quantised to this
+// node's step. RK4 does not resolve a discontinuity mid-step in any case, which
+// is why the package has no `ct` twin to offer here.
+package se.sig.src;
+
+node Square {
+    units { U; }
+
+    settings {
+        amplitude (U):   double = 1.0;
+        f         (Hz):  double = 1.0;
+        duty      (-):   double = 0.5;    // fraction of the period spent high
+        phase     (rad): double = 0.0;
+        offset    (U):   double = 0.0;
+
+        rate (Hz): double = sample_rate;
+    }
+
+    outputs { y (U): double; }
+
+    states { discrete u (-): double = 0.0; }
+
+    vars { du (-): double;  p0 (-): double; }
+
+    init() {
+        var.du = param.f / param.rate;
+        var.p0 = param.phase / 6.283185307179586;   // see Sine.se on the 2*pi
+        if (param.f >= 0.5 * param.rate)
+            log.warn("f = {} Hz is at or above the Nyquist of this node's {} Hz rate",
+                     param.f, param.rate);
+    }
+
+    output() {
+        const double w = state.u + var.p0;
+        const double p = w - std::floor(w);         // phase offset can push out of [0,1)
+        out.y = param.offset + (p < param.duty ? param.amplitude : -param.amplitude);
+    }
+
+    next() {
+        const double v = state.u + var.du;
+        next.u = v - std::floor(v);
+    }
+}

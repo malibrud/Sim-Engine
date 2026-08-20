@@ -1,0 +1,78 @@
+// A linear frequency sweep: a sine whose instantaneous frequency runs from
+// `f0` to `f1` over `sweep` seconds. The standard broadband excitation for
+// measuring a frequency response in one run.
+//
+// PHASE IS CLOSED FORM, NOT ACCUMULATED:
+//
+//     f(t) = f0 + (f1 - f0) * t / sweep
+//     phi(t) = 2*pi * (f0*t + (f1 - f0) * t^2 / (2*sweep))
+//
+// which is the integral of 2*pi*f(t), evaluated directly from elapsed time.
+// Accumulating phase instead would need a second state and would apply the
+// rectangle rule to a frequency that is changing every step, so the sweep
+// would land at the wrong frequency by an amount that grows with the run. The
+// closed form is exact at every sample and costs one state.
+//
+// This is the one periodic source here that carries time rather than phase,
+// precisely because its phase is a function of time and not a running total.
+//
+// Linear only. A logarithmic sweep is a different node — `LogChirp` — not a
+// `mode` setting: a setting may not select behaviour that a reader has to
+// trace into a body to discover, and the two have different closed forms.
+package se.sig.src;
+
+node Chirp {
+    units { U; }
+
+    settings {
+        amplitude (U):  double = 1.0;
+        f0        (Hz): double = 0.1;
+        f1        (Hz): double = 10.0;
+        sweep     (s):  double = 10.0;    // time to travel from f0 to f1
+        offset    (U):  double = 0.0;
+
+        // Restart the sweep at `sweep` rather than running past `f1`.
+        //
+        // Defaulted `= 1`, not `= true`: the elaboration expression language
+        // (§7.1) has no boolean literal, and a nonzero number renders as
+        // `true`. This is not a typo to be tidied.
+        repeat (-): bool = 1;
+
+        rate (Hz): double = sample_rate;
+    }
+
+    outputs { y (U): double; }
+
+    // Elapsed time within the current sweep.
+    states { discrete t (s): double = 0.0; }
+
+    vars {
+        ts (s):  double;
+        kq (Hz): double;      // (f1 - f0) / (2 * sweep) -- the quadratic term
+    }
+
+    init() {
+        var.ts = 1.0 / param.rate;
+        var.kq = 0.5 * (param.f1 - param.f0) / param.sweep;
+        const double top = param.f0 > param.f1 ? param.f0 : param.f1;
+        if (top >= 0.5 * param.rate)
+            log.warn("sweep reaches {} Hz, at or above the Nyquist of this node's {} Hz rate",
+                     top, param.rate);
+    }
+
+    output() {
+        const double t = state.t;
+        // see Sine.se on the 2*pi
+        const double phi = 6.283185307179586 * (param.f0 * t + var.kq * t * t);
+        out.y = param.offset + param.amplitude * std::sin(phi);
+    }
+
+    // Wrapping restarts the sweep, which puts a phase discontinuity at the
+    // seam. That is what a repeating linear chirp IS -- there is no wrap that
+    // both restarts the frequency and preserves phase.
+    next() {
+        double v = state.t + var.ts;
+        if (param.repeat && v >= param.sweep) v -= param.sweep;
+        next.t = v;
+    }
+}

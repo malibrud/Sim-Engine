@@ -150,12 +150,23 @@ advance on a rate:
 <root>/se/sig/ScaleLimit.se       ->  se.sig.ScaleLimit      memoryless
 <root>/se/sig/ct/Biquad.se        ->  se.sig.ct.Biquad       continuous
 <root>/se/sig/dt/Biquad.se        ->  se.sig.dt.Biquad       discrete
+<root>/se/sig/src/Sine.se         ->  se.sig.src.Sine        source
 ```
 
 Two realizations of one transfer function therefore share a name and differ by
 one segment. Note also that `continuous` and `discrete` are reserved words
 (Appendix B) and a package path takes identifiers only, so those two segments
 could not be spelled out even if the convention allowed it.
+
+`se.sig.src` is a **deliberate exception**, and the only one: it groups signal
+*sources* by what they are rather than by time character, and every block in it
+is discrete. A source has no input, so it is never on the receiving end of a
+rate transition, and the property that matters at its use site is which waveform
+it produces, not how it stores its phase. The cost is real and is recorded here
+rather than hidden: a source hands a continuous consumer a zero-order-held
+staircase one base step wide, so RK4 is first-order across that path. A
+`se.sig.src.ct` sibling — the same waveforms with `der.` on a continuous phase,
+exact at every minor step — is a pure extension if that cost ever bites.
 
 **Root collisions.** A package path that resolves in more than one root is an
 error (`SE0305`). A root may be marked `override` in the manifest, which permits
@@ -2713,6 +2724,22 @@ Recorded so that their absence is visibly deliberate.
    interpolation map is genuinely pure and genuinely wants to be read there, but
    the `init`/`on_step`/`final` confinement excludes it. A real need with no
    mechanism yet.
+2a. **Ambient `time` in the pure methods** (§10.2). Time is withheld from bodies as
+   part of the broader "`sim.*` as ambient context" design, and §10.4 leans on that
+   withholding to justify `sample_rate`/`time_step`. But §10.2's stated objection —
+   inheriting the "which fields are live when" question — does not apply to `t`,
+   which has a well-defined value at every invocation, unlike `sim.overrun_count`
+   or `sim.frame_slip`. Nor does purity: §8.1 writes the equations as
+   `y = g(t,x,u)` and `ẋ = f(t,x,u)`, so the language supplies `x` and `u` and
+   withholds the `t` its own formulation names. Every source in `se.sig.src`
+   therefore carries a redundant clock, and — the sharp part — a **continuous**
+   node cannot get the right time at all: a `discrete` `t` is constant across the
+   four RK4 substeps, while `Sim::derivatives(double t)` already *receives* the
+   correct minor-step time and discards it. If taken up, the open sub-questions
+   are the spelling (a bare `time` reads better than `sim.time`, since
+   `sim.stop`/`sim.abort` are scoped to the mutating methods and `sim.` would then
+   mean two different scopes) and whether `output()` sees the substep time or the
+   tick time.
 3. **Field-level wires** (§5.3) — `whl.ws.speed --> tc.u`. The grammar admits it;
    the semantics currently reject it. `se.math.Split3`/`Merge3` cover the need
    meanwhile, at the cost of two nodes per bundle.

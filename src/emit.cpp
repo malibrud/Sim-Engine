@@ -849,8 +849,19 @@ void Emitter::sim_resolve_settings() {
     for (std::size_t i = 0; i < m_.settings.size(); ++i) {
         const SettingSlot& s = m_.settings[i];
         const std::string lhs = param_base(s.owner) + "." + s.name;
+        // §7 evaluates in `double`, so every emitted expression is a `double`
+        // expression -- but §5.1 lets a setting be declared `int`, `float` or
+        // `bool`. The narrowing has to be SPELLED: an implicit conversion here
+        // is C4244 under /W4, and §12.4 promises a warning-free build. The cast
+        // performs exactly the truncation elaboration already applied, so it
+        // changes no value -- it only stops the C++ compiler guessing that it
+        // might.
+        const std::string rhs =
+            s.scalar == "double"
+                ? render_expr(s.expr)
+                : "static_cast<" + s.scalar + ">(" + render_expr(s.expr) + ")";
         o_ << "    if (!se_pin_[" << i << "]) " << pad(lhs, w) << " = "
-           << render_expr(s.expr) << ";"
+           << rhs << ";"
            << "   // " << s.unit.str() << "\n";
     }
 

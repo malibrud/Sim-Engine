@@ -869,7 +869,14 @@ bool Elaborator::settings_of(const NodeInfo* def,
         auto it = pinned.find(s.name);
         if (it == pinned.end()) continue;
         resolved[s.name] = it->second;
-        Value v{it->second.value, s.type.unit, false};
+        // §6.2a — SUBSTITUTED, for the same reason the derived-default path
+        // below coerces against `bound()`: a setting may be declared in a unit
+        // parameter (`sigma (U)`), and a sibling expression that reads it must
+        // see this instance's real unit, not the definition's `(U)`. Leaving it
+        // unsubstituted made every setting derived from a pinned unit-parametric
+        // setting come out dimensionless, which surfaced as a bogus `SE0410`
+        // pointing INTO the library rather than at the binding.
+        Value v{it->second.value, bound(s.type.unit), false};
         v.code = ec_param(settings_path_, s.name);
         v.constant = false;
         env[s.name] = std::move(v);

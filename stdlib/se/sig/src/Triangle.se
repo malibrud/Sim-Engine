@@ -1,0 +1,57 @@
+// A symmetric triangle wave, phase-aligned with `Sine`: zero at u = 0 rising,
+// `+amplitude` at a quarter turn, zero at a half, `-amplitude` at three
+// quarters.
+//
+// The alignment is the reason this is not written as the more obvious
+// "0 to A over the first half, back over the second". Sharing `Sine`'s phase
+// convention means swapping one for the other in a model changes the harmonic
+// content and nothing else — no phase shift to chase, and a test that checks
+// both against closed forms uses one phase expression.
+//
+// Continuous in value but not in slope, so it drives a plant more gently than
+// `Square` and still gives RK4 a corner it cannot resolve within a step.
+package se.sig.src;
+
+node Triangle {
+    units { U; }
+
+    settings {
+        amplitude (U):   double = 1.0;
+        f         (Hz):  double = 1.0;
+        phase     (rad): double = 0.0;
+        offset    (U):   double = 0.0;
+
+        rate (Hz): double = sample_rate;
+    }
+
+    outputs { y (U): double; }
+
+    states { discrete u (-): double = 0.0; }
+
+    vars { du (-): double;  p0 (-): double; }
+
+    init() {
+        var.du = param.f / param.rate;
+        var.p0 = param.phase / 6.283185307179586;   // see Sine.se on the 2*pi
+        if (param.f >= 0.5 * param.rate)
+            log.warn("f = {} Hz is at or above the Nyquist of this node's {} Hz rate",
+                     param.f, param.rate);
+    }
+
+    // Three straight segments: 4p on [0, 1/4), 2 - 4p on [1/4, 3/4), 4p - 4 on
+    // [3/4, 1). Written as a chain rather than with `fabs` so each breakpoint
+    // is visible and matches the header exactly.
+    output() {
+        const double w = state.u + var.p0;
+        const double p = w - std::floor(w);
+        const double tri = p < 0.25 ?  4.0 * p
+                         : p < 0.75 ?  2.0 - 4.0 * p
+                                    :  4.0 * p - 4.0;
+        out.y = param.offset + param.amplitude * tri;
+    }
+
+    next() {
+        const double v = state.u + var.du;
+        next.u = v - std::floor(v);
+    }
+}

@@ -1,0 +1,22 @@
+// Numerical check for `se.sig.src`. Batch mode, and long enough that the noise
+// statistics converge: 20 s at a 1 kHz step is 20000 samples, where a sample
+// standard deviation lands within about 1% of the true one.
+sim SrcChk {
+    root: srcchk.SrcChk {};
+
+    step:     1 (ms);
+    solver:   rk4;
+    duration: 20 (s);
+
+    record: {
+        file: "srcchk.csv";
+        // EVERY sample. The waveform checks need the exact grid the closed
+        // forms are written on, and the noise checks need the population.
+        every: 1;
+        signals {
+            n_ct.y;  n_st.y;  n_rp.y;  n_sn.y;
+            n_sq.y;  n_tr.y;  n_sw.y;  n_cp.y;
+            n_wn.y;  n_un.y;  n_pn.y;  n_pr.y;
+        }
+    }
+}
