@@ -1,0 +1,17 @@
+package se.sig;
+
+node WnZeta2Poly {
+    settings {
+        wn  (rad/s) double;
+        zeta (-): double; 
+    }
+
+    inputs  {}
+    outputs { p (-): se.math.Poly3; }
+
+    output(x) {
+        out.p.a2 = 1.0;
+        out.p.a1 = 2*param.zeta*param.wn;
+        out.p.a0 = param.wn*param.wn;
+    }
+}

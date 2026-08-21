@@ -1,0 +1,60 @@
+package se.sig.ct;
+
+node Biquad {
+    units { U; }
+
+    settings {
+        // H(s) = (b0 s^2 + b1 s + b2) / (a0 s^2 + a1 s + a2).
+        //
+        // Declared `(-)` because a continuous coefficient array has per-element
+        // units — a1 is T^-1, a2 is T^-2 — which there is no honest way to
+        // spell. The dimensional contract lives entirely in the ports: this
+        // node is U -> U, and nothing about the coefficients can change that.
+        //
+        // Identical to `dt.Biquad`'s, deliberately: the shared surface is what
+        // makes the two interchangeable.
+        A (-): se.math.Poly3 = { 1.0, 0.0, 0.0 };
+        B (-): se.math.Poly3 = { 0.0, 0.0, 1.0 };
+    }
+
+    inputs  { x (U): double; }
+    outputs { y (U): double; }
+
+    states {
+        continuous w  (-): double = 0.0;
+        continuous wd (-): double = 0.0;
+    }
+
+    vars {
+        n1 (-): double;  n2 (-): double;     // denominator, normalised by a0
+        d0 (-): double;                      // direct term
+        cw (-): double;  cwd (-): double;    // output taps on w and wd
+    }
+
+    // Normalise by a0 once, so neither derivative() nor output() carries a division.
+    //
+    //     w'  = wd
+    //     wd' = u - n1 wd - n2 w
+    //     y   = d0 u + (m1 - d0 n1) wd + (m2 - d0 n2) w
+    init() {
+        const double inv = 1.0 / param.A.c0;
+        var.n1 = param.A.c1 * inv;
+        var.n2 = param.A.c2 * inv;
+
+        const double m1 = param.B.c1 * inv;
+        const double m2 = param.B.c2 * inv;
+
+        var.d0  = param.B.c0 * inv;
+        var.cwd = m1 - var.d0 * var.n1;
+        var.cw  = m2 - var.d0 * var.n2;
+    }
+
+    derivative(x) {
+        der.w  = state.wd;
+        der.wd = in.x - var.n1 * state.wd - var.n2 * state.w;
+    }
+
+    output(x) {
+        out.y = var.d0 * in.x + var.cwd * state.wd + var.cw * state.w;
+    }
+}
