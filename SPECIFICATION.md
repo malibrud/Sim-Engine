@@ -85,7 +85,7 @@ marks rules with the earliest stage that can detect a violation.
 | 3 | **Resolution** | Unknown names, file/name mismatch, root collisions, duplicate members. |
 | 4 | **Elaboration** | Unit mismatches, required-setting omissions, setting cycles, non-divisor rates, instantiation. |
 | 5 | **Scheduling** | Feedthrough sort, algebraic loops, rate/active-set construction. |
-| 6 | **Emission** | Code, unit manifest, slot map, build script. |
+| 6 | **Emission** | Code, unit manifest, slot map, build script. A model with array-shaped states (§6.4a) emits its state slot map's *declarations* here and its concrete rows at configuration (§15.6). |
 
 All six stages are implemented in `src/`, one source file per stage from stage 3
 on. Where this document says *"is an error"* without qualification, the stage
@@ -537,6 +537,11 @@ A scalar declaration is always `name (unit): type;` — the unit is not optional
 and `(-)` is how you spell dimensionless. Requiring it makes an omission a syntax
 error rather than an unnoticed dimensionless default.
 
+**A `state` or a `var` may carry an extent** — `name [n] (unit): type;` — making
+it an array of that scalar type (§6.4, §6.5). The scalar type set is unchanged;
+an extent is a property of the declaration, not a new type. Ports, settings,
+record fields and natives may not carry one (`SE0234`).
+
 ### 5.2 Record types
 
 A `type` declaration defines a record that travels over a wire as one value:
@@ -681,14 +686,28 @@ settings {
   overridden at **configuration** (§6.2b) in a binary that has already been
   compiled.
 
-**What settings may not decide.** Because shape is fixed at elaboration, a
-setting may not select wiring, instance count, or state count. §7.4's absence of
-conditionals and §7.2's requirement of a literal `^` exponent already prevent
-most of this. The one construct that *would* let a setting change shape is an
-**array extent** (`states { discrete w [param.order] … }`), and a setting that
-appears in one is therefore **structural**: fixed at elaboration, not
-overridable at configuration, and reported as such by the manifest (§15.6). This
-is inferred from use, not declared.
+**What settings may not decide.** A setting may not select **wiring** or
+**instance count**. Those two decide the emitted schedule — a flat sequence of
+named calls in a fixed order (§15.7) — and varying them at run time would require
+a container of nodes behind a uniform interface, which is the design §15.7
+exists to avoid. §7.4's absence of conditionals and §7.2's requirement of a
+literal `^` exponent already prevent most of this.
+
+**State count is different, and a setting may decide it.** An **array extent**
+(`states { discrete w [param.order] … }`) is evaluated at *configuration*
+(§6.2b step 4), not at elaboration, so an extent-bearing setting is an
+**ordinary setting** in every respect — including overridable in a compiled
+binary. This is affordable precisely because it is *not* shape in the sense
+above: a node with a dynamic state count is still one instance called from one
+call site, and only the size of its slice of the state blocks moves. The
+schedule, the signal block, and every wire are untouched.
+
+**`structural` is reserved, not inferred.** Earlier drafts marked
+extent-bearing settings structural — fixed at elaboration and refused on load.
+Nothing in this version produces such a setting, because array *ports* do not
+exist (§6.3) and nothing else lets a setting reach shape. The concept and the
+manifest marker (§15.6) are kept for a feature that genuinely drives instance
+count or wiring, should one ever be added; they are currently unreachable.
 
 **Reserved setting: `rate`.** A node may declare
 
@@ -824,11 +843,29 @@ Between construction and `init()`, a compiled model passes through
 3. Derived defaults (§6.2) and flow-down expressions (§6.9.1) are re-evaluated
    in dependency order, **skipping pinned settings**, and each node's decimation
    is recomputed from its `rate` (§9.2).
-4. `init()` runs.
+4. **Array extents (§6.4, §6.5) are evaluated**, each node reports its slot
+   counts, and `Sim` sums them into the block sizes.
+5. **The host queries those sizes, provides the state buffers, and `Sim` binds
+   every state proxy to its slot** (§15.5). Initial conditions are applied.
+6. `init()` runs.
 
 Step 3 is what makes overriding `total_mass` recompute `corner_mass` in a
 shipped binary, exactly as it does at elaboration. The §7 expressions are not
 folded away; they are **emitted** (§15.5) and run here.
+
+Steps 4 and 5 exist only because a state may be array-shaped. **A model with no
+array states resolves both to constants at elaboration** and binds in its
+constructor exactly as before — the dynamic path is opt-in per model, not a
+blanket change to the ABI. Step 4 is also why an extent may read `param.*`
+freely: it runs after step 3, so an extent sees overridden settings, and an
+extent is therefore an ordinary consumer of the flow-down rather than a
+privileged one.
+
+**Sizes are settled before any state exists, and never move again.** Step 4
+cannot read state, step 5 cannot run before step 4, and `init()` cannot resize
+anything — by step 6 every buffer is bound and constant in extent for the
+lifetime of the model. This is what keeps §9's timing story intact: no
+allocation, no reshaping, and no branch on size inside the tick.
 
 **Configuration happens once, before the first tick.** There is no two-phase
 init and no way for a parent to reach into a child *during* a run: once `init()`
@@ -840,12 +877,22 @@ checked at elaboration (§4.3); an override supplied at configuration is checked
 against the target's recorded dimension (§15.6) by the loader, which is the same
 check applied to a value that arrives later.
 
-**A configuration that fails does not start a run.** Two things can be wrong
-here — a dimension that disagrees with §15.6, and a `rate` that violates §9.2's
-divisor rule — and neither can be raised where it is found, because
-configuration runs before there is a run to fail. The failure is recorded
-against the offending path and `init()` refuses to proceed, leaving the model in
-the terminated state `sim.abort` produces (§10.2) with no node having executed.
+**A configuration that fails does not start a run.** Five things can be wrong
+here — a dimension that disagrees with §15.6, a `rate` that violates §9.2's
+divisor rule, an array extent that is not a non-negative integer, an element
+path (`bw.w1[3]`) that is out of range for the extent step 4 computed, and a
+host buffer whose size disagrees with what step 4 reported. None can be raised
+where it is found, because configuration runs before there is a run to fail. The
+failure is recorded against the offending path and `init()` refuses to proceed,
+leaving the model in the terminated state `sim.abort` produces (§10.2) with no
+node having executed.
+
+**Configuration failures are not `SE` diagnostics.** Every `SE` code names a
+compile stage (§16.4) and carries a source span; these arise in a shipped binary
+with no source in reach, and the last three of the five are not detectable at
+compile time at all. They are reported by the model against a *path*, in the
+mechanism §14 defines for a rejected settings source, and the catalogue in §16.4
+deliberately does not cover them.
 
 ### 6.3 `inputs` and `outputs`
 
@@ -866,6 +913,10 @@ an output's from `output()`.
 - An unconnected input is an error at stage 4 (`SE0430`) — there is no implicit
   zero. An unconnected *output* is fine; it is simply unread.
 - Port order matters only for readability. Nothing positional exists.
+- **A port may not carry an extent** (`SE0234`), unlike a state or a var (§6.4a).
+  A port lives in the signal block, whose offsets come from `offsetof` on a
+  generated struct (§15.5); a runtime-sized member would destroy that. A bundle
+  of N signals crosses a wire as N ports or as a record. See Appendix C.
 
 ### 6.4 `states`
 
@@ -913,6 +964,164 @@ to the solver.
 - Discrete states earn their place over `vars` precisely via that IC channel: a
   declarative default plus a sim-file override, which `vars` never had.
 
+#### 6.4a Array-shaped states
+
+A state may carry an **extent**, making it an array of `double`:
+
+```
+settings { order (-): int = 4; }
+vars     { nbq (-): int; }
+
+states {
+    discrete w1 [param.nbq] (-): double = 0.0;
+    discrete w2 [param.nbq] (-): double = 0.0;
+}
+```
+
+- **The extent is a §7 expression evaluated at configuration** (§6.2b step 4),
+  so it may read `param.*` and it moves when an override moves. It must be
+  dimensionless and a non-negative integer; a non-integer or negative value is a
+  configuration failure, and an extent that cannot be dimensionally valid at all
+  is `SE0432` at elaboration. Zero is legal and yields no slots.
+- **An array state must be `double`** (`SE0433`), both kinds. `SE0431` already
+  says this for `continuous`; the extension to `discrete` is what lets both kinds
+  share one flat-block lowering (§15.5), and `int`/`bool` states remain available
+  unextended.
+- **The declared default initialises every element.** There is no per-element
+  default syntax. Non-uniform initialisation is `init()`'s job — which is where
+  a computed IC already belonged (above), and which is where the coefficients
+  such a state is usually paired with get computed anyway.
+- **Elements are addressed by index** — `bw.w1[3]` — as a recorded signal
+  (§13.5) and as an override target (§13.4). The whole array is not addressable
+  as one path: there is no aggregate value in §7 to set it to, and the declared
+  default already covers the uniform case.
+- **Extent is not a type.** `w1 [3]` and `w1 [4]` are the same declaration with
+  different configurations, not different types. Nothing about an extent
+  participates in unit checking, wire compatibility, or instance identity,
+  because a state is never a port and never crosses a wire.
+
+**What this deliberately does not buy.** An array state lets *one node* hold a
+parameterised amount of state. It does not let a *model* hold a parameterised
+number of nodes: instance count and wiring remain elaboration-fixed (§6.2), the
+schedule remains a flat sequence of named calls (§15.7), and a cascade of N
+sections is therefore one leaf that loops internally, not N instances. The loop
+lives in a verbatim body, where loops have always been legal, so nothing in §7
+grows to support this.
+
+**Name the extent with a derived setting.** An extent is a §7 expression and a
+body is C++, so the two cannot share a subexpression; writing
+`[ceil(param.order/2)]` on the declaration and `(param.order+1)/2` in the loop
+bound states the same fact twice in two languages, and nothing checks that they
+agree. Declaring the count once as a derived setting (§6.2) and referring to
+`param.nbq` from both sides removes the duplication entirely, and is the
+idiomatic form. It also means an override may pin the section count directly,
+detaching it from `order` exactly as §13.3 describes for any derived setting.
+
+##### A worked example
+
+The case this feature was added for: an Nth-order Butterworth as a cascade of
+second-order sections, in one leaf.
+
+```
+package se.sig.dt;
+
+node Butterworth {
+    units { U; }
+
+    settings {
+        fc    (Hz): double = 2.0;                    // cutoff
+        order (-):  int    = 4;                      // filter order
+        nbq   (-):  int    = ceil(param.order / 2);  // sections, named once
+        rate  (Hz): double = 1000.0;                 // §6.2's reserved setting
+    }
+
+    inputs  { x (U): double; }
+    outputs { y (U): double; }
+
+    states {                                         // Direct Form II, per section
+        discrete w1 [param.nbq] (-): double = 0.0;
+        discrete w2 [param.nbq] (-): double = 0.0;
+    }
+
+    vars {
+        a1 [param.nbq] (-): double;   a2 [param.nbq] (-): double;
+        b0 [param.nbq] (-): double;   b1 [param.nbq] (-): double;
+        b2 [param.nbq] (-): double;
+    }
+
+    // Pole placement and the bilinear transform, in C++ because that is where
+    // loops and <cmath> live (§4.4). Runs at §6.2b step 6, so `param.fc` is
+    // already whatever a §14 source overrode it to.
+    init() {
+        const double pi = std::acos(-1.0);
+        const double K  = 2.0 * param.rate;
+        const double wa = K * std::tan(pi * param.fc / param.rate);   // pre-warped
+        const int    N  = param.order;
+        const bool   odd = (N % 2) == 1;
+
+        for (int i = 0; i < param.nbq; ++i) {
+            double ac0, ac1, ac2, bc2;
+            if (odd && i == param.nbq - 1) {         // the real pole
+                ac0 = 0.0;  ac1 = 1.0;  ac2 = wa;  bc2 = wa;
+            } else {
+                const double th = pi/2.0 + pi*(2*i + 1) / (2.0*N);
+                ac0 = 1.0;  ac1 = -2.0*wa*std::cos(th);  ac2 = wa*wa;  bc2 = wa*wa;
+            }
+            const double d0 =  K*K*ac0 + K*ac1 + ac2;
+            var.a1[i] = (-2.0*K*K*ac0 + 2.0*ac2) / d0;
+            var.a2[i] = ( K*K*ac0 - K*ac1 + ac2)  / d0;
+            var.b0[i] = bc2 / d0;
+            var.b1[i] = 2.0*bc2 / d0;
+            var.b2[i] = bc2 / d0;
+        }
+    }
+
+    output(x) {
+        double u = in.x;
+        for (int i = 0; i < param.nbq; ++i) {
+            const double w0 = u - var.a1[i]*state.w1[i] - var.a2[i]*state.w2[i];
+            u = var.b0[i]*w0 + var.b1[i]*state.w1[i] + var.b2[i]*state.w2[i];
+        }
+        out.y = u;
+    }
+
+    next(x) {
+        double u = in.x;
+        for (int i = 0; i < param.nbq; ++i) {
+            const double w0 = u - var.a1[i]*state.w1[i] - var.a2[i]*state.w2[i];
+            u = var.b0[i]*w0 + var.b1[i]*state.w1[i] + var.b2[i]*state.w2[i];
+            next.w1[i] = w0;
+            next.w2[i] = state.w1[i];
+        }
+    }
+}
+```
+
+Three things are worth reading off this listing, because each was a design
+constraint rather than a coincidence:
+
+- **`output()` and `next()` recompute `w0` rather than sharing it.** §8.2 splits
+  the two, and the predecessor C++ this replaces fused them into one
+  `double filter(double x)` that advanced state and returned a value in the same
+  call. The split is what makes ZOH, rate transitions and recording well-defined;
+  the cost is a handful of multiply-adds and it is the same cost a scalar
+  `dt.Biquad` already pays.
+- **Nothing here is variadic to the compiler.** One instance, one call site per
+  method, one entry in the schedule, whatever `order` is. §15.7 never learns that
+  this node is a cascade.
+- **`order` and `fc` are both ordinary settings**, so both are overridable in a
+  compiled binary — `order` resizing the blocks at §6.2b step 4 and `fc` reaching
+  the coefficients through `init()` at step 6.
+
+**One gap this example leans on.** `nbq (-): int = ceil(param.order / 2);` binds
+a §7 expression, evaluated in `double` (§7.2), to a setting declared `int`. This
+document does not state the narrowing rule for that anywhere, and the question
+predates array extents — it applies to any `int` setting with a computed default.
+It becomes load-bearing here, because an extent must resolve to an exact
+non-negative integer and a value that is `2.9999999` is not one. Settle it before
+implementing: either §7 grows an integer-valued subset, or narrowing to an `int`
+setting is defined as exact-or-`SE0413`.
+
 ### 6.5 `vars`
 
 ```
@@ -928,6 +1137,17 @@ outside the solver vector and outside the override channel.
 - A `var` needs no default; it is zero-initialised and is expected to be computed
   in `init()`.
 - Records are permitted as `vars`.
+- **A `var` may carry an extent**, on the same terms as a state (§6.4a): a §7
+  expression evaluated at configuration, dimensionless, a non-negative integer.
+  This is what holds the per-element coefficients an array state is filtered by,
+  and it is why the two features arrive together — an array state with scalar
+  coefficients would describe nothing worth describing.
+- **An array `var` is sized and owned by the node**, not by the host. §6.5's
+  first sentence is the reason: a `var` is private storage outside the override
+  channel and outside every block the model publishes, so it carries no external
+  contract and there is nothing for a host to bind. It is the one allocation in
+  the lowering, it happens once at configuration, and it never occurs inside a
+  tick (§15.5).
 
 The write restriction is the same rule as everywhere else in §8: `output()` and
 `derivative()` are evaluated four times per RK4 step at trial states the trajectory
@@ -1093,6 +1313,13 @@ Inside a verbatim body, node data is reached through **namespaced accessors**:
 | `next.<name>` | — | `next()` |
 | `var.<name>` | every method | `init()`, `on_step()` |
 | bare name (`native`) | `init`, `on_step`, `final` | same |
+
+**An array-shaped state or var is indexed through the same accessor** —
+`state.w1[i]`, `next.w1[i]`, `der.w[i]`, `var.a1[i]` — with the readability and
+writability rules above unchanged. Indexing is ordinary C++ subscripting on the
+proxy §15.5 defines, so a body loops over stages the way any C++ does. Bounds
+are not checked: a body's arithmetic is already unchecked (§4.4), and an extent
+is available to the body as the same `param.*` or `var.*` the declaration read.
 
 The prefixes are not decoration. They exist because **one name can legitimately
 be both a state and an output** — `velocity` as an integrated state and as a
@@ -1523,10 +1750,11 @@ One base tick at index *k*, normatively:
 4. **`on_step()`** on every active node that defines it, in any order.
 5. **Record** (§13.5) if this tick is a recording tick.
 6. **Exit** if the run has been halted (§10.2) or *k* is the last tick.
-7. **Advance both state kinds.** `dis = nxt` for the discrete block, then
-   `x` by the solver's combination of stage rates — which is where `output()`
-   and `derivative()` are evaluated, once per solver stage, at trial states the
-   trajectory never visits (§9.5).
+7. **Advance both state kinds.** `dis = nxt` for the discrete block — and a
+   second whole-block copy for `dis_arr` if the model has array-shaped discrete
+   states (§15.5) — then `x` by the solver's combination of stage rates, which
+   is where `output()` and `derivative()` are evaluated, once per solver stage,
+   at trial states the trajectory never visits (§9.5).
 8. If `mode: realtime` and this tick closes a frame, spin to the frame boundary
    and update the metrics.
 
@@ -1946,9 +2174,17 @@ rides the **same settings channel, addressed by path**:
 ```
 total_mass          = 1800 (kg);    // a setting
 front.left.velocity =    2 (m/s);   // a state's initial value
+bw.w1[3]            =    0 (-);     // one element of an array state (§6.4a)
 ```
 
 Layering: declared state default → `init()` code → external override.
+
+**An array state is addressed one element at a time.** There is no path naming
+the whole array, because §7 has no aggregate value to assign to it and the
+declared default already initialises every element uniformly. An index past the
+extent configuration computed is a configuration failure (§6.2b) rather than a
+load-time parse error — the extent is not known until step 4, and the same
+source may be valid against one `order` and invalid against another.
 
 ### 13.5 Recording
 
@@ -1979,7 +2215,14 @@ record: {
 - A signal slower than the recording rate is **held (ZOH)** — which is its actual
   physical value, since that is precisely what downstream nodes see.
 - The header carries units: `plant.out.velocity [m/s]`.
-- Wildcards (`plant.out.*`) are not in this version; see Appendix C.
+- **An element of an array state is recorded by index** — `bw.state.w1[3]` — and
+  the column is named that way. As with an override (§13.4), an index past the
+  configured extent is a configuration failure, not a compile error; and since
+  the header is written after configuration, the file's shape is settled by then
+  and never changes mid-run.
+- Wildcards (`plant.out.*`) are not in this version; see Appendix C. They would
+  be worth more now than before: naming every element of an array state
+  individually is exactly the case a wildcard removes.
 
 ### 13.6 Real-time instrumentation
 
@@ -2231,6 +2474,23 @@ Discrete dis{};                      // every discrete state, as committed
 Discrete nxt{};                      // the x⁺ = h(t,x,u) buffer
 ```
 
+A model containing an **array-shaped state** (§6.4a) differs in two ways, and
+only two:
+
+```cpp
+std::size_t n_states = 0;            // settled at configuration, not compile time
+double*     x  = nullptr;            // host-provided (§15.5a)
+double*     xd = nullptr;
+
+std::size_t n_dstates = 0;           // discrete slots that are array-shaped
+double*     dis_arr = nullptr;       // the fourth block, and its commit twin
+double*     nxt_arr = nullptr;
+```
+
+Everything else — `sig`, `dis`/`nxt`, the schedule, every wire — is byte-for-byte
+what it would have been. **A model with no array state emits the first form**,
+`constexpr` size and all, and binds in its constructor exactly as it always did.
+
 **Why blocks rather than loose members.** `x` was always a block, for a stated
 reason — an external solver integrates it directly. The same argument reaches
 further than the solver: an inspector, a shared-memory host, a replay recorder
@@ -2240,12 +2500,25 @@ complete checkpoint of the model.**
 
 - **`x` is one flat `double` array** holding only `continuous` states, so an
   external solver integrates it directly. `x[i]` holds the value *in that
-  state's declared unit* — a contract, hence the slot map.
+  state's declared unit* — a contract, hence the slot map. An array-shaped
+  continuous state occupies a contiguous run of slots in the same block; there
+  is no second continuous vector, because the solver's ABI is the whole point of
+  the first one.
 - **`sig` and `dis` are generated structs, not arrays**, because a port may be
   `int`, `bool` or a record, and the block has to hold each faithfully. Their
   offsets therefore come from `offsetof` in the generated header, not from the
   DSL compiler: padding is the C++ compiler's business and a guessed table would
   be worse than none (§15.6).
+- **`dis_arr`/`nxt_arr` is a fourth block, and exists for exactly that reason.**
+  An array-shaped *discrete* state cannot live in `dis`, because a runtime-sized
+  member would destroy the `offsetof` property the previous bullet depends on.
+  It gets a flat `double` block of its own instead — array states being
+  `double`-only (§6.4a) is what makes that possible — so `dis` stays a plain
+  struct and the new block gets the same address-size-table treatment as `x`.
+  The commit is still one whole-block copy per side, so §6.4's claim that
+  simultaneity is a property of the *model* rather than of each node survives
+  unchanged; there are now two block copies at the bottom of the tick instead of
+  one.
 - **A named state is a `value_ref<T>` proxy holding a `T*`.** The proxy exists
   because generated `State` and `Der` structs must be default-constructible
   before `bind()` runs, and a `T&` member can be neither default-constructed nor
@@ -2254,10 +2527,21 @@ complete checkpoint of the model.**
   state is always `double` while a discrete one may not be; that does not
   disturb the default-constructibility argument, which holds per instantiation.
   `using state_ref = value_ref<double>;` is the continuous case.
+- **An array-shaped state is an `array_ref<T>` proxy** — a `T*` plus a length,
+  with `operator[]`. It is the same argument one step further: `State`, `Der` and
+  `Store` must still be default-constructible before `bind()` runs, and now the
+  *length* is not known at compile time either, so a `std::array` member is not
+  available even in principle. Rebindability, which §15.5 already required of
+  `value_ref`, is what the whole configuration-time binding step (§6.2b step 5)
+  rests on.
 - **Constness propagates because `State` is held by value.** In a const method
   `state` is a `const State`, so `state.omega` is a `const value_ref` and
   `operator=` is not callable. A `T&` or `T*` member would leak, which is the
-  whole reason the proxy exists rather than a raw reference.
+  whole reason the proxy exists rather than a raw reference. `array_ref` must
+  carry the property through its subscript: a `const array_ref`'s `operator[]`
+  yields `const T&`, so `state.w1[i] = …` fails to compile in `output()` for the
+  same reason `state.omega = …` does, and by the same mechanism rather than a
+  parallel one.
 - **There is no `gather_x`/`scatter_x`.** The vector *is* the storage, so there
   is no second copy to desynchronise. A solver that owns its own vector (CVODE,
   odeint) does one `memcpy` each way per evaluation: the proxies buy a clean
@@ -2300,6 +2584,49 @@ guard, and nothing about the call sequence or its order moves with it. It is als
 where the divisor rule is re-checked (§16.4), the elaborated default no longer
 being the value that runs.
 
+#### 15.5a The state buffers are the host's
+
+When a model has array-shaped states its block sizes are not known until §6.2b
+step 4, so `Sim` cannot own `std::array` members and will not own `std::vector`
+ones. **The host allocates and hands the buffers in.** The engine performs no
+allocation for any published block, before a run or during one.
+
+```cpp
+void        configure(const SettingsSource&);       // §6.2b steps 1–4
+std::size_t state_size() const;                     // continuous slots
+std::size_t discrete_array_size() const;
+void        bind_state(double* x, double* xd, std::size_t n);
+void        bind_discrete_array(double* dis, double* nxt, std::size_t n);
+void        init();                                 // §6.2b step 6
+```
+
+```cpp
+Sim sim;
+sim.configure(src);
+std::vector<double> x(sim.state_size()), xd(sim.state_size());
+sim.bind_state(x.data(), xd.data(), x.size());
+// … same for the discrete array block …
+sim.init();
+```
+
+- **This is the shape the `x` ABI already had.** §15.5's opening argument is that
+  an external solver, an inspector, a shared-memory host or a co-simulation peer
+  wants an address, a size and a table. Handing the address *in* rather than
+  reading it out is the same contract from the other end, and it is what CVODE,
+  odeint and FMI ask for anyway. A host that wants `x` in shared memory, in a
+  ring buffer, or inside its own arena no longer has to copy to get it.
+- **A size mismatch at `bind_state` is a configuration failure** (§6.2b), not
+  undefined behaviour. It is the one error the handshake makes possible and the
+  cheapest possible check.
+- **Binding is not re-entrant and not repeatable.** Rebinding after `init()` is
+  not defined; §6.2b's "configuration happens once, before the first tick" covers
+  the buffers as much as the settings.
+- **A model with no array state keeps the old shape** — `constexpr n_states`,
+  owned `std::array`, binding in the constructor — and `bind_state` is not
+  emitted for it. Two lowerings, chosen by whether any state carries an extent.
+  The cost of the dynamic form is one indirection per state access, paid only by
+  models that asked for it.
+
 ### 15.6 The unit manifest
 
 Because units are erased (I3), the manifest is a **load-bearing generator
@@ -2314,6 +2641,10 @@ xd[0]     whl.omega'            rad/s^2
 [state.discrete]          # Sim::dis; offsets from Sim::discrete_map()
           tc.cut                N*m         double
 
+[state.discrete.array]    # Sim::dis_arr; slots from Sim::state_map() post-configure
+x?[]      bw.w1 [param.nbq]     -           dynamic
+x?[]      bw.w2 [param.nbq]     -           dynamic
+
 [signals]                 # Sim::sig; offsets from Sim::signal_map()
           in.axle_torque        N*m         double
           whl.ws.speed          rad/s       double
@@ -2327,7 +2658,7 @@ xd[0]     whl.omega'            rad/s^2
 [settings]                # configurable; value is the elaborated default
           whl.inertia           kg*m^2      = 0.9
           tc.rate               Hz          = 200.0
-          bq.order              -           = 4        structural
+          bw.order              -           = 4
 
 [types]
 drivetrain.WheelState.speed     rad/s
@@ -2352,6 +2683,7 @@ actually known:
 ```cpp
 static const se_rt::Slot* signal_map(std::size_t& count);
 static const se_rt::Slot* discrete_map(std::size_t& count);
+       const se_rt::Slot* state_map(std::size_t& count) const;   // non-static
 // struct Slot { const char* path; std::size_t offset, size;
 //               const char* type; const char* unit; };
 ```
@@ -2359,11 +2691,28 @@ static const se_rt::Slot* discrete_map(std::size_t& count);
 Both the manifest section and the table are generated from one list, so they
 cannot drift apart.
 
+**An array state's slot map is a run-time artifact, and `state_map` is therefore
+not static.** `sec` cannot print `x[0] bw.w1[0]` for a state whose extent is not
+known until §6.2b step 4, so the manifest prints the *declaration* — the extent
+expression as written, marked `dynamic` — and the concrete rows are built by the
+model once configuration has settled. A host reads the manifest to learn what
+paths exist and what units they carry, and calls `state_map` to learn where they
+landed. This is the same division the previous paragraph already makes for
+offsets, extended from "the C++ compiler knows this and `sec` does not" to "the
+configured model knows this and `sec` does not."
+
+A model with no array state has a fully static map, and may emit `state_map` as
+a static table exactly like the other two.
+
 **`[settings]` is the configuration schema** (§14.1), not a record of what was
 baked. It names every path a §14 source may bind, the unit that source is checked
 against, and the value elaboration produced — which is the value the binary
-starts with, and which `dump_settings` reproduces. A setting marked `structural`
-(§6.2) appears so that the inventory is complete, and is refused on load.
+starts with, and which `dump_settings` reproduces. `bw.order` above carries no
+marker because an extent-bearing setting is an ordinary one (§6.2): it is bound
+by a §14 source like any other, and step 4 sizes the blocks around whatever it
+resolves to. The `structural` marker — a setting that appears in the inventory
+for completeness and is *refused* on load — remains defined for a setting that
+reaches instance count or wiring, and no construct in this version produces one.
 
 The dimension behind each unit string ships in the generated header alongside the
 slot maps, for the same reason the offsets do: the loader has to compare
@@ -2420,6 +2769,15 @@ from one bad brace.
 Codes are stable. `SE01xx` lexical, `SE02xx` syntactic, `SE03xx` resolution,
 `SE04xx` elaboration, `SE05xx` scheduling, `SE06xx` emission.
 
+**Every code names a compile stage, and configuration failures have none.** The
+five things §6.2b can reject happen in a shipped binary with no source in reach,
+and three of them — a non-integer extent, an out-of-range element path, a
+mis-sized host buffer — are not detectable at compile time in principle. They
+are reported against a *path* by the mechanism §14 defines for a rejected
+settings source. Extending the `SE` range to cover them was considered and
+rejected: a code whose diagnostic cannot carry a source span is a different kind
+of thing wearing the same name.
+
 | Code | Stage | Message |
 |---|---|---|
 | `SE0101` | 1 | Illegal character outside a verbatim region |
@@ -2450,6 +2808,8 @@ Codes are stable. `SE01xx` lexical, `SE02xx` syntactic, `SE03xx` resolution,
 | `SE0231` | 2 | A setting may not be a record type |
 | `SE0232` | 2 | A state may not be a record type |
 | `SE0233` | 2 | A `native` member may not carry a unit |
+| `SE0234` | 2 | An extent is not permitted on this declaration (port, setting, record field, `native`) |
+| `SE0235` | 2 | Malformed array extent |
 | `SE0240` | 2 | Helper function has no body |
 | `SE0241` | 2 | `init` takes no parameters |
 | `SE0242` | 2 | `final` takes at most one parameter |
@@ -2496,6 +2856,8 @@ Codes are stable. `SE01xx` lexical, `SE02xx` syntactic, `SE03xx` resolution,
 | `SE0422` | 4 | Reserved setting `rate` has the wrong unit or type |
 | `SE0430` | 4 | Unconnected input |
 | `SE0431` | 4 | A `continuous` state must be `double` |
+| `SE0432` | 4 | An array extent must be dimensionless |
+| `SE0433` | 4 | An array state must be `double` |
 | `SE0440` | 4 | Cross-instance reference in a setting binding |
 | `SE0441` | 4 | Unknown or duplicated setting binding |
 | `SE0442` | 4 | Fan-in: two sources into one input |
@@ -2564,10 +2926,14 @@ port_decl       = IDENT unit ":" scalar_type ";"
                 | IDENT ":" record_ref ";" ;
 
 states_sec      = "states" "{" { state_decl } "}" ;
-state_decl      = state_kind IDENT unit ":" scalar_type [ "=" expression ] ";" ;
+state_decl      = state_kind IDENT [ extent ] unit ":" scalar_type
+                  [ "=" expression ] ";" ;
 state_kind      = "continuous" | "discrete" ;
+extent          = "[" expression "]" ;                  (* §6.4a *)
 
-vars_sec        = "vars" "{" { port_decl } "}" ;
+vars_sec        = "vars" "{" { var_decl } "}" ;
+var_decl        = IDENT [ extent ] unit ":" scalar_type ";"
+                | IDENT ":" record_ref ";" ;
 
 native_sec      = "native" "{" { native_decl } "}" ;
 native_decl     = IDENT ":" VERBATIM_TO_SEMI ";" ;
@@ -2759,7 +3125,17 @@ Recorded so that their absence is visibly deliberate.
    the type identifier. Never ruled on; currently absent.
 8. **Log file format** (§13.7) — plain text versus structured JSONL.
 
+8a. **Array `vars` are the one allocation in the lowering** (§6.5). Every
+   published block is host-provided (§15.5a), but an array `var` is node-private
+   with no external contract, so the node sizes its own at configuration. It
+   never allocates inside a tick, so the real-time story holds; but "the engine
+   allocates nothing" is now "the engine allocates nothing the host can see,"
+   which is a weaker sentence. A fixed-capacity or host-provided scratch arena
+   would restore the stronger one, at the cost of a bound the modeller has to
+   pick. Not taken; recorded because the weakening was deliberate.
+
 **Deliberately deferred, each a pure extension:**
+
 
 8. **Algebraic loop solving** (tearing plus Newton, §8.6) — deferred, not
    rejected. Adding it is a relaxation, and the SCC analysis is already needed for
@@ -2782,6 +3158,23 @@ Recorded so that their absence is visibly deliberate.
 15. **Downsample aliasing warning** — a fast→slow connection inserts no
     anti-alias filter; the engine could warn.
 16. **First-order hold** on upsample instead of ZOH. Rare in this domain.
+
+16a. **Array ports** (§6.3). A runtime-sized member in the signal block would
+   destroy the `offsetof` property §15.5 depends on, so a bundle of N signals
+   crosses a wire only as N ports or as a fixed record. Array *states* and *vars*
+   arrived without it (§6.4a) because neither is in the signal block. If taken
+   up, the question to answer first is whether `sig` splits the way `dis` did —
+   a struct for fixed ports plus a flat block for array ones.
+
+16b. **Instance arrays and generated wiring** — `node stage[N] : Biquad` plus a
+   rule for chaining them. This is the one that genuinely costs what §6.4a's
+   preamble says: instance count decides the emitted schedule (§15.7), so a
+   run-time count means a container of nodes behind a uniform interface, and
+   every argument for concrete classes and no virtuals is an argument against
+   it. An *elaboration-fixed* instance array is a much smaller feature and is
+   the one to consider if the need returns; a cascade of N second-order sections
+   does not need it, being one leaf that loops internally.
+
 
 **Implementation hazards, called out because they fail silently:**
 
