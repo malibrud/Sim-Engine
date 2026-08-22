@@ -1,0 +1,10 @@
+// Every extent rule that fails at compile time, in one emit (§6.4a), plus the
+// one override shape §13.4 refuses: an array state has no whole-array value.
+sim ArrBad {
+    root: arrbad.ArrBad {};
+
+    settings: "arrbad.settings";
+
+    step:     1 (ms);
+    duration: 1 (s);
+}

@@ -1,0 +1,34 @@
+package arrbad;
+
+// The extent rules that only elaboration can enforce (§6.4a): the element type,
+// the dimension, and the value when nothing overridable feeds it. The fourth
+// case — an index past the extent — is deliberately NOT here, because it is a
+// configuration failure and not a compile error (§13.4).
+node ArrBad {
+    settings {
+        n   (-): int    = 3;
+        len (m): double = 4.0;
+    }
+
+    outputs { y (-): double; }
+
+    states {
+        // SE0433 — an array state is `double`, both kinds. Both blocks an
+        // extent can land in are flat `double` arrays (§15.5).
+        discrete   counts [param.n] (-): int    = 0;
+        // SE0432 — an extent counts slots; it is not a quantity.
+        continuous a [param.len]    (-): double = 0.0;
+        // SE0432 — constant, and constant-bad is bad for good.
+        continuous b [2.5]          (-): double = 0.0;
+        continuous c [param.n]      (-): double = 0.0;
+    }
+
+    vars {
+        // SE0433 again, on the var side.
+        flags [param.n] (-): int;
+    }
+
+    derivative() { der.a[0] = 0.0; der.b[0] = 0.0; der.c[0] = 0.0; }
+    next()       { next.counts[0] = 0; }
+    output()     { out.y = state.c[0]; }
+}

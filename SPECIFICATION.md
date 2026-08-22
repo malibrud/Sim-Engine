@@ -1060,19 +1060,30 @@ node Butterworth {
         const bool   odd = (N % 2) == 1;
 
         for (int i = 0; i < param.nbq; ++i) {
-            double ac0, ac1, ac2, bc2;
-            if (odd && i == param.nbq - 1) {         // the real pole
-                ac0 = 0.0;  ac1 = 1.0;  ac2 = wa;  bc2 = wa;
-            } else {
-                const double th = pi/2.0 + pi*(2*i + 1) / (2.0*N);
-                ac0 = 1.0;  ac1 = -2.0*wa*std::cos(th);  ac2 = wa*wa;  bc2 = wa*wa;
+            if (odd && i == param.nbq - 1) {
+                // The lone real pole at s = -wa, as a FIRST-order section with
+                // its second-order terms left at zero. See the fourth note
+                // below for why it is not folded into the biquad formula.
+                const double d0 = K + wa;
+                var.a1[i] = (wa - K) / d0;   var.a2[i] = 0.0;
+                var.b0[i] = wa / d0;         var.b1[i] = wa / d0;
+                var.b2[i] = 0.0;
+                continue;
             }
-            const double d0 =  K*K*ac0 + K*ac1 + ac2;
-            var.a1[i] = (-2.0*K*K*ac0 + 2.0*ac2) / d0;
-            var.a2[i] = ( K*K*ac0 - K*ac1 + ac2)  / d0;
-            var.b0[i] = bc2 / d0;
-            var.b1[i] = 2.0*bc2 / d0;
-            var.b2[i] = bc2 / d0;
+            // A conjugate pole pair on the Butterworth circle:
+            //     s = wa * exp(j*th),  th = pi/2 + pi*(2i + 1)/(2N)
+            // giving s^2 - 2*wa*cos(th)*s + wa^2, over a constant numerator
+            // wa^2 so the section is unity-gain at DC.
+            const double th  = pi/2.0 + pi*(2*i + 1) / (2.0*N);
+            const double ac1 = -2.0*wa*std::cos(th);
+            const double ac2 = wa*wa;
+            const double d0  = K*K + K*ac1 + ac2;
+
+            var.a1[i] = (-2.0*K*K + 2.0*ac2) / d0;
+            var.a2[i] = ( K*K - K*ac1 + ac2) / d0;
+            var.b0[i] = ac2 / d0;
+            var.b1[i] = 2.0*ac2 / d0;
+            var.b2[i] = ac2 / d0;
         }
     }
 
@@ -1097,8 +1108,9 @@ node Butterworth {
 }
 ```
 
-Three things are worth reading off this listing, because each was a design
-constraint rather than a coincidence:
+Four things are worth reading off this listing. The first three were design
+constraints rather than coincidences; the fourth is the one place the arithmetic
+had to be written a particular way to stay honest.
 
 - **`output()` and `next()` recompute `w0` rather than sharing it.** §8.2 splits
   the two, and the predecessor C++ this replaces fused them into one
@@ -1112,15 +1124,47 @@ constraint rather than a coincidence:
 - **`order` and `fc` are both ordinary settings**, so both are overridable in a
   compiled binary — `order` resizing the blocks at §6.2b step 4 and `fc` reaching
   the coefficients through `init()` at step 6.
+- **An odd order's real pole is a first-order section, not a degenerate biquad.**
+  Setting `ac0 = 0` and running the pair formula anyway is tempting — it keeps
+  one code path — and it is algebraically correct: the extra factor appears in
+  numerator and denominator alike, since
+  `(K + wa) + 2·wa·z⁻¹ + (wa − K)·z⁻²` is exactly
+  `(1 + z⁻¹)·[(K + wa) + (wa − K)·z⁻¹]` and the numerator carries the matching
+  `wa·(1 + z⁻¹)²`. But the **recursion** runs on the unfactored denominator, so
+  what actually gets iterated has a pole at `z = -1` — undamped, on the unit
+  circle — held down only by a zero that cancels it on paper. Rounding does not
+  respect a cancellation, and neither does a non-zero initial condition arriving
+  through §13.4. Released from one, the folded form decays normally until it
+  reaches the rounding floor and then **stops decaying**, holding the same
+  ~1e-17 alternating residue for the rest of the run; the first-order form keeps
+  going geometrically. Writing the section as first order costs one branch and
+  removes the mode entirely. This is the shape `se.sig.dt.Butterworth` ships.
 
-**One gap this example leans on.** `nbq (-): int = ceil(param.order / 2);` binds
-a §7 expression, evaluated in `double` (§7.2), to a setting declared `int`. This
-document does not state the narrowing rule for that anywhere, and the question
-predates array extents — it applies to any `int` setting with a computed default.
-It becomes load-bearing here, because an extent must resolve to an exact
-non-negative integer and a value that is `2.9999999` is not one. Settle it before
-implementing: either §7 grows an integer-valued subset, or narrowing to an `int`
-setting is defined as exact-or-`SE0413`.
+**Narrowing to an `int` setting.** `nbq (-): int = ceil(param.order / 2);` binds
+a §7 expression, evaluated in `double` (§7.2), to a setting declared `int`. The
+question predates array extents — it applies to any `int` setting with a
+computed default — but it becomes load-bearing here, because an extent must
+resolve to an exact non-negative integer and a value that is `2.9999999` is not
+one.
+
+The rule is **exact-or-reject, checked twice**, and it is the same rule §9.2
+already applies to a decimation:
+
+- At **elaboration**, the value must be within `1e-9` of an integer. It is
+  rounded to that integer if it is, and is `SE0402` (a lossy conversion to an
+  `int` target) if it is not. A tolerance rather than equality, because the
+  value arrives through decimal literals and possibly a unit conversion, so an
+  intended integer need not be exact.
+- At **configuration**, the same expression is re-evaluated against whatever a
+  §14 source supplied, so a non-constant one emits as `std::floor(x + 0.5)`
+  rather than letting C++ truncate toward zero. §7 does not grow an
+  integer-valued subset; it stays one arithmetic over `double`, and the
+  narrowing is a property of the SITE, which is where the declared type is.
+
+An **extent** carries the same rule one step further, because it must also be
+non-negative: an extent that is not an exact non-negative integer is `SE0432` at
+elaboration when nothing overridable feeds it, and a configuration failure
+(§6.2b, §16.4) when something does. Zero is legal and yields no slots.
 
 ### 6.5 `vars`
 
@@ -2641,9 +2685,9 @@ xd[0]     whl.omega'            rad/s^2
 [state.discrete]          # Sim::dis; offsets from Sim::discrete_map()
           tc.cut                N*m         double
 
-[state.discrete.array]    # Sim::dis_arr; slots from Sim::state_map() post-configure
-x?[]      bw.w1 [param.nbq]     -           dynamic
-x?[]      bw.w2 [param.nbq]     -           dynamic
+[state.discrete.array]    # Sim::dis_arr; rows from Sim::discrete_array_map()
+dis_arr[?]  bw.w1 [param.nbq]   -           dynamic
+dis_arr[?]  bw.w2 [param.nbq]   -           dynamic
 
 [signals]                 # Sim::sig; offsets from Sim::signal_map()
           in.axle_torque        N*m         double
@@ -2683,13 +2727,23 @@ actually known:
 ```cpp
 static const se_rt::Slot* signal_map(std::size_t& count);
 static const se_rt::Slot* discrete_map(std::size_t& count);
-       const se_rt::Slot* state_map(std::size_t& count) const;   // non-static
+// Non-static, and emitted only for a model with array-shaped states: one
+// block each, so one accessor each. Both are built by configure().
+const se_rt::Slot* state_map(std::size_t& count) const;            // Sim::x
+const se_rt::Slot* discrete_array_map(std::size_t& count) const;   // Sim::dis_arr
 // struct Slot { const char* path; std::size_t offset, size;
 //               const char* type; const char* unit; };
 ```
 
 Both the manifest section and the table are generated from one list, so they
 cannot drift apart.
+
+**A dynamic model's `[state.continuous]` rows carry no slot number.** Once any
+state in the model has an extent, every state's POSITION is a configuration
+result — a scalar one included, since it sits after whatever run precedes it
+— so those rows print `x[?]` and `xd[?]` and are marked `dynamic` too. The
+extent is printed as written beside the path. A model with no array state prints
+the numbered form exactly as before.
 
 **An array state's slot map is a run-time artifact, and `state_map` is therefore
 not static.** `sec` cannot print `x[0] bw.w1[0]` for a state whose extent is not
@@ -2856,8 +2910,8 @@ of thing wearing the same name.
 | `SE0422` | 4 | Reserved setting `rate` has the wrong unit or type |
 | `SE0430` | 4 | Unconnected input |
 | `SE0431` | 4 | A `continuous` state must be `double` |
-| `SE0432` | 4 | An array extent must be dimensionless |
-| `SE0433` | 4 | An array state must be `double` |
+| `SE0432` | 4 | An array extent must be a dimensionless, non-negative integer |
+| `SE0433` | 4 | An array state or var must be `double` |
 | `SE0440` | 4 | Cross-instance reference in a setting binding |
 | `SE0441` | 4 | Unknown or duplicated setting binding |
 | `SE0442` | 4 | Fan-in: two sources into one input |

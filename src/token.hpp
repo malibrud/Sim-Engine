@@ -32,7 +32,7 @@ enum class Tok {
     KwSim,
 
     // Punctuation — §3.7.
-    LBrace, RBrace, LParen, RParen,
+    LBrace, RBrace, LParen, RParen, LBracket, RBracket,
     Semi, Comma, Colon, Dot, Equal,
     Arrow,      // -->
     Plus, Minus, Star, Slash, Caret, Percent,

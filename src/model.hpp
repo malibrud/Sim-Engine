@@ -71,6 +71,11 @@ struct Type {
 struct Field {
     std::string name;
     Type type;
+    // §6.4a — `[expr]` on a `var`. Null everywhere else: a port and a
+    // record field are both in the signal block, and a run-time-sized member
+    // would destroy the `offsetof` property it rests on (§15.5).
+    const ast::Expr* extent = nullptr;
+    Loc extent_loc;
     Loc loc;
 };
 
@@ -140,6 +145,10 @@ struct NodeInfo {
         Type type;
         Unit der_unit;                 // §4.3 — derived, never declared
         const ast::Expr* initial = nullptr;
+        // §6.4a - the extent, unevaluated. It is a §7 expression that does
+        // not settle until configuration, so nothing here is a size.
+        const ast::Expr* extent = nullptr;
+        Loc extent_loc;
         Loc loc;
     };
     std::vector<StateInfo> states;
@@ -221,6 +230,17 @@ struct SettingSlot {
     bool structural = false; // fixed at elaboration (§6.2); refused on load
 };
 
+// §6.4a — an extent on a state or a var. The expression is not evaluated
+// until configuration (§6.2b step 4), so what reaches stage 6 is emittable
+// code, not a size: `dflt` is only what the elaborated defaults happen to give
+// it, kept for diagnostics and for the manifest's default column.
+struct Extent {
+    bool present = false;
+    ExprCode expr;                     // emitted into Sim::configure()
+    std::string text;                  // as written, for the manifest (§15.6)
+    double dflt = 0.0;
+};
+
 struct StateSlot {
     std::string name;
     bool continuous = false;
@@ -229,6 +249,28 @@ struct StateSlot {
     std::string scalar;
     double initial = 0.0;
     std::size_t slot = 0;              // index into Sim::x — continuous only
+    // §6.4a — when the model has any array-shaped state, EVERY state's
+    // position is settled at configuration rather than here, and `slot` gives
+    // way to `off`: an index into the generated offset table, one entry per
+    // state declaration, scalar states included with an extent of one.
+    Extent extent;
+    std::size_t off = 0;
+    // §13.4 — per-element initial conditions from a settings source. A
+    // scalar state rides `initial`; an array state has no aggregate value to
+    // override, so its ICs arrive one index at a time.
+    struct ElementIC {
+        std::size_t index = 0;
+        double value = 0.0;
+    };
+    std::vector<ElementIC> element_ic;
+};
+
+// §6.5 — an array-shaped var. Node-private storage, so the node sizes and
+// owns it (Appendix C 8a): it is the one allocation in the lowering, and it
+// happens once, at configuration.
+struct ArrayVar {
+    std::string name;
+    Extent extent;
 };
 
 // Where a leaf input's value comes from. A wire is not its own variable
@@ -252,6 +294,7 @@ struct Leaf {
 
     std::vector<SettingValue> settings;
     std::vector<StateSlot> states;
+    std::vector<ArrayVar> array_vars;            // §6.5, in declaration order
     std::map<std::string, InputSource> inputs;   // by port name
 
     // §6.2a — the definition's ports with every unit parameter substituted.
@@ -310,6 +353,29 @@ struct Model {
     std::vector<Leaf> leaves;          // elaboration order
     std::vector<std::size_t> order;    // §8.5 topological order, into `leaves`
     std::size_t n_states = 0;
+
+    // §6.4a — two lowerings, chosen by whether ANY state carries an extent
+    // (§15.5a). False is the original one: `n_states` is a compile-time
+    // constant, `x` is an owned `std::array`, and binding happens in the
+    // constructor. True makes every block size a configuration result and every
+    // published buffer the host's, which is why the choice is model-wide rather
+    // than per-state — one block cannot be half constexpr.
+    bool dynamic_states = false;
+    std::size_t n_cont_slots = 0;      // continuous state DECLARATIONS
+    std::size_t n_disc_arr_slots = 0;  // array-shaped discrete state declarations
+
+    // §6.4a — every element index the model names, from an IC override
+    // (§13.4) or a recorded column (§13.5). None of them can be checked
+    // here: the extent does not settle until configuration, and the same source
+    // may be valid against one `order` and invalid against another. So the
+    // check is emitted, once per reference, into `Sim::configure()`.
+    struct ElementRef {
+        std::string path;              // as written, for the message
+        bool continuous = false;
+        std::size_t off = 0;           // index into the offset/length table
+        std::size_t index = 0;
+    };
+    std::vector<ElementRef> element_refs;
 
     // §6.2b — every setting in the model, composites included, in the order
     // `resolve_settings()` must assign them. Doubles as the §15.6 configuration

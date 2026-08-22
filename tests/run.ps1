@@ -358,6 +358,141 @@ if (-not $cl) {
         }
     }
 
+    # ArrSt is the array-state model (SPEC 6.4a): three independent decays in
+    # ONE continuous array state, a scalar continuous state beside them in the
+    # same block, a discrete array state used as a shift register, and a scalar
+    # discrete state that stays in `dis`. All four have exact closed forms, so
+    # the dynamic lowering of SPEC 15.5a is checked on arithmetic and not on
+    # shape:
+    #
+    #   x[i](t) = x[i](0) * exp(-(i+1) t)     x[1](0) = 2, from an element IC
+    #   total   = 0                            a scalar state that never moves
+    #   h[i][k] = k - 1 - i                    the shift register, k >= i + 1
+    #   tick    = k
+    #
+    # The x[1] column is the one that matters most: it is the only value in the
+    # suite that a per-element initial condition (SPEC 13.4) can move, and it
+    # would read 1 rather than 2 if the override were dropped or landed on the
+    # wrong slot.
+    if ($emitDirs.ContainsKey('ArrSt')) {
+        $asDir = $emitDirs['ArrSt']
+        Push-Location $asDir
+        & '.\ArrSt.exe' 2>&1 | Out-Null
+        $ran = ($LASTEXITCODE -eq 0)
+        Pop-Location
+        $worst = 0.0
+        $csv = Join-Path $asDir 'arrst.csv'
+        if ($ran -and (Test-Path $csv)) {
+            $rows = Get-Content $csv | Select-Object -Skip 1
+            foreach ($line in $rows) {
+                if (-not $line) { continue }
+                $c = $line -split ','
+                $t = [double]$c[0]
+                $k = [Math]::Round($t / 0.001)
+                $x0 = [Math]::Exp(-1.0 * $t)
+                $x1 = 2.0 * [Math]::Exp(-2.0 * $t)
+                $x2 = [Math]::Exp(-3.0 * $t)
+                # The shift register holds nothing until it has been fed.
+                $h0 = if ($k -ge 1) { $k - 1 } else { 0 }
+                $h2 = if ($k -ge 3) { $k - 3 } else { 0 }
+                $errs = @([Math]::Abs([double]$c[1] - $x0),
+                          [Math]::Abs([double]$c[2] - $x1),
+                          [Math]::Abs([double]$c[3] - $x2),
+                          [Math]::Abs([double]$c[4]),
+                          [Math]::Abs([double]$c[5] - $h0),
+                          [Math]::Abs([double]$c[6] - $h2),
+                          [Math]::Abs([double]$c[7] - $k),
+                          [Math]::Abs([double]$c[8] - ($x0 + $x1 + $x2)),
+                          [Math]::Abs([double]$c[9] - $h2))
+                foreach ($err in $errs) { if ($err -gt $worst) { $worst = $err } }
+            }
+        } else {
+            $worst = [double]::PositiveInfinity
+        }
+        # The recorder writes %.9g, so a tick index near 2000 resolves to about
+        # 1e-6 in the file. rk4's own error on these decays is nearer 1e-12.
+        if ($worst -lt 1e-6) {
+            Write-Host ("ok   build/emit/ArrSt : array states match their closed forms, max error " +
+                        $worst.ToString('E2')) -ForegroundColor Green
+            $script:pass++
+        } else {
+            Write-Host ("FAIL build/emit/ArrSt : max error " + $worst) -ForegroundColor Red
+            $script:fail++
+        }
+    }
+
+    # BwChk is the array-state feature against the case it was added for: an
+    # Nth-order Butterworth as a cascade of second-order sections in ONE leaf
+    # (SPEC 6.4a). The assertion is the magnitude response, which the bilinear
+    # transform makes exact rather than approximate -- prewarping puts the
+    # analog cutoff at wa = K*tan(pi*fc/fs), so the digital gain at f is the
+    # analog gain at K*tan(pi*f/fs) and the K cancels:
+    #
+    #   |H(f)| = 1 / sqrt(1 + (tan(pi f/fs) / tan(pi fc/fs))^(2N))
+    #
+    # Both orders are checked, and the second is ODD deliberately: an odd order
+    # carries a lone real pole, which is the one section that is not a
+    # conjugate pair and the one place a cascade goes wrong. A section
+    # miscounted, dropped, or placed at the wrong radius moves the answer by a
+    # factor of two per order, so the tolerance can be tight.
+    #
+    # The drive is 20 Hz on a 1 kHz step and the window is the last second, so
+    # it spans exactly twenty whole periods and the RMS of the samples is the
+    # RMS of the wave -- no windowing error to allow for.
+    if ($emitDirs.ContainsKey('BwChk')) {
+        $bwDir = $emitDirs['BwChk']
+        Push-Location $bwDir
+        & '.\BwChk.exe' 2>&1 | Out-Null
+        $ran = ($LASTEXITCODE -eq 0)
+        Pop-Location
+        $worst = 0.0
+        $csv = Join-Path $bwDir 'bwchk.csv'
+        if ($ran -and (Test-Path $csv)) {
+            $ratio = [Math]::Tan([Math]::PI * 20.0 / 1000.0) /
+                     [Math]::Tan([Math]::PI * 10.0 / 1000.0)
+            $sum = @(0.0, 0.0, 0.0)
+            $n = 0
+            foreach ($line in (Get-Content $csv | Select-Object -Skip 1)) {
+                if (-not $line) { continue }
+                $c = $line -split ','
+                $t = [double]$c[0]
+                if ($t -lt 2.0 -or $t -ge 3.0) { continue }
+                for ($j = 0; $j -lt 3; $j++) {
+                    $v = [double]$c[$j + 1]
+                    $sum[$j] += $v * $v
+                }
+                $n++
+            }
+            if ($n -eq 0) {
+                $worst = [double]::PositiveInfinity
+            } else {
+                # The drive itself is the first column: an amplitude-1 sine, so
+                # its RMS is the reference the other two are gains against.
+                # One element per line, deliberately: a line break after the
+                # comma inside @( ) ends the element list, and the operator
+                # that follows is then applied to the ARRAY.
+                $g4 = 1.0 / [Math]::Sqrt(1.0 + [Math]::Pow($ratio, 8))
+                $g5 = 1.0 / [Math]::Sqrt(1.0 + [Math]::Pow($ratio, 10))
+                $want = @(1.0, $g4, $g5)
+                for ($j = 0; $j -lt 3; $j++) {
+                    $rms = [Math]::Sqrt($sum[$j] / $n)
+                    $err = [Math]::Abs($rms - $want[$j] / [Math]::Sqrt(2.0))
+                    if ($err -gt $worst) { $worst = $err }
+                }
+            }
+        } else {
+            $worst = [double]::PositiveInfinity
+        }
+        if ($worst -lt 1e-8) {
+            Write-Host ("ok   build/emit/BwChk : Butterworth matches |H(f)| at orders 4 and 5, max error " +
+                        $worst.ToString('E2')) -ForegroundColor Green
+            $script:pass++
+        } else {
+            Write-Host ("FAIL build/emit/BwChk : max error " + $worst) -ForegroundColor Red
+            $script:fail++
+        }
+    }
+
     # ContBq drives two continuous biquads from a unit step -- same poles
     # (wn = 2 rad/s, zeta = 0.5), different numerators -- and both step
     # responses have an exact closed form. This is the check that a

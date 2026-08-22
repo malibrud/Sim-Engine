@@ -1,0 +1,71 @@
+package arrst;
+
+// Array-shaped states and vars (§6.4a, §6.5), end to end, with a closed form
+// the runner can check the recorded CSV against.
+//
+// Everything the dynamic lowering (§15.5a) has to get right is in one node,
+// deliberately mixed with the scalar cases it must not disturb:
+//
+//   x       continuous, array   -> a contiguous run of slots in `x`
+//   total   continuous, scalar  -> a run of length one in the SAME block
+//   h       discrete,   array   -> the fourth block, `dis_arr` / `nxt_arr`
+//   tick    discrete,   scalar  -> stays a plain member of `dis`
+//   rate    var,        array   -> node-owned, sized at configuration
+//
+// The closed forms:
+//   x[i](t) = x[i](0) * exp(-(i+1) * k0 * t)      independent decays
+//   h[i][k] = k - 1 - i                           a shift register of tick indices
+//   total(t) = 0                                  a scalar state that never moves
+node ArrSt {
+    settings {
+        n  (-):   int    = 3;
+        k0 (1/s): double = 1.0;
+    }
+
+    outputs {
+        sum   (-): double;      // sum of the decays
+        tail  (-): double;      // the oldest sample in the shift register
+        first (-): double;      // x[0], as an output rather than a state read
+    }
+
+    states {
+        // The extent is a §7 expression read at configuration, so `n` stays an
+        // ordinary overridable setting and the block moves when it moves.
+        continuous x [param.n] (-): double = 1.0;
+        continuous total       (-): double = 0.0;
+        discrete   h [param.n] (-): double = 0.0;
+        discrete   tick        (-): int    = 0;
+    }
+
+    vars {
+        // The per-element coefficients the array state is filtered by, which is
+        // why the two features arrive together (§6.5).
+        rate [param.n] (1/s): double;
+    }
+
+    init() {
+        for (std::size_t i = 0; i < var.rate.size(); ++i)
+            var.rate[i] = static_cast<double>(i + 1) * param.k0;
+        log.info("{} decays, base rate {} /s", var.rate.size(), param.k0);
+    }
+
+    derivative() {
+        for (std::size_t i = 0; i < state.x.size(); ++i)
+            der.x[i] = -var.rate[i] * state.x[i];
+        der.total = 0.0;
+    }
+
+    output() {
+        double s = 0.0;
+        for (std::size_t i = 0; i < state.x.size(); ++i) s += state.x[i];
+        out.sum   = s;
+        out.first = state.x.empty() ? 0.0 : state.x[0];
+        out.tail  = state.h.empty() ? 0.0 : state.h[state.h.size() - 1];
+    }
+
+    next() {
+        for (std::size_t i = state.h.size(); i-- > 1;) next.h[i] = state.h[i - 1];
+        if (!state.h.empty()) next.h[0] = static_cast<double>(state.tick);
+        next.tick = state.tick + 1;
+    }
+}

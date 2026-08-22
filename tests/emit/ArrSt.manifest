@@ -1,0 +1,62 @@
+﻿# ----------------------------------------------------------------------------
+#  GENERATED — DO NOT EDIT.
+#  Unit manifest for: Sim.generated.hpp
+#  sim: ArrSt   root: arrst.ArrSt   base step: 0.001 s
+#
+#  Units are checked by the DSL compiler at every declarative site and then
+#  ERASED — the generated C++ is plain `double` throughout. This file is where
+#  the erased information goes. It is a real generator output, not
+#  documentation: it is the contract for anyone writing an external solver,
+#  feeding the root boundary, or overriding a setting from outside the model.
+#
+#  Every value named here is IN THE UNIT SHOWN. `-` means dimensionless.
+# ----------------------------------------------------------------------------
+
+[state.continuous]        # slot | model path | unit  -- the solver's ABI
+#  This model has array-shaped states (§6.4a), so no slot number is
+#  known here: an extent does not settle until configuration. The extent
+#  is printed AS WRITTEN, and the concrete rows come from
+#  Sim::state_map() once configure() has run (§15.6).
+x[?]      x [param.n]             -           dynamic
+xd[?]     x' [param.n]            1/s         dynamic
+x[?]      total                   -           dynamic
+xd[?]     total'                  1/s         dynamic
+
+[state.discrete]          # Sim::dis; offsets from Sim::discrete_map()
+          tick                    -           int
+
+[state.discrete.array]    # Sim::dis_arr; rows from Sim::discrete_array_map()
+dis_arr[?]  h [param.n]           -           dynamic
+
+[signals]                 # Sim::sig; offsets from Sim::signal_map()
+          sum                     -           double
+          tail                    -           double
+          first                   -           double
+
+[boundary.in]             # root inputs the host must drive, as sig.in.*
+          (none)
+
+[boundary.out]            # root outputs the host may read
+          sum                     -
+          tail                    -
+          first                   -
+
+[settings]                # configurable; value is the elaborated default
+          n                       -           = 3
+          k0                      1/s         = 1.0
+
+[decimation]              # derived from `rate` at configuration
+
+[types]
+
+[recorded]                # columns of arrst.csv
+          time                    s
+          state.x[0]              -
+          state.x[1]              -
+          state.x[2]              -
+          total                   -
+          state.h[0]              -
+          state.h[2]              -
+          tick                    -
+          out.sum                 -
+          out.tail                -

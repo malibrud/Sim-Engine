@@ -42,6 +42,8 @@ const char* describe(Tok k) {
         case Tok::RBrace:         return "`}`";
         case Tok::LParen:         return "`(`";
         case Tok::RParen:         return "`)`";
+        case Tok::LBracket:       return "`[`";
+        case Tok::RBracket:       return "`]`";
         case Tok::Semi:           return "`;`";
         case Tok::Comma:          return "`,`";
         case Tok::Colon:          return "`:`";
@@ -314,6 +316,8 @@ Token Lexer::next() {
         case '}': return one(Tok::RBrace);
         case '(': return one(Tok::LParen);
         case ')': return one(Tok::RParen);
+        case '[': return one(Tok::LBracket);
+        case ']': return one(Tok::RBracket);
         case ';': return one(Tok::Semi);
         case ',': return one(Tok::Comma);
         case ':': return one(Tok::Colon);

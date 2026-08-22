@@ -195,6 +195,7 @@ void dump(std::ostream& o, const ast::ModelFile& f) {
             for (const ast::StateDecl& s : n.states) {
                 o << indent(3) << (s.is_continuous ? "continuous " : "discrete   ") << s.name;
                 dump_type(o, s.type);
+                dump_expr_field(o, "extent", s.extent.get());
                 dump_expr_field(o, "ic", s.initial.get());
                 o << "\n";
             }
@@ -204,6 +205,7 @@ void dump(std::ostream& o, const ast::ModelFile& f) {
             for (const ast::FieldDecl& v : n.vars) {
                 o << indent(3) << v.name;
                 dump_type(o, v.type);
+                dump_expr_field(o, "extent", v.extent.get());
                 o << "\n";
             }
         }

@@ -1,0 +1,133 @@
+// Nth-order Butterworth low-pass, as a cascade of second-order sections in ONE
+// leaf (§6.4a). This is the block array states were added for: an Nth-order
+// filter is (N+1)/2 biquads, and before extents the language could express a
+// fixed cascade and nothing else.
+//
+//     |H(jw)|^2 = 1 / (1 + (w/wc)^(2N))
+//
+// What makes it one node rather than N instances: a dynamic count of STATES
+// inside a leaf does not touch the schedule, while a dynamic count of
+// INSTANCES decides the emitted schedule (§15.7). So the cascade is a loop in
+// a verbatim body, where loops have always been legal, and §15.7 never learns
+// that this node is a cascade at all — one instance, one call per method, one
+// entry in the schedule, whatever `order` is.
+//
+// `order` and `fc` are both ordinary settings, so both are overridable in a
+// compiled binary: `order` resizes the state blocks at §6.2b step 4, and `fc`
+// reaches the coefficients through `init()` at step 6.
+package se.sig.dt;
+
+node Butterworth {
+    units { U; }
+
+    settings {
+        fc    (Hz): double;                          // cutoff, required
+        order (-):  int    = 4;
+
+        // The section count, named ONCE. The extent is a §7 expression and the
+        // loop bound is C++, so the two cannot share a subexpression; writing
+        // `[ceil(param.order / 2)]` on the declaration and `(param.order+1)/2`
+        // in the body would state the same fact twice in two languages with
+        // nothing checking that they agree (§6.4a). An override may also pin
+        // this directly, detaching the section count from `order` exactly as
+        // §13.3 describes for any derived setting.
+        nbq   (-):  int    = ceil(param.order / 2);
+
+        fs    (Hz): double = sample_rate;
+    }
+
+    inputs  { x (U): double; }
+    outputs { y (U): double; }
+
+    // Direct Form II, per section.
+    states {
+        discrete w1 [param.nbq] (-): double = 0.0;
+        discrete w2 [param.nbq] (-): double = 0.0;
+    }
+
+    // The per-element coefficients the array states are filtered by, which is
+    // why states and vars grew extents together: an array state with scalar
+    // coefficients would describe nothing worth describing (§6.5).
+    vars {
+        a1 [param.nbq] (-): double;   a2 [param.nbq] (-): double;
+        b0 [param.nbq] (-): double;   b1 [param.nbq] (-): double;
+        b2 [param.nbq] (-): double;
+    }
+
+    // Pole placement and the bilinear transform, in C++ because that is where
+    // loops and <cmath> live (§4.4). Runs at §6.2b step 6, so `param.fc` is
+    // already whatever a §14 source overrode it to, and `var.a1.size()` is
+    // already whatever `param.nbq` resolved to at step 4.
+    //
+    // Prewarping is deliberately not a derived setting, for the reason
+    // `se.sig.dt.LowPass2` gives: `K*tan(pi*fc/fs)` is dimensionally T^-1
+    // while a pole frequency is angle*T^-1, so the standard formula does not
+    // type-check once angle is a base dimension (§4.5). It is honest
+    // arithmetic on erased units and it belongs here.
+    init() {
+        const double pi  = std::acos(-1.0);
+        const double K   = 2.0 * param.fs;
+        const double wa  = K * std::tan(pi * param.fc / param.fs);   // prewarped
+        const int    N   = param.order;
+        const std::size_t nbq = var.a1.size();
+        const bool   odd = (N % 2) == 1;
+
+        for (std::size_t i = 0; i < nbq; ++i) {
+            if (odd && i == nbq - 1) {
+                // The lone real pole at s = -wa, as a FIRST-order section with
+                // its second-order terms zeroed. Folding it into the biquad
+                // formula below instead would multiply numerator and
+                // denominator by (1 + z^-1) — algebraically identical, but it
+                // leaves the recursion an undamped pole at z = -1 that only
+                // the numerator's cancelling zero holds down, and roundoff
+                // does not respect a cancellation.
+                const double d0 = K + wa;
+                var.a1[i] = (wa - K) / d0;   var.a2[i] = 0.0;
+                var.b0[i] = wa / d0;         var.b1[i] = wa / d0;
+                var.b2[i] = 0.0;
+                continue;
+            }
+            // A conjugate pole pair on the Butterworth circle:
+            //     s = wa * exp(j*th),  th = pi/2 + pi*(2i+1)/(2N)
+            // giving s^2 - 2*wa*cos(th)*s + wa^2, with a constant numerator
+            // wa^2 so the section is unity-gain at DC.
+            const double th  = pi / 2.0 + pi * (2.0 * static_cast<double>(i) + 1.0) /
+                                              (2.0 * static_cast<double>(N));
+            const double ac1 = -2.0 * wa * std::cos(th);
+            const double ac2 = wa * wa;
+            const double d0  = K * K + K * ac1 + ac2;
+
+            var.a1[i] = (-2.0 * K * K + 2.0 * ac2) / d0;
+            var.a2[i] = ( K * K - K * ac1 + ac2)   / d0;
+            var.b0[i] = ac2 / d0;
+            var.b1[i] = 2.0 * ac2 / d0;
+            var.b2[i] = ac2 / d0;
+        }
+        log.info("order {} = {} section(s), fc {} Hz at {} Hz", N, nbq, param.fc, param.fs);
+    }
+
+    // §8.2 splits output() from next(), so `w0` is computed in both rather than
+    // shared. The predecessor C++ this replaces fused them into one
+    // `double filter(double x)` that advanced state and returned a value in the
+    // same call; the split is what makes ZOH, rate transitions and recording
+    // well-defined, and the cost is a handful of multiply-adds — the same cost
+    // the scalar `dt.Biquad` already pays.
+    output(x) {
+        double u = in.x;
+        for (std::size_t i = 0; i < state.w1.size(); ++i) {
+            const double w0 = u - var.a1[i] * state.w1[i] - var.a2[i] * state.w2[i];
+            u = var.b0[i] * w0 + var.b1[i] * state.w1[i] + var.b2[i] * state.w2[i];
+        }
+        out.y = u;
+    }
+
+    next(x) {
+        double u = in.x;
+        for (std::size_t i = 0; i < state.w1.size(); ++i) {
+            const double w0 = u - var.a1[i] * state.w1[i] - var.a2[i] * state.w2[i];
+            u = var.b0[i] * w0 + var.b1[i] * state.w1[i] + var.b2[i] * state.w2[i];
+            next.w1[i] = w0;
+            next.w2[i] = state.w1[i];
+        }
+    }
+}

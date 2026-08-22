@@ -1,0 +1,19 @@
+// SE0234 — only a state and a var may be array-shaped (§6.4a). A port and a
+// record field both live in the signal block, whose offsets come from
+// `offsetof`, and a run-time-sized member would destroy that (§15.5).
+package tests;
+
+type Bundle {
+    v [3] (m/s): double;
+}
+
+node Bad {
+    settings { n (-): int = 4; }
+    inputs   { u [param.n] (m): double; }
+    outputs  { y (m): double; }
+    states   { continuous ok [param.n] (m): double = 0.0; }
+    vars     { fine [param.n] (-): double; }
+
+    derivative() { der.ok[0] = 1.0; }
+    output() { out.y = state.ok[0]; }
+}

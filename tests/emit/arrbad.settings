@@ -1,0 +1,3 @@
+// §6.4a — there is no path naming the whole array: §7 has no aggregate value
+// to assign to it, and the declared default already covers the uniform case.
+c = 0 (-);

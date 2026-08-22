@@ -1,0 +1,25 @@
+// The array-state feature against the case it was added for: an Nth-order
+// Butterworth as a cascade of second-order sections in one leaf (§6.4a).
+//
+// Three seconds at 1 kHz, recorded at every base tick. The runner discards the
+// first two seconds — a 4th-order Butterworth at 10 Hz has settled long before
+// then — and takes the RMS of the last second, which is exactly twenty whole
+// periods of the 20 Hz drive.
+sim BwChk {
+    root: bwchk.BwChk {};
+
+    step:     1 (ms);
+    solver:   rk4;
+    duration: 3 (s);
+
+    record: {
+        file: "bwchk.csv";
+        signals {
+            src.out.y;             // the drive
+            bw4.out.y;             // 4th order
+            bw5.out.y;             // 5th order
+            bw4.state.w1[0];       // one section's state, addressed by index
+            bw5.state.w1[2];       // the third section of the odd-order cascade
+        }
+    }
+}

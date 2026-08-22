@@ -665,8 +665,25 @@ NodeInfo* Resolver::resolve_node(FileInfo& file, const ast::NodeDef& def,
         st.name = s.name;
         st.continuous = s.is_continuous;
         st.initial = s.initial.get();
+        st.extent = s.extent.get();
+        st.extent_loc = s.extent_loc;
         st.loc = s.loc;
         resolve_type(file, s.type, st.type);
+        // §6.4a — an array state is `double`, both kinds. That is what lets
+        // the two share one flat-block lowering: a continuous array is a run of
+        // slots in `x`, and a discrete one is a run in `dis_arr`, which exists
+        // precisely because a run-time-sized member cannot live in `dis`
+        // (§15.5). `int`/`bool` states remain available, unextended.
+        if (st.extent && (st.type.is_record || st.type.scalar != "double")) {
+            diag_.error("SE0433", *file.src, s.extent_loc,
+                        "an array-shaped state must be `double`",
+                        "declared `" + std::string(st.type.is_record ? "record"
+                                                                    : st.type.scalar) +
+                            "`",
+                        {note("both blocks an extent can land in are flat `double` "
+                              "arrays (§15.5)"),
+                         help("drop the extent, or make the element type `double`")});
+        }
         if (st.continuous && (st.type.is_record || st.type.scalar != "double")) {
             diag_.error("SE0431", *file.src, s.loc,
                         "a `continuous` state must be `double`",
@@ -692,7 +709,24 @@ NodeInfo* Resolver::resolve_node(FileInfo& file, const ast::NodeDef& def,
             Field field;
             field.name = f.name;
             field.loc = f.loc;
+            field.extent = f.extent.get();
+            field.extent_loc = f.extent_loc;
             resolve_type(file, f.type, field.type);
+            // §6.5 — a var carries an extent on the same terms as a state,
+            // and the same element rule with it. The parser has already refused
+            // one on a port or a record field (SE0234), so only `vars` reaches
+            // here with `extent` set.
+            if (field.extent && (field.type.is_record || field.type.scalar != "double")) {
+                diag_.error("SE0433", *file.src, f.extent_loc,
+                            "an array-shaped var must be `double`",
+                            "declared `" + std::string(field.type.is_record
+                                                           ? "record"
+                                                           : field.type.scalar) +
+                                "`",
+                            {note("an array var holds the per-element coefficients an "
+                                  "array state is filtered by (§6.5)"),
+                             help("drop the extent, or make the element type `double`")});
+            }
             g.to->push_back(std::move(field));
         }
     }

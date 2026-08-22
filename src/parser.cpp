@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <cstring>
 
 namespace se {
 
@@ -210,7 +211,7 @@ void Parser::recover_to_definition() {
 
 // ─── Paths ───────────────────────────────────────────────────────────────────
 
-bool Parser::parse_path(ast::Path& out, bool allow_keywords) {
+bool Parser::parse_path(ast::Path& out, bool allow_keywords, bool allow_index) {
     const bool ok_first = allow_keywords ? tok_.is_word() : at(Tok::Ident);
     if (!ok_first) {
         std::vector<Attachment> att;
@@ -246,6 +247,28 @@ bool Parser::parse_path(ast::Path& out, bool allow_keywords) {
         out.segs.push_back(tok_.text);
         out.loc.length = tok_.loc.offset + tok_.loc.length - out.loc.offset;
         advance();
+    }
+
+    // §6.4a — `bw.w1[3]`. A literal index only: the extent is not known
+    // until configuration, so there is nothing here for an expression to read,
+    // and an index past the configured extent is a configuration failure rather
+    // than a parse error (§13.4).
+    if (allow_index && at(Tok::LBracket)) {
+        advance();
+        if (!at(Tok::Number) || tok_.text.find_first_not_of("0123456789") != std::string::npos) {
+            err("SE0201", tok_.loc,
+                std::string("expected a non-negative integer index, found ") +
+                    describe(tok_.kind),
+                "expected an index",
+                {note("an array element is addressed by a literal index (§6.4a)")});
+            return false;
+        }
+        const std::string index = tok_.text;
+        advance();
+        const Loc close = tok_.loc;
+        if (!expect(Tok::RBracket, "SE0201", "to close the index")) return false;
+        out.segs.back() += "[" + index + "]";
+        out.loc.length = close.offset + close.length - out.loc.offset;
     }
     return true;
 }
@@ -767,7 +790,7 @@ bool Parser::parse_type_def(ast::TypeDef& out) {
     advance();
     // A record body is a field list that may also carry one `units` section
     // (§5.2), so it shares the field loop rather than duplicating its recovery.
-    return parse_field_list(out.fields, "record field", true, &out.sec_units,
+    return parse_field_list(out.fields, "record field", true, false, &out.sec_units,
                             &out.unit_params);
 }
 
@@ -818,17 +841,17 @@ bool Parser::parse_node_item(ast::NodeDef& node) {
         case Tok::KwInputs:
             if (!mark_section(node.sec_inputs, "inputs", loc)) return false;
             advance();
-            return parse_field_list(node.inputs, "input port", true);
+            return parse_field_list(node.inputs, "input port", true, false);
 
         case Tok::KwOutputs:
             if (!mark_section(node.sec_outputs, "outputs", loc)) return false;
             advance();
-            return parse_field_list(node.outputs, "output port", true);
+            return parse_field_list(node.outputs, "output port", true, false);
 
         case Tok::KwVars:
             if (!mark_section(node.sec_vars, "vars", loc)) return false;
             advance();
-            return parse_field_list(node.vars, "var", true);
+            return parse_field_list(node.vars, "var", true, true);
 
         case Tok::KwUnits:
             if (!mark_section(node.sec_units, "units", loc)) return false;
@@ -935,7 +958,8 @@ bool Parser::parse_node_item(ast::NodeDef& node) {
 // ─── Declaration lists ───────────────────────────────────────────────────────
 
 bool Parser::parse_field_list(std::vector<ast::FieldDecl>& out, const char* what,
-                              bool allow_records, ast::SectionMark* sec_units,
+                              bool allow_records, bool allow_extent,
+                              ast::SectionMark* sec_units,
                               std::vector<ast::UnitParamDecl>* unit_params) {
     if (!expect(Tok::LBrace, "SE0201", "to open the section")) return false;
 
@@ -962,7 +986,9 @@ bool Parser::parse_field_list(std::vector<ast::FieldDecl>& out, const char* what
             f.name = tok_.text;
             f.loc = tok_.loc;
             advance();
-            if (!parse_type_ref(f.type, what)) {
+            if (!parse_extent(f.extent, f.extent_loc, what, allow_extent)) {
+                recover_in_list(Tok::RBrace);
+            } else if (!parse_type_ref(f.type, what)) {
                 recover_in_list(Tok::RBrace);
             } else if (!allow_records && !f.type.is_scalar) {
                 err("SE0231", f.type.loc, std::string("a ") + what + " may not be a record type");
@@ -978,6 +1004,49 @@ bool Parser::parse_field_list(std::vector<ast::FieldDecl>& out, const char* what
         if (tok_.loc.offset == before && !at(Tok::RBrace)) advance();
     }
     return expect(Tok::RBrace, "SE0201", "to close the section");
+}
+
+// §6.4a — the extent on a state or a var: `w1 [param.nbq] (-): double`.
+//
+// It is parsed wherever one could be written, including the sites that forbid
+// it, so that `x [3] (m): double;` on a port is rejected by SE0234 with the
+// reason, rather than by a pile-up of punctuation errors that never mentions
+// arrays. The expression itself is an ordinary §7 expression: it is not
+// evaluated until configuration (§6.2b step 4), so `param.*` is legal here.
+bool Parser::parse_extent(ast::ExprPtr& out, Loc& loc, const char* what, bool allowed) {
+    if (!at(Tok::LBracket)) return true;
+    Loc open = tok_.loc;
+    advance();
+    ast::ExprPtr e = parse_expr();
+    if (!e) return false;
+    const Loc close = tok_.loc;
+    if (!expect(Tok::RBracket, "SE0201", "to close the extent")) return false;
+    // The whole `[...]` span, so the manifest can print the extent AS WRITTEN
+    // (§15.6): a reader of a dynamic model gets the expression, not a size,
+    // because there is no size until configuration.
+    open.length = close.offset + close.length - open.offset;
+    if (!allowed) {
+        const char* article =
+            std::strchr("aeiou", what[0]) != nullptr ? "an " : "a ";
+        // A setting is scalar for a different reason than a port is, so say
+        // whichever one applies rather than a note that is true of neither.
+        const bool setting = std::strcmp(what, "setting") == 0;
+        err("SE0234", open, std::string(article) + what + " may not carry an extent",
+            "arrays are not permitted here",
+            {note(setting ? "a setting is a scalar: the flow-down expression language "
+                            "is scalar (\xc2\xa7""5.2, \xc2\xa7""6.2)"
+                          : "a port and a record field both live in the signal block, "
+                            "whose offsets come from `offsetof` — a run-time-sized "
+                            "member would destroy that (\xc2\xa7""15.5)"),
+             note("only a state and a var may be array-shaped (\xc2\xa7""6.4a)"),
+             help(setting ? "declare the COUNT as a setting and put the extent on the "
+                            "state or var that reads it"
+                          : "cross a wire as N ports or as a fixed record instead")});
+        return false;
+    }
+    loc = open;
+    out = std::move(e);
+    return true;
 }
 
 // `units { U; V; }` — bare names, no type and no default. A unit parameter
@@ -1034,7 +1103,11 @@ bool Parser::parse_setting_list(std::vector<ast::SettingDecl>& out) {
             s.name = tok_.text;
             s.loc = tok_.loc;
             advance();
-            if (!parse_type_ref(s.type, "setting")) {
+            ast::ExprPtr unused_extent;
+            Loc unused_loc;
+            if (!parse_extent(unused_extent, unused_loc, "setting", false)) {
+                ok = false;
+            } else if (!parse_type_ref(s.type, "setting")) {
                 ok = false;
             } else if (!s.type.is_scalar) {
                 err("SE0231", s.type.loc, "a setting may not be a record type", "",
@@ -1099,7 +1172,9 @@ bool Parser::parse_state_list(std::vector<ast::StateDecl>& out) {
             s.name = tok_.text;
             s.loc = tok_.loc;
             advance();
-            if (!parse_type_ref(s.type, "state")) {
+            if (!parse_extent(s.extent, s.extent_loc, "state", true)) {
+                ok = false;
+            } else if (!parse_type_ref(s.type, "state")) {
                 ok = false;
             } else {
                 if (!s.type.is_scalar) {
@@ -1652,7 +1727,7 @@ bool Parser::parse_record_block(ast::RecordBlock& out) {
                     while (!at(Tok::RBrace) && !at_end()) {
                         const std::uint32_t inner = tok_.loc.offset;
                         ast::Path p;
-                        if (!parse_path(p, true)) {
+                        if (!parse_path(p, true, true)) {
                             recover_in_list(Tok::RBrace);
                         } else if (!expect(Tok::Semi, "SE0208", "after the signal path")) {
                             recover_in_list(Tok::RBrace);
@@ -1813,7 +1888,7 @@ std::unique_ptr<ast::SettingsFile> Parser::parse_settings_file() {
         ast::Override o;
         o.loc = tok_.loc;
 
-        if (!parse_path(o.path, true)) {
+        if (!parse_path(o.path, true, true)) {
             recover_in_list(Tok::End);
         } else if (!expect(Tok::Equal, "SE0201", "after the path")) {
             recover_in_list(Tok::End);

@@ -143,6 +143,12 @@ private:
     void apply_overrides(const NodeInfo* def, const std::string& path,
                          std::map<std::string, Pin>& pinned);
     OverrideEntry* find_override(const std::string& path);
+    // §6.4a — an extent on a state or a var. Checks what elaboration CAN
+    // check (dimension always; the value only when nothing overridable feeds
+    // it) and hands the rest to configuration, where the expression is
+    // re-evaluated against whatever a §14 source moved.
+    bool extent_of(const ast::Expr* e, Loc loc, const Source& src, const Env& env,
+                   const std::string& what, Extent& out);
 
     // ─── Wires ───────────────────────────────────────────────────────────────
     // One hop of a wire, recorded while the composite is walked and replayed
@@ -182,6 +188,16 @@ private:
     // landed on nothing can be told what it nearly hit.
     std::map<std::string, const NodeInfo*> instances_;
     std::vector<std::string> known_setting_paths_;
+    // §6.4a — where each `Model::element_refs` entry came from: the ref's
+    // own index, the leaf, and the state within it. The offset table it needs
+    // does not exist until every leaf is built, so the link is recorded here
+    // and resolved in one pass at the end.
+    struct ElementSite {
+        std::size_t ref = 0;
+        std::size_t leaf = 0;
+        std::size_t state = 0;
+    };
+    std::vector<ElementSite> element_sites_;
     bool failed_ = false;
 };
 

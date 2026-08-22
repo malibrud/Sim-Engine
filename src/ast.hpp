@@ -105,6 +105,11 @@ struct TypeRef {
 struct FieldDecl {            // inputs / outputs / vars / record fields
     std::string name;
     TypeRef type;
+    // §6.4a — `[expr]`, on a `var` only. A port may not carry one (SE0234) and
+    // neither may a record field: both are in the signal block, whose offsets
+    // come from `offsetof` (§15.5). Null when the declaration is scalar.
+    ExprPtr extent;
+    Loc extent_loc;
     Loc loc;
 };
 
@@ -120,6 +125,8 @@ struct StateDecl {            // §6.4
     std::string name;
     TypeRef type;
     ExprPtr initial;          // the declared IC
+    ExprPtr extent;           // §6.4a — `[expr]`; null when the state is scalar
+    Loc extent_loc;
     Loc kind_loc;
     Loc loc;
 };

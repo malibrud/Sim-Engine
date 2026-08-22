@@ -210,6 +210,10 @@ private:
     // Sim-class sections.
     void sim_members();
     void sim_resolve_settings();
+    void sim_configure();
+    void sim_configure_slots();
+    void sim_configure_indices();
+    void sim_binders();
     void sim_elaborate();
     // Maps a node's model path to the C++ object holding its settings.
     // Built once, because a leaf's identifier is only known after the
@@ -225,6 +229,7 @@ private:
     void sim_next();
     void sim_on_step();
     void sim_integrate();
+    void sim_integrate_dynamic();
     void sim_record();
     void sim_run();
     void sim_maps();
@@ -243,6 +248,7 @@ private:
     using SlotRow = std::array<std::string, 4>;
     std::vector<SlotRow> signal_rows() const;
     std::vector<SlotRow> discrete_rows() const;
+    std::vector<SlotRow> array_state_rows(bool continuous) const;
 
     const Model& m_;
     std::string gen_;
@@ -397,7 +403,18 @@ void Emitter::leaf_class(const NodeInfo& node) {
     emit_struct(o_, "Param", rows);
 
     rows.clear();
-    for (const Field& v : node.vars) rows.push_back(field_row(v.name, v.type, "{}"));
+    for (const Field& v : node.vars) {
+        Row r = field_row(v.name, v.type, "{}");
+        // §6.5 — an array var is the one thing the node OWNS rather than
+        // views. It is private storage outside every published block, so there
+        // is no host buffer to bind and nothing external to contract with; it is
+        // sized once, at configuration, and never inside a tick (Appendix C 8a).
+        if (v.extent) {
+            r.type = "std::vector<double>";
+            r.decl = v.name + ";";
+        }
+        rows.push_back(r);
+    }
     emit_struct(o_, "Var  ", rows);
 
     // Both kinds of state are views: continuous into `Sim::x`, discrete into
@@ -405,7 +422,11 @@ void Emitter::leaf_class(const NodeInfo& node) {
     rows.clear();
     for (const auto& s : node.states) {
         Row r = field_row(s.name, s.type, "");
-        r.type = s.continuous ? "state_ref" : "value_ref<" + s.type.scalar + ">";
+        // §6.4a — an array state is a view too, one step further: a pointer
+        // plus a length, because the length is a configuration result and a
+        // `std::array` member is not available even in principle.
+        r.type = s.extent ? "state_arr"
+                          : (s.continuous ? "state_ref" : "value_ref<" + s.type.scalar + ">");
         rows.push_back(r);
     }
     emit_struct(o_, "State", rows);
@@ -414,7 +435,8 @@ void Emitter::leaf_class(const NodeInfo& node) {
         rows.clear();
         for (const auto& s : node.states) {
             if (!s.continuous) continue;
-            rows.push_back({"state_ref", s.name + ";", unit_comment(s.der_unit)});
+            rows.push_back({s.extent ? "state_arr" : "state_ref", s.name + ";",
+                            unit_comment(s.der_unit)});
         }
         emit_struct(o_, "Der  ", rows);
     }
@@ -424,8 +446,19 @@ void Emitter::leaf_class(const NodeInfo& node) {
         // same shape as the storage, which is what makes one whole-block
         // `dis = nxt` a simultaneous update across the entire model (§6.4).
         rows.clear();
-        for (const auto& s : node.states)
-            if (!s.continuous) rows.push_back(field_row(s.name, s.type, "{}"));
+        for (const auto& s : node.states) {
+            if (s.continuous) continue;
+            // §6.4a — an array-shaped discrete state cannot be a member
+            // here: a run-time-sized one would destroy the `offsetof` property
+            // `dis` exists for. It is a view into the fourth block instead, and
+            // the whole-block `dis = nxt` commits it through array_ref's
+            // value-copying assignment.
+            if (s.extent) {
+                rows.push_back({"state_arr", s.name + ";", unit_comment(s.type.unit)});
+                continue;
+            }
+            rows.push_back(field_row(s.name, s.type, "{}"));
+        }
         emit_struct(o_, "Store", rows);
     }
 
@@ -621,7 +654,36 @@ void Emitter::sim_members() {
     o_ << "    //  Construction leaves every setting at the value elaboration computed\n";
     o_ << "    //  for it (§6.2b step 1). To change one: load_settings(), then\n";
     o_ << "    //  resolve_settings() to re-run everything derived from it, then init().\n";
-    o_ << "    Sim() { bind(); resolve_settings(); }\n";
+    if (!m_.dynamic_states) {
+        o_ << "    Sim() { bind(); resolve_settings(); }\n";
+    } else {
+        // §15.5a — the block sizes are not known until configuration, so
+        // the constructor cannot bind what does not exist yet. It configures;
+        // the host then allocates and hands the buffers in.
+        o_ << "    //  This model has array-shaped states (§6.4a), so its block sizes\n";
+        o_ << "    //  are a CONFIGURATION result and the buffers are the host's\n";
+        o_ << "    //  (§15.5a):\n";
+        o_ << "    //\n";
+        o_ << "    //      Sim sim;                       // configures\n";
+        o_ << "    //      std::vector<double> x(sim.state_size()), xd(x.size());\n";
+        o_ << "    //      sim.bind_state(x.data(), xd.data(), x.size());\n";
+        if (m_.n_disc_arr_slots) {
+            o_ << "    //      std::vector<double> d(sim.discrete_array_size()), "
+                  "n(d.size());\n";
+            o_ << "    //      sim.bind_discrete_array(d.data(), n.data(), d.size());\n";
+        }
+        o_ << "    //      sim.init();\n";
+        o_ << "    //\n";
+        o_ << "    //  run() and run_main() do all of that themselves.\n";
+        o_ << "    Sim() { bind(); configure(); }\n";
+        o_ << "    void configure();                        // §6.2b steps 1-4\n";
+        o_ << "    std::size_t state_size() const { return n_states; }\n";
+        if (m_.n_disc_arr_slots)
+            o_ << "    std::size_t discrete_array_size() const { return n_dstates; }\n";
+        o_ << "    void bind_state(double* px, double* pxd, std::size_t n);\n";
+        if (m_.n_disc_arr_slots)
+            o_ << "    void bind_discrete_array(double* pd, double* pn, std::size_t n);\n";
+    }
     o_ << "    void init();\n";
     o_ << "    void tick();                             // one base step (§9.6)\n";
     o_ << "    bool done() const { return se_done_; }\n";
@@ -647,14 +709,43 @@ void Emitter::sim_members() {
     o_ << "    //  give path, offset and unit, so an inspector, a shared-memory host or\n";
     o_ << "    //  a replay tool needs no generated accessor code at all.\n\n";
 
-    o_ << "    static constexpr std::size_t n_states = " << m_.n_states << ";\n";
-    for (const Leaf& leaf : m_.leaves)
-        for (const StateSlot& s : leaf.states)
-            if (s.continuous)
-                o_ << "    //  x[" << s.slot << "] / xd[" << s.slot << "]   "
-                   << pad(leaf.path + "." + s.name, 24) << s.unit.str() << "\n";
-    o_ << "    std::array<double, n_states> x{};\n";
-    o_ << "    std::array<double, n_states> xd{};\n\n";
+    if (!m_.dynamic_states) {
+        o_ << "    static constexpr std::size_t n_states = " << m_.n_states << ";\n";
+        for (const Leaf& leaf : m_.leaves)
+            for (const StateSlot& s : leaf.states)
+                if (s.continuous)
+                    o_ << "    //  x[" << s.slot << "] / xd[" << s.slot << "]   "
+                       << pad(leaf.path + "." + s.name, 24) << s.unit.str() << "\n";
+        o_ << "    std::array<double, n_states> x{};\n";
+        o_ << "    std::array<double, n_states> xd{};\n\n";
+    } else {
+        // §15.5a — the dynamic lowering. Two differences from the form
+        // above and only two: the size is settled at configuration rather than
+        // at compile time, and the storage is the host's. Everything else in
+        // this class — `sig`, `dis`/`nxt`, the schedule, every wire — is
+        // byte-for-byte what it would otherwise have been.
+        o_ << "    //  A state's position is a configuration result, so what is fixed\n";
+        o_ << "    //  here is only its ROW in the tables below. An array-shaped state\n";
+        o_ << "    //  occupies a contiguous run of slots in the SAME block: there is no\n";
+        o_ << "    //  second continuous vector, because the solver's ABI is the whole\n";
+        o_ << "    //  point of the first one.\n";
+        for (const Leaf& leaf : m_.leaves)
+            for (const StateSlot& st : leaf.states) {
+                if (!st.continuous) continue;
+                const std::string p =
+                    leaf.path.empty() ? st.name : leaf.path + "." + st.name;
+                o_ << "    //  x[se_x_off_[" << st.off << "]]"
+                   << (st.extent.present ? ".." : "  ") << "   "
+                   << pad(p + (st.extent.present ? " " + st.extent.text : ""), 30)
+                   << st.unit.str() << "\n";
+            }
+        o_ << "    std::size_t n_states = 0;                 // §6.2b step 4\n";
+        o_ << "    double*     x  = nullptr;                 // host-provided, §15.5a\n";
+        o_ << "    double*     xd = nullptr;\n";
+        o_ << "    std::array<std::size_t, " << m_.n_cont_slots << "> se_x_off_{};\n";
+        o_ << "    std::array<std::size_t, " << m_.n_cont_slots << "> se_x_len_{};\n";
+        o_ << "    bool        se_bound_x_ = false;\n\n";
+    }
 
     // A wire coincides with its producer's `Out` storage (§15.3); that storage
     // lives here rather than as a loose member, so the whole signal set has one
@@ -698,9 +789,41 @@ void Emitter::sim_members() {
         o_ << "    Discrete nxt{};   // x+ being written; tick() ends with dis = nxt\n\n";
     }
 
+    if (m_.n_disc_arr_slots) {
+        // §15.5a — the fourth block, and it exists for exactly one reason:
+        // a run-time-sized member in `Discrete` would destroy the `offsetof`
+        // property the table above depends on. Array states being `double`-only
+        // (§6.4a) is what lets this be a flat block instead.
+        o_ << "    //  Array-shaped discrete states. `dis` stays a plain struct;\n";
+        o_ << "    //  these get the same address-size-table treatment as `x`.\n";
+        for (const Leaf& leaf : m_.leaves)
+            for (const StateSlot& st : leaf.states) {
+                if (st.continuous || !st.extent.present) continue;
+                const std::string p =
+                    leaf.path.empty() ? st.name : leaf.path + "." + st.name;
+                o_ << "    //  dis_arr[se_da_off_[" << st.off << "]]..   "
+                   << pad(p + " " + st.extent.text, 30) << st.unit.str() << "\n";
+            }
+        o_ << "    std::size_t n_dstates = 0;\n";
+        o_ << "    double*     dis_arr = nullptr;            // host-provided, §15.5a\n";
+        o_ << "    double*     nxt_arr = nullptr;\n";
+        o_ << "    std::array<std::size_t, " << m_.n_disc_arr_slots << "> se_da_off_{};\n";
+        o_ << "    std::array<std::size_t, " << m_.n_disc_arr_slots << "> se_da_len_{};\n";
+        o_ << "    bool        se_bound_da_ = false;\n\n";
+    }
+
     o_ << "    static const se_rt::Slot* signal_map(std::size_t& count);\n";
-    if (any_discrete)
+    if (!discrete_rows().empty())
         o_ << "    static const se_rt::Slot* discrete_map(std::size_t& count);\n";
+    if (m_.dynamic_states) {
+        // §15.6 — not static, and it cannot be: `sec` cannot print
+        // `x[0] bw.w1[0]` for a state whose extent is not known until
+        // configuration. The manifest prints the DECLARATION; these build the
+        // concrete rows once configuration has settled.
+        o_ << "    const se_rt::Slot* state_map(std::size_t& count) const;\n";
+        if (m_.n_disc_arr_slots)
+            o_ << "    const se_rt::Slot* discrete_array_map(std::size_t& count) const;\n";
+    }
     o_ << "    void derivatives(double t);              // reads x, fills xd\n\n";
 
     o_ << "    // ---- machinery " << std::string(57, '-') << "\n";
@@ -790,6 +913,27 @@ void Emitter::sim_members() {
     o_ << "    std::size_t   se_inited_ = 0;\n";
     o_ << "    bool          se_done_ = false;\n";
     if (m_.record.present) o_ << "    se_rt::Recorder se_rec_;\n";
+
+    if (m_.dynamic_states) {
+        // Solver scratch, sized once at configuration. It is not a published
+        // block — no host binds it and nothing external names it — so the
+        // node-private rule of §6.5 applies and the model owns it. The point
+        // that matters for §9.4 is that it never grows inside a tick.
+        if (m_.n_cont_slots && m_.solver != "euler") {
+            o_ << "\n    std::vector<double> se_x0_, se_k1_";
+            if (m_.solver != "rk2") o_ << ", se_k2_, se_k3_";
+            o_ << ";   // solver scratch, sized at configuration\n";
+        } else if (m_.n_cont_slots) {
+            o_ << "\n    std::vector<double> se_x0_;   // solver scratch\n";
+        }
+        // §15.6 — the concrete slot rows, built at configuration. The paths
+        // are owned because `bw.w1[3]` is a string that does not exist until
+        // then; `se_rt::Slot` holds a `const char*` into this store.
+        o_ << "\n    std::vector<std::string>  se_slot_paths_;\n";
+        o_ << "    std::vector<se_rt::Slot>  se_state_slots_;\n";
+        if (m_.n_disc_arr_slots)
+            o_ << "    std::vector<se_rt::Slot>  se_dstate_slots_;\n";
+    }
 
     // Everything below is defined after the class, so the class body reads as
     // an interface and a data layout rather than as a wall of code.
@@ -885,6 +1029,249 @@ void Emitter::sim_resolve_settings() {
     o_ << "}\n";
 }
 
+// §6.2b step 4 — the sizes. Emitted only for a model with array-shaped
+// states (§15.5a); every other model settles its blocks at compile time and
+// has nothing to do here.
+//
+// Every extent is one §7 expression, emitted exactly as a setting's is, then
+// put through the same non-negative-integer rule the DSL compiler applied to
+// what it could see. A state's position falls out of the running sum, so an
+// array state occupies a contiguous run and a scalar one is a run of length
+// one: two shapes, one table, and no second code path to disagree with the
+// first.
+void Emitter::sim_configure() {
+    if (!m_.dynamic_states) return;
+
+    o_ << "\n// §6.2b steps 1-4. Re-runnable, and it must be re-run after a change to\n";
+    o_ << "// any setting an extent reads — that is what moves the blocks.\n";
+    o_ << "inline void Sim::configure() {\n";
+    o_ << "    se_cfg_error_.clear();\n";
+    o_ << "    resolve_settings();\n\n";
+
+    o_ << "    std::size_t se_n = 0;\n";
+    for (const Leaf& leaf : m_.leaves)
+        for (const StateSlot& st : leaf.states) {
+            if (!st.continuous) continue;
+            const std::string path = leaf.path.empty() ? st.name : leaf.path + "." + st.name;
+            const std::string len = "se_x_len_[" + std::to_string(st.off) + "]";
+            const std::string off = "se_x_off_[" + std::to_string(st.off) + "]";
+            if (!st.extent.present) {
+                o_ << "    " << pad(len + " = 1;", 22) << pad(off + " = se_n;", 26)
+                   << "se_n += 1;   // " << path << "\n";
+            } else {
+                o_ << "    {   // " << path << " " << st.extent.text << "\n";
+                o_ << "        const double e = " << render_expr(st.extent.expr) << ";\n";
+                o_ << "        if (!se_rt::extent_of(e, " << len
+                   << ") && se_cfg_error_.empty())\n";
+                o_ << "            se_cfg_error_ = se_rt::extent_error(" << quote(path)
+                   << ", e);\n";
+                o_ << "        " << off << " = se_n;\n";
+                o_ << "        se_n += " << len << ";\n";
+                o_ << "    }\n";
+            }
+        }
+    o_ << "    n_states = se_n;\n";
+
+    if (m_.n_disc_arr_slots) {
+        o_ << "\n    se_n = 0;\n";
+        for (const Leaf& leaf : m_.leaves)
+            for (const StateSlot& st : leaf.states) {
+                if (st.continuous || !st.extent.present) continue;
+                const std::string path =
+                    leaf.path.empty() ? st.name : leaf.path + "." + st.name;
+                const std::string len = "se_da_len_[" + std::to_string(st.off) + "]";
+                const std::string off = "se_da_off_[" + std::to_string(st.off) + "]";
+                o_ << "    {   // " << path << " " << st.extent.text << "\n";
+                o_ << "        const double e = " << render_expr(st.extent.expr) << ";\n";
+                o_ << "        if (!se_rt::extent_of(e, " << len
+                   << ") && se_cfg_error_.empty())\n";
+                o_ << "            se_cfg_error_ = se_rt::extent_error(" << quote(path)
+                   << ", e);\n";
+                o_ << "        " << off << " = se_n;\n";
+                o_ << "        se_n += " << len << ";\n";
+                o_ << "    }\n";
+            }
+        o_ << "    n_dstates = se_n;\n";
+    }
+
+    bool any_var = false;
+    for (const Leaf& leaf : m_.leaves) any_var = any_var || !leaf.array_vars.empty();
+    if (any_var) {
+        o_ << "\n    // §6.5 — the one allocation in the lowering. A var is private\n";
+        o_ << "    // storage outside every published block, so the node sizes its own;\n";
+        o_ << "    // it happens here, once, and never inside a tick (Appendix C 8a).\n";
+        for (const Leaf& leaf : m_.leaves)
+            for (const ArrayVar& av : leaf.array_vars) {
+                const std::string path =
+                    leaf.path.empty() ? av.name : leaf.path + "." + av.name;
+                o_ << "    {\n";
+                o_ << "        const double e = " << render_expr(av.extent.expr) << ";\n";
+                o_ << "        std::size_t n = 0;\n";
+                o_ << "        if (!se_rt::extent_of(e, n) && se_cfg_error_.empty())\n";
+                o_ << "            se_cfg_error_ = se_rt::extent_error(" << quote(path)
+                   << ", e);\n";
+                o_ << "        " << leaf.ident << ".var." << av.name
+                   << ".assign(n, 0.0);   // " << path << " " << av.extent.text << "\n";
+                o_ << "    }\n";
+            }
+    }
+
+    if (m_.n_cont_slots) {
+        o_ << "\n    se_x0_.assign(n_states, 0.0);\n";
+        if (m_.solver == "rk2") {
+            o_ << "    se_k1_.assign(n_states, 0.0);\n";
+        } else if (m_.solver != "euler") {
+            o_ << "    se_k1_.assign(n_states, 0.0);\n";
+            o_ << "    se_k2_.assign(n_states, 0.0);\n";
+            o_ << "    se_k3_.assign(n_states, 0.0);\n";
+        }
+    }
+
+    sim_configure_slots();
+    sim_configure_indices();
+
+    o_ << "\n    // A rebind is not defined (§15.5a), but a RE-configure invalidates\n";
+    o_ << "    // the buffers it sized, so the flags go back down and init() says so.\n";
+    o_ << "    se_bound_x_ = false;\n";
+    o_ << "    x = nullptr;\n    xd = nullptr;\n";
+    if (m_.n_disc_arr_slots) {
+        o_ << "    se_bound_da_ = false;\n";
+        o_ << "    dis_arr = nullptr;\n    nxt_arr = nullptr;\n";
+    }
+    o_ << "}\n";
+}
+
+// §15.6 — the concrete slot rows. `sec` cannot print `x[0] bw.w1[0]` for a
+// state whose extent is not known until now, so the manifest prints the
+// declaration and this builds what it actually became. The paths are built here
+// for the same reason: `bw.w1[3]` is a string that did not exist at generation
+// time, and `se_rt::Slot` holds a `const char*` into the store below.
+void Emitter::sim_configure_slots() {
+    o_ << "\n    // §15.6 — the slot map, now that the extents have settled.\n";
+    o_ << "    se_slot_paths_.clear();\n";
+    o_ << "    se_slot_paths_.reserve(n_states"
+       << (m_.n_disc_arr_slots ? " + n_dstates" : "") << ");\n";
+
+    auto push_paths = [&](bool continuous) {
+        for (const Leaf& leaf : m_.leaves)
+            for (const StateSlot& st : leaf.states) {
+                if (st.continuous != continuous) continue;
+                if (!continuous && !st.extent.present) continue;
+                const std::string path =
+                    leaf.path.empty() ? st.name : leaf.path + "." + st.name;
+                const std::string len = (continuous ? "se_x_len_[" : "se_da_len_[") +
+                                        std::to_string(st.off) + "]";
+                if (!st.extent.present) {
+                    o_ << "    se_slot_paths_.push_back(" << quote(path) << ");\n";
+                } else {
+                    o_ << "    for (std::size_t i = 0; i < " << len << "; ++i)\n";
+                    o_ << "        se_slot_paths_.push_back(std::string("
+                       << quote(path + "[") << ") + std::to_string(i) + " << quote("]")
+                       << ");\n";
+                }
+            }
+    };
+    push_paths(true);
+    if (m_.n_disc_arr_slots) push_paths(false);
+
+    auto push_slots = [&](bool continuous, const char* store) {
+        o_ << "    " << store << ".clear();\n";
+        o_ << "    " << store << ".reserve(" << (continuous ? "n_states" : "n_dstates")
+           << ");\n";
+        for (const Leaf& leaf : m_.leaves)
+            for (const StateSlot& st : leaf.states) {
+                if (st.continuous != continuous) continue;
+                if (!continuous && !st.extent.present) continue;
+                const std::string off = (continuous ? "se_x_off_[" : "se_da_off_[") +
+                                        std::to_string(st.off) + "]";
+                const std::string len = (continuous ? "se_x_len_[" : "se_da_len_[") +
+                                        std::to_string(st.off) + "]";
+                const std::string base = continuous ? off : "n_states + " + off;
+                o_ << "    for (std::size_t i = 0; i < " << len << "; ++i)\n";
+                o_ << "        " << store << ".push_back(se_rt::Slot{\n";
+                o_ << "            se_slot_paths_[" << base << " + i].c_str(),\n";
+                o_ << "            (" << off << " + i) * sizeof(double), sizeof(double),\n";
+                o_ << "            " << quote("double") << ", " << quote(st.unit.str())
+                   << "});\n";
+            }
+    };
+    push_slots(true, "se_state_slots_");
+    if (m_.n_disc_arr_slots) push_slots(false, "se_dstate_slots_");
+}
+
+// §13.4 / §13.5 — every element index the model names, checked where the
+// extent finally exists. An index past it is a configuration failure and not a
+// compile error: the same settings source may be valid against one `order` and
+// invalid against another.
+void Emitter::sim_configure_indices() {
+    if (m_.element_refs.empty()) return;
+    o_ << "\n    // §13.4 / §13.5 — the element indices this model names.\n";
+    for (const Model::ElementRef& r : m_.element_refs) {
+        const std::string len = (r.continuous ? "se_x_len_[" : "se_da_len_[") +
+                                std::to_string(r.off) + "]";
+        o_ << "    if (" << r.index << " >= " << len << " && se_cfg_error_.empty())\n";
+        o_ << "        se_cfg_error_ = se_rt::index_error(" << quote(r.path) << ", " << len
+           << ");\n";
+    }
+}
+
+// §15.5a — the handshake. Handing the address IN rather than reading it out
+// is the `x` ABI from the other end, and it is what CVODE, odeint and FMI ask
+// for anyway: a host that wants `x` in shared memory, in a ring buffer or
+// inside its own arena no longer has to copy to get it.
+void Emitter::sim_binders() {
+    if (!m_.dynamic_states) return;
+
+    o_ << "\ninline void Sim::bind_state(double* px, double* pxd, std::size_t n) {\n";
+    o_ << "    if (n != n_states) {\n";
+    o_ << "        se_cfg_error_ = se_rt::bind_error(" << quote("bind_state")
+       << ", n, n_states);\n        return;\n    }\n";
+    o_ << "    x = px;\n    xd = pxd;\n";
+    o_ << "    for (std::size_t i = 0; i < n; ++i) { x[i] = 0.0; xd[i] = 0.0; }\n";
+    for (const Leaf& leaf : m_.leaves)
+        for (const StateSlot& st : leaf.states) {
+            if (!st.continuous) continue;
+            const std::string off = "se_x_off_[" + std::to_string(st.off) + "]";
+            const std::string len = "se_x_len_[" + std::to_string(st.off) + "]";
+            if (st.extent.present) {
+                o_ << "    " << leaf.ident << ".state." << st.name << ".bind(x + " << off
+                   << ", " << len << ");\n";
+                o_ << "    " << leaf.ident << "_der." << st.name << ".bind(xd + " << off
+                   << ", " << len << ");\n";
+            } else {
+                o_ << "    " << leaf.ident << ".state." << st.name << ".bind(x[" << off
+                   << "]);\n";
+                o_ << "    " << leaf.ident << "_der." << st.name << ".bind(xd[" << off
+                   << "]);\n";
+            }
+        }
+    o_ << "    se_bound_x_ = true;\n}\n";
+
+    if (!m_.n_disc_arr_slots) return;
+    o_ << "\ninline void Sim::bind_discrete_array(double* pd, double* pn, "
+          "std::size_t n) {\n";
+    o_ << "    if (n != n_dstates) {\n";
+    o_ << "        se_cfg_error_ = se_rt::bind_error(" << quote("bind_discrete_array")
+       << ", n, n_dstates);\n        return;\n    }\n";
+    o_ << "    dis_arr = pd;\n    nxt_arr = pn;\n";
+    o_ << "    for (std::size_t i = 0; i < n; ++i) { dis_arr[i] = 0.0; nxt_arr[i] = 0.0; }\n";
+    for (const Leaf& leaf : m_.leaves)
+        for (const StateSlot& st : leaf.states) {
+            if (st.continuous || !st.extent.present) continue;
+            const std::string off = "se_da_off_[" + std::to_string(st.off) + "]";
+            const std::string len = "se_da_len_[" + std::to_string(st.off) + "]";
+            o_ << "    dis." << leaf.ident << "." << st.name << ".bind(dis_arr + " << off
+               << ", " << len << ");\n";
+            o_ << "    nxt." << leaf.ident << "." << st.name << ".bind(nxt_arr + " << off
+               << ", " << len << ");\n";
+            // The node's own view reads the COMMITTED side, exactly as a
+            // scalar discrete state's proxy binds into `dis` and not `nxt`.
+            o_ << "    " << leaf.ident << ".state." << st.name << ".bind(dis_arr + " << off
+               << ", " << len << ");\n";
+        }
+    o_ << "    se_bound_da_ = true;\n}\n";
+}
+
 void Emitter::sim_elaborate() {
     // Settings now arrive through the leaf member initializers, so there is no
     // elaborate() left to emit. What remains is the declarative ICs.
@@ -897,17 +1284,44 @@ void Emitter::sim_elaborate() {
     for (const Leaf& leaf : m_.leaves) {
         any_discrete = any_discrete || leaf.has_discrete();
         for (const StateSlot& s : leaf.states)
-            w = std::max(w, leaf.ident.size() + s.name.size() + (s.continuous ? 7u : 5u));
+            w = std::max(w, leaf.ident.size() + s.name.size() + (s.continuous ? 7u : 5u) +
+                                (s.extent.present ? 7u : 0u));
     }
     for (const Leaf& leaf : m_.leaves)
         for (const StateSlot& s : leaf.states) {
-            const std::string target = s.continuous
-                                           ? leaf.ident + ".state." + s.name
-                                           : "dis." + leaf.ident + "." + s.name;
-            o_ << "    " << pad(target, w) << " = "
+            const std::string base = s.continuous ? leaf.ident + ".state." + s.name
+                                                  : "dis." + leaf.ident + "." + s.name;
+            // §6.4a — the declared default initialises EVERY element. There
+            // is no per-element default syntax: non-uniform initialisation is
+            // init()'s job, which is where a computed IC already belonged.
+            if (s.extent.present) {
+                o_ << "    " << pad(base + ".fill(" + literal(s.initial, s.scalar) + ");",
+                                    w + 13)
+                   << " // " << s.unit.str() << "\n";
+                continue;
+            }
+            o_ << "    " << pad(base, w) << " = "
                << pad(literal(s.initial, s.scalar) + ";", 10) << " // " << s.unit.str()
                << "\n";
         }
+    // §13.4 — element ICs from a settings source, after the uniform default
+    // they refine. The index was checked at configuration and init() refuses to
+    // run while a configuration error stands, so nothing is guarded here.
+    bool any_element = false;
+    for (const Leaf& leaf : m_.leaves)
+        for (const StateSlot& s : leaf.states)
+            for (const StateSlot::ElementIC& ic : s.element_ic) {
+                if (!any_element) {
+                    o_ << "\n    // §13.4 — per-element initial conditions.\n";
+                    any_element = true;
+                }
+                const std::string path =
+                    (leaf.path.empty() ? s.name : leaf.path + "." + s.name) + "[" +
+                    std::to_string(ic.index) + "]";
+                const std::string block = s.continuous ? "x[se_x_off_[" : "dis_arr[se_da_off_[";
+                o_ << "    " << block << s.off << "] + " << ic.index << "] = "
+                   << literal(ic.value, s.scalar) << ";   // " << path << "\n";
+            }
     if (any_discrete)
         o_ << "    nxt = dis;   // so the first `dis = nxt` is a no-op\n";
     o_ << "}\n";
@@ -916,15 +1330,20 @@ void Emitter::sim_elaborate() {
 void Emitter::sim_init() {
     o_ << "\n// Bind every state view to its slot: continuous into x / xd, discrete\n";
     o_ << "// into dis. Done once, from the constructor.\n";
+    if (m_.dynamic_states)
+        o_ << "// The blocks that are the HOST's (§15.5a) are not here: they have no\n"
+              "// address yet. bind_state() and bind_discrete_array() bind those.\n";
     o_ << "inline void Sim::bind() {\n";
     for (const Leaf& leaf : m_.leaves) {
         for (const StateSlot& s : leaf.states) {
             if (s.continuous) {
+                if (m_.dynamic_states) continue;
                 o_ << "    " << leaf.ident << ".state." << s.name << ".bind(x[" << s.slot
                    << "]);\n";
                 o_ << "    " << leaf.ident << "_der." << s.name << ".bind(xd[" << s.slot
                    << "]);\n";
             } else {
+                if (s.extent.present) continue;
                 o_ << "    " << leaf.ident << ".state." << s.name << ".bind(dis."
                    << leaf.ident << "." << s.name << ");\n";
             }
@@ -1027,6 +1446,10 @@ void Emitter::sim_on_step() {
 
 void Emitter::sim_integrate() {
     o_ << "\n// The solver is global, not per-node (§9.5): `" << m_.solver << "`.\n";
+    if (m_.dynamic_states) {
+        sim_integrate_dynamic();
+        return;
+    }
     if (m_.n_states == 0) {
         o_ << "inline void Sim::integrate(double, double) {}   // no continuous states\n";
         return;
@@ -1053,6 +1476,50 @@ void Emitter::sim_integrate() {
         o_ << "    derivatives(t + h);\n";
         o_ << "    for (std::size_t i = 0; i < n_states; ++i)\n";
         o_ << "        x[i] = x0[i] + (h / 6.0) * (k1[i] + 2.0 * k2[i] + 2.0 * k3[i] + xd[i]);\n";
+    }
+    o_ << "}\n";
+}
+
+// The same solver, over a block whose length is a configuration result. The
+// scratch vectors were sized in configure() and are never touched again, so
+// nothing here allocates inside a tick (§9.4).
+void Emitter::sim_integrate_dynamic() {
+    if (m_.n_cont_slots == 0) {
+        o_ << "inline void Sim::integrate(double, double) {}   // no continuous states\n";
+        return;
+    }
+    o_ << "inline void Sim::integrate(double t, double h) {\n";
+    o_ << "    const std::size_t n = n_states;\n";
+    o_ << "    if (n == 0) { (void)t; (void)h; return; }\n";
+    o_ << "    double* const x0 = se_x0_.data();\n";
+    o_ << "    for (std::size_t i = 0; i < n; ++i) x0[i] = x[i];\n";
+    if (m_.solver == "euler") {
+        o_ << "    derivatives(t);\n";
+        o_ << "    for (std::size_t i = 0; i < n; ++i) x[i] = x0[i] + h * xd[i];\n";
+    } else if (m_.solver == "rk2") {
+        o_ << "    double* const k1 = se_k1_.data();\n";
+        o_ << "    derivatives(t);\n";
+        o_ << "    for (std::size_t i = 0; i < n; ++i) k1[i] = xd[i];\n";
+        o_ << "    for (std::size_t i = 0; i < n; ++i) x[i] = x0[i] + 0.5 * h * k1[i];\n";
+        o_ << "    derivatives(t + 0.5 * h);\n";
+        o_ << "    for (std::size_t i = 0; i < n; ++i) x[i] = x0[i] + h * xd[i];\n";
+    } else {
+        o_ << "    double* const k1 = se_k1_.data();\n";
+        o_ << "    double* const k2 = se_k2_.data();\n";
+        o_ << "    double* const k3 = se_k3_.data();\n";
+        o_ << "    derivatives(t);\n";
+        o_ << "    for (std::size_t i = 0; i < n; ++i) k1[i] = xd[i];\n";
+        o_ << "    for (std::size_t i = 0; i < n; ++i) x[i] = x0[i] + 0.5 * h * k1[i];\n";
+        o_ << "    derivatives(t + 0.5 * h);\n";
+        o_ << "    for (std::size_t i = 0; i < n; ++i) k2[i] = xd[i];\n";
+        o_ << "    for (std::size_t i = 0; i < n; ++i) x[i] = x0[i] + 0.5 * h * k2[i];\n";
+        o_ << "    derivatives(t + 0.5 * h);\n";
+        o_ << "    for (std::size_t i = 0; i < n; ++i) k3[i] = xd[i];\n";
+        o_ << "    for (std::size_t i = 0; i < n; ++i) x[i] = x0[i] + h * k3[i];\n";
+        o_ << "    derivatives(t + h);\n";
+        o_ << "    for (std::size_t i = 0; i < n; ++i)\n";
+        o_ << "        x[i] = x0[i] + (h / 6.0) * (k1[i] + 2.0 * k2[i] + 2.0 * k3[i] "
+              "+ xd[i]);\n";
     }
     o_ << "}\n";
 }
@@ -1092,6 +1559,20 @@ void Emitter::sim_run() {
     o_ << "    // §6.2b — configuration precedes init(), so a value it refused stops\n";
     o_ << "    // the run here, before any node sees state it was never compiled for.\n";
     o_ << "    if (!se_cfg_error_.empty()) { se_rt::control().fail(se_cfg_error_); return; }\n";
+    if (m_.dynamic_states) {
+        // §15.5a — the buffers are the host's, so their absence is the one
+        // failure the handshake makes possible after a clean configuration.
+        o_ << "    if (n_states && !se_bound_x_) {\n";
+        o_ << "        se_rt::control().fail(" << quote("bind_state() was not called; "
+              "this model's state buffers are the host's (§15.5a)") << ");\n";
+        o_ << "        return;\n    }\n";
+        if (m_.n_disc_arr_slots) {
+            o_ << "    if (n_dstates && !se_bound_da_) {\n";
+            o_ << "        se_rt::control().fail("
+               << quote("bind_discrete_array() was not called (§15.5a)") << ");\n";
+            o_ << "        return;\n    }\n";
+        }
+    }
     o_ << "    apply_initial_conditions();\n";
     o_ << "    se_tick_ = 0;\n    se_time_ = 0.0;\n    se_done_ = false;\n";
     o_ << "    se_inited_ = 0;\n";
@@ -1171,6 +1652,18 @@ void Emitter::sim_run() {
               "so it stays at zero: \"\n";
         o_ << "                        " << quote(names) << ");\n";
     }
+    if (m_.dynamic_states) {
+        // A batch run is a host like any other, so it does the §15.5a
+        // handshake rather than being exempted from it. The vectors outlive the
+        // loop below, which is the whole run.
+        o_ << "    std::vector<double> se_x(state_size()), se_xd(state_size());\n";
+        o_ << "    bind_state(se_x.data(), se_xd.data(), se_x.size());\n";
+        if (m_.n_disc_arr_slots) {
+            o_ << "    std::vector<double> se_d(discrete_array_size()), "
+                  "se_dn(se_d.size());\n";
+            o_ << "    bind_discrete_array(se_d.data(), se_dn.data(), se_d.size());\n";
+        }
+    }
     o_ << "    init();\n";
     o_ << "    while (!done()) tick();\n";
     o_ << "    finish();\n";
@@ -1227,8 +1720,10 @@ void Emitter::sim_class() {
     sim_members();
     o_ << "};\n";
     sim_resolve_settings();
+    sim_configure();
     sim_elaborate();
     sim_init();
+    sim_binders();
     sim_output_pass();
     sim_derivatives();
     sim_next();
@@ -1281,8 +1776,27 @@ std::vector<Emitter::SlotRow> Emitter::discrete_rows() const {
     for (const Leaf& leaf : m_.leaves)
         for (const StateSlot& s : leaf.states) {
             if (s.continuous) continue;
+            // §15.5a — an array-shaped discrete state is not in `dis` at
+            // all. It lives in the flat fourth block, whose rows are built at
+            // configuration because their count is not known before then.
+            if (s.extent.present) continue;
             rows.push_back({leaf.path.empty() ? s.name : leaf.path + "." + s.name,
                             leaf.ident + "." + s.name, s.scalar, s.unit.str()});
+        }
+    return rows;
+}
+
+// §6.4a — the array-shaped states, in block order, as
+// { model path, extent as written, "double", unit }. Every row is a RUN of
+// slots whose length is a configuration result, which is why this feeds the
+// manifest's `dynamic` rows rather than an offsetof table.
+std::vector<Emitter::SlotRow> Emitter::array_state_rows(bool continuous) const {
+    std::vector<SlotRow> rows;
+    for (const Leaf& leaf : m_.leaves)
+        for (const StateSlot& s : leaf.states) {
+            if (s.continuous != continuous || !s.extent.present) continue;
+            rows.push_back({leaf.path.empty() ? s.name : leaf.path + "." + s.name,
+                            s.extent.text, "double", s.unit.str()});
         }
     return rows;
 }
@@ -1311,6 +1825,20 @@ void Emitter::sim_maps() {
     emit_table("signal_map", "Signals", signal_rows());
     const std::vector<SlotRow> dis = discrete_rows();
     if (!dis.empty()) emit_table("discrete_map", "Discrete", dis);
+
+    // §15.6 — the dynamic blocks. These are not offsetof tables and cannot
+    // be: the rows do not exist until configure() has run, so what is emitted
+    // here is only the accessor onto what it built. A host reads the manifest
+    // to learn what paths exist, and calls these to learn where they landed.
+    if (!m_.dynamic_states) return;
+    auto emit_dyn = [&](const char* fn, const char* store) {
+        o_ << "\ninline const se_rt::Slot* Sim::" << fn
+           << "(std::size_t& count) const {\n";
+        o_ << "    count = " << store << ".size();\n";
+        o_ << "    return " << store << ".empty() ? nullptr : " << store << ".data();\n}\n";
+    };
+    emit_dyn("state_map", "se_state_slots_");
+    if (m_.n_disc_arr_slots) emit_dyn("discrete_array_map", "se_dstate_slots_");
 }
 
 // ─── The whole file ──────────────────────────────────────────────────────────
@@ -1330,7 +1858,15 @@ std::string Emitter::hpp() {
     o_ << "// " << std::string(76, '-') << "\n";
     o_ << "#pragma once\n\n";
     o_ << "#include \"se_runtime.hpp\"\n#include \"state_ref.hpp\"\n\n";
-    o_ << "#include <array>\n#include <cstddef>\n#include <cstdint>\n#include <cstring>\n\n";
+    o_ << "#include <array>\n#include <cstddef>\n#include <cstdint>\n#include <cstring>\n";
+    // §6.5 / §15.5a — the two places the lowering owns storage: an array
+    // var, and the solver scratch plus slot rows of a dynamic model. Both are
+    // sized once at configuration and neither is a published block.
+    bool any_array_var = false;
+    for (const Leaf& leaf : m_.leaves) any_array_var = any_array_var || !leaf.array_vars.empty();
+    if (m_.dynamic_states || any_array_var)
+        o_ << "#include <string>\n#include <vector>\n";
+    o_ << "\n";
 
     // Said once, here, rather than restated as `(void)x;` at forty use sites.
     // The generator cannot know whether a body reads `in` or logs, because it
@@ -1349,7 +1885,9 @@ std::string Emitter::hpp() {
     o_ << "#pragma GCC diagnostic ignored \"-Wunused-variable\"\n";
     o_ << "#pragma GCC diagnostic ignored \"-Wshadow\"\n";
     o_ << "#endif\n\n";
-    o_ << "using sim::state_ref;\nusing sim::value_ref;\n\n";
+    o_ << "using sim::state_ref;\nusing sim::value_ref;\n";
+    if (m_.dynamic_states) o_ << "using sim::state_arr;\n";
+    o_ << "\n";
 
     declarations();
     records();
@@ -1413,15 +1951,29 @@ std::string Emitter::manifest() {
     t << "# " << std::string(76, '-') << "\n\n";
 
     t << "[state.continuous]        # slot | model path | unit  -- the solver's ABI\n";
+    if (m_.dynamic_states)
+        t << "#  This model has array-shaped states (§6.4a), so no slot number is\n"
+             "#  known here: an extent does not settle until configuration. The extent\n"
+             "#  is printed AS WRITTEN, and the concrete rows come from\n"
+             "#  Sim::state_map() once configure() has run (§15.6).\n";
     for (const Leaf& leaf : m_.leaves)
         for (const StateSlot& s : leaf.states) {
             if (!s.continuous) continue;
-            t << pad("x[" + std::to_string(s.slot) + "]", 10)
-              << pad(leaf.path + "." + s.name, 24) << s.unit.str() << "\n";
-            t << pad("xd[" + std::to_string(s.slot) + "]", 10)
-              << pad(leaf.path + "." + s.name + "'", 24) << s.der_unit.str() << "\n";
+            const std::string path = leaf.path.empty() ? s.name : leaf.path + "." + s.name;
+            if (!m_.dynamic_states) {
+                t << pad("x[" + std::to_string(s.slot) + "]", 10) << pad(path, 24)
+                  << s.unit.str() << "\n";
+                t << pad("xd[" + std::to_string(s.slot) + "]", 10) << pad(path + "'", 24)
+                  << s.der_unit.str() << "\n";
+                continue;
+            }
+            const std::string ext = s.extent.present ? " " + s.extent.text : "";
+            t << pad("x[?]", 10) << pad(path + ext, 24)
+              << pad(s.unit.str(), 12) << "dynamic\n";
+            t << pad("xd[?]", 10) << pad(path + "'" + ext, 24)
+              << pad(s.der_unit.str(), 12) << "dynamic\n";
         }
-    if (m_.n_states == 0) t << "          (none)\n";
+    if (m_.n_cont_slots == 0 && m_.n_states == 0) t << "          (none)\n";
 
     // §15.6 — `sec` cannot write byte offsets: padding is the C++ compiler's
     // business, and a guessed table would be worse than none. So the manifest
@@ -1433,6 +1985,17 @@ std::string Emitter::manifest() {
     for (const SlotRow& r : dis)
         t << pad("", 10) << pad(r[0], 24) << pad(r[3], 12) << r[2] << "\n";
     if (dis.empty()) t << "          (none)\n";
+
+    // §15.5a — the fourth block. An array-shaped discrete state cannot live
+    // in `dis` without destroying its offsetof property, so it gets a flat
+    // `double` block of its own and the same address-size-table treatment as x.
+    if (m_.n_disc_arr_slots) {
+        t << "\n[state.discrete.array]    # Sim::dis_arr; rows from "
+             "Sim::discrete_array_map()\n";
+        for (const SlotRow& r : array_state_rows(false))
+            t << pad("dis_arr[?]", 12) << pad(r[0] + " " + r[1], 22) << pad(r[3], 12)
+              << "dynamic\n";
+    }
 
     t << "\n[signals]                 # Sim::sig; offsets from Sim::signal_map()\n";
     for (const SlotRow& r : signal_rows())

@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <functional>
 #include <iomanip>
 #include <limits>
@@ -20,6 +21,21 @@ namespace {
 
 std::string sub(const std::string& path, const std::string& name) {
     return path.empty() ? name : path + "." + name;
+}
+
+// §6.4a — `w1[3]` -> `w1` and 3. The index rides on the last path segment
+// (§13.4, §13.5), so every matcher downstream keeps working on one string
+// and only the two sites that care about elements have to look inside it.
+bool split_index(const std::string& seg, std::string& base, std::size_t& index) {
+    if (seg.empty() || seg.back() != ']') return false;
+    const std::size_t open = seg.find('[');
+    if (open == std::string::npos) return false;
+    const std::string digits = seg.substr(open + 1, seg.size() - open - 2);
+    if (digits.empty() || digits.find_first_not_of("0123456789") != std::string::npos)
+        return false;
+    base = seg.substr(0, open);
+    index = static_cast<std::size_t>(std::strtoul(digits.c_str(), nullptr, 10));
+    return true;
 }
 
 std::string ident_of(const std::string& path) {
@@ -663,6 +679,64 @@ bool Elaborator::coerce(const Value& v, const Type& target, const Source& src, L
     return true;
 }
 
+// §6.4a — an extent. Two things have to be true of it, and they settle at
+// different times.
+//
+// The DIMENSION settles here: an extent counts slots, so it is dimensionless,
+// and no override can make `[param.mass]` mean anything. That is SE0432, at
+// elaboration, once.
+//
+// The VALUE does not. `[param.nbq]` is an ordinary §7 expression over ordinary
+// overridable settings (§6.2b step 4), so the number elaboration computes is a
+// default and not the size anything will be. It is checked here only when the
+// expression is constant — nothing upstream can move it, so a bad value is
+// bad for good — and otherwise carried into `Sim::configure()`, which rounds
+// and rejects with the same rule against whatever a §14 source supplied.
+bool Elaborator::extent_of(const ast::Expr* e, Loc loc, const Source& src, const Env& env,
+                           const std::string& what, Extent& out) {
+    Value v;
+    if (!eval(e, src, env, v)) return false;
+
+    double n = v.v;
+    if (!v.bare) {
+        if (!compatible(v.unit, unit_one())) {
+            diag_.error("SE0432", src, loc,
+                        "the extent of `" + what + "` must be dimensionless",
+                        "`(" + v.unit.str() + ")` is " + v.unit.dim_str(),
+                        {note("an extent counts slots; it is not a quantity (§6.4a)")});
+            failed_ = true;
+            return false;
+        }
+        n = convert(v.v, v.unit, unit_one());
+    }
+
+    out.present = true;
+    out.dflt = n;
+    if (loc.valid() && loc.length > 0 &&
+        loc.offset + loc.length <= src.text().size())
+        out.text = src.text().substr(loc.offset, loc.length);
+
+    if (v.constant) {
+        const double r = std::floor(n + 0.5);
+        if (!(n >= 0.0) || std::fabs(n - r) > 1e-9) {
+            char buf[64];
+            std::snprintf(buf, sizeof buf, "%g", n);
+            diag_.error("SE0432", src, loc,
+                        "the extent of `" + what +
+                            "` must be a non-negative integer",
+                        std::string("this is ") + buf,
+                        {note("zero is legal and yields no slots (§6.4a)")});
+            failed_ = true;
+            return false;
+        }
+        out.dflt = r;
+        out.expr = ec_num(r);
+    } else {
+        out.expr = v.bare ? v.code : ec_convert(v.code, v.unit, unit_one());
+    }
+    return true;
+}
+
 // ═════════════════════════════════════════════════════════════════════════════
 //  The sim file
 // ═════════════════════════════════════════════════════════════════════════════
@@ -1246,6 +1320,8 @@ void Elaborator::instantiate(const NodeInfo* def, const std::string& path,
         slot.unit = bound(st.type.unit);
         slot.der_unit = bound(st.der_unit);
         slot.scalar = st.type.scalar;
+        if (st.extent) extent_of(st.extent, st.extent_loc, def_src, env, sub(path, st.name),
+                                 slot.extent);
         if (st.initial) {
             Value v;
             if (eval(st.initial, def_src, env, v))
@@ -1255,12 +1331,65 @@ void Elaborator::instantiate(const NodeInfo* def, const std::string& path,
         // §13.4 — an IC override rides the SAME channel as a setting.
         known_setting_paths_.push_back(sub(path, st.name));
         if (OverrideEntry* o = find_override(sub(path, st.name))) {
-            Value v;
-            if (eval(o->value, *o->src, Env{}, v))
-                coerce(v, st.type, *o->src, o->loc,
-                       ("initial condition `" + o->path + "`").c_str(), slot.initial);
+            if (slot.extent.present) {
+                // §6.4a — there is no path naming the whole array. §7 has
+                // no aggregate value to assign to it, and the declared default
+                // already covers the uniform case.
+                diag_.error("SE0460", *o->src, o->loc,
+                            "`" + o->path + "` is an array state and has no whole-array "
+                            "value",
+                            "an element index is required",
+                            {note("an array state is addressed one element at a time, "
+                                  "`" + o->path + "[0]` (§13.4)"),
+                             note("the declared default already initialises every "
+                                  "element (§6.4a)")});
+                failed_ = true;
+            } else {
+                Value v;
+                if (eval(o->value, *o->src, Env{}, v))
+                    coerce(v, st.type, *o->src, o->loc,
+                           ("initial condition `" + o->path + "`").c_str(), slot.initial);
+            }
+        }
+        // §13.4 — `bw.w1[3] = 0 (-);`. The index cannot be checked here at
+        // all: the extent settles at configuration, and the same source may be
+        // valid against one `order` and invalid against another (§6.2b).
+        if (slot.extent.present) {
+            const std::string base = sub(path, st.name);
+            for (OverrideEntry& o : overrides_) {
+                std::string seg;
+                std::size_t index = 0;
+                if (!split_index(o.path, seg, index) || seg != base) continue;
+                o.used = true;
+                StateSlot::ElementIC ic;
+                ic.index = index;
+                Value v;
+                if (!eval(o.value, *o.src, Env{}, v)) continue;
+                if (!coerce(v, st.type, *o.src, o.loc,
+                            ("initial condition `" + o.path + "`").c_str(), ic.value))
+                    continue;
+                slot.element_ic.push_back(ic);
+                Model::ElementRef ref;
+                ref.path = o.path;
+                ref.continuous = slot.continuous;
+                ref.index = index;
+                m.element_refs.push_back(std::move(ref));
+                element_sites_.push_back({m.element_refs.size() - 1, m.leaves.size(),
+                                          leaf.states.size()});
+            }
         }
         leaf.states.push_back(std::move(slot));
+    }
+
+    // §6.5 — an array var. Node-private storage, so nothing external ever
+    // addresses it; all it needs is a size, which lands at configuration with
+    // every other extent.
+    for (const Field& v : def->vars) {
+        if (!v.extent) continue;
+        ArrayVar av;
+        av.name = v.name;
+        if (extent_of(v.extent, v.extent_loc, def_src, env, sub(path, v.name), av.extent))
+            leaf.array_vars.push_back(std::move(av));
     }
 
     // §6.2a — the ports as this instance actually sees them. For a
@@ -1617,8 +1746,20 @@ void Elaborator::resolve_record(const ast::RecordBlock& block, const Source& src
             failed_ = true;
             continue;
         }
-        const Leaf& leaf = m.leaves[leaf_by_path_[leaf_path]];
+        const std::size_t leaf_index = leaf_by_path_[leaf_path];
+        const Leaf& leaf = m.leaves[leaf_index];
         std::vector<std::string> rest(p.segs.begin() + best, p.segs.end());
+        // §13.5 — `bw.state.w1[3]`. The index comes off the last segment
+        // before anything resolves a name, so every lookup below sees `w1`.
+        bool has_index = false;
+        std::size_t elem_index = 0;
+        if (!rest.empty()) {
+            std::string stem;
+            if (split_index(rest.back(), stem, elem_index)) {
+                rest.back() = stem;
+                has_index = true;
+            }
+        }
         if (rest.empty()) {
             diag_.error("SE0304", src, p.loc, "`" + path + "` names a node, not a signal",
                         "not a signal");
@@ -1667,19 +1808,67 @@ void Elaborator::resolve_record(const ast::RecordBlock& block, const Source& src
             // Read the block, not the node's view of it. A continuous state is
             // a slot in `x` — the solver's ABI — and a discrete one is a field
             // of `dis`; the node holds only proxies into both (§15.5).
+            const StateSlot* ss = nullptr;
+            std::size_t state_index = 0;
+            for (std::size_t i = 0; i < leaf.states.size(); ++i)
+                if (leaf.states[i].name == rest[0]) {
+                    ss = &leaf.states[i];
+                    state_index = i;
+                }
+            if (ss && ss->extent.present != has_index) {
+                // Neither direction can be waved through: an array state has no
+                // single value to record, and a scalar one has no element 0 to
+                // name that would still be true if it grew one.
+                diag_.error("SE0304", src, p.loc,
+                            ss->extent.present
+                                ? "`" + path + "` is an array state and needs an index"
+                                : "`" + path + "` is not an array state",
+                            ss->extent.present ? "an element index is required"
+                                               : "unexpected index",
+                            {note(ss->extent.present
+                                      ? "an element of an array state is recorded by "
+                                        "index, `" + path + "[0]` (§13.5)"
+                                      : "only an array-shaped state is indexed "
+                                        "(§6.4a)")});
+                failed_ = true;
+                continue;
+            }
             if (st->continuous) {
-                std::size_t slot = 0;
-                for (const StateSlot& ss : leaf.states)
-                    if (ss.name == rest[0]) slot = ss.slot;
-                s.expr = "x[" + std::to_string(slot) + "]";
+                if (!m.dynamic_states) {
+                    s.expr = "x[" + std::to_string(ss ? ss->slot : 0) + "]";
+                } else {
+                    s.expr = "x[se_x_off_[" + std::to_string(ss ? ss->off : 0) + "]" +
+                             (has_index ? " + " + std::to_string(elem_index) : "") + "]";
+                }
+            } else if (ss && ss->extent.present) {
+                s.expr = "dis_arr[se_da_off_[" + std::to_string(ss->off) + "] + " +
+                         std::to_string(elem_index) + "]";
             } else {
                 s.expr = "dis." + base + "." + rest[0];
             }
+            if (has_index && ss) {
+                Model::ElementRef ref;
+                ref.path = path;
+                ref.continuous = ss->continuous;
+                ref.index = elem_index;
+                m.element_refs.push_back(std::move(ref));
+                element_sites_.push_back({m.element_refs.size() - 1, leaf_index,
+                                          state_index});
+            }
             // §6.2a — the slot's unit is substituted; the node's is still `(U)`.
-            s.unit = st->type.unit;
-            for (const StateSlot& ss : leaf.states)
-                if (ss.name == rest[0]) s.unit = ss.unit;
+            s.unit = ss ? ss->unit : st->type.unit;
         } else {
+            if (has_index) {
+                // §6.4a — only a state is array-shaped in the recordable
+                // surface. A port may not carry an extent at all (SE0234), and
+                // an array var is node-private storage with no path (§6.5).
+                diag_.error("SE0304", src, p.loc,
+                            "`" + path + "` is not an array state", "unexpected index",
+                            {note("a port may not be array-shaped (SE0234), and an "
+                                  "array var is node-private (§6.5)")});
+                failed_ = true;
+                continue;
+            }
             const Field* f = nullptr;
             if (kind == "out")
                 for (const Field& lf : leaf.ports_out)
@@ -1830,14 +2019,43 @@ bool Elaborator::run(const ast::SimFile& sim, const Source& sim_src,
     resolve_inputs(m);
     resolve_boundary(m.root, m);
 
-    std::size_t slot = 0;
-    for (Leaf& leaf : m.leaves)
-        for (StateSlot& s : leaf.states)
-            if (s.continuous) s.slot = slot++;
-    m.n_states = slot;
+    // §6.4a — one array state anywhere in the model switches the WHOLE
+    // model to the dynamic lowering (§15.5a). It has to be model-wide: `x` is
+    // one block, and a block cannot be half `constexpr`.
+    for (const Leaf& leaf : m.leaves)
+        for (const StateSlot& st : leaf.states)
+            if (st.extent.present) m.dynamic_states = true;
+
+    if (!m.dynamic_states) {
+        std::size_t slot = 0;
+        for (Leaf& leaf : m.leaves)
+            for (StateSlot& st : leaf.states)
+                if (st.continuous) st.slot = slot++;
+        m.n_states = slot;
+    } else {
+        // Positions are a configuration result now, so what is assigned here is
+        // only each state's ROW in the offset table the generated `configure()`
+        // fills. A scalar state gets a row too, with an extent of one: two code
+        // paths for "where does this state live" would be two chances to
+        // disagree.
+        std::size_t ci = 0, di = 0;
+        for (Leaf& leaf : m.leaves)
+            for (StateSlot& st : leaf.states) {
+                if (st.continuous) st.off = ci++;
+                else if (st.extent.present) st.off = di++;
+            }
+        m.n_cont_slots = ci;
+        m.n_disc_arr_slots = di;
+        m.n_states = 0;   // not known until §6.2b step 4
+    }
 
     if (record_entry) resolve_record(record_entry->record, sim_src, m);
     if (log_entry) resolve_log(log_entry->log, sim_src, m);
+
+    // Every element reference the model made, now that the offset table it
+    // indexes into exists.
+    for (const ElementSite& site : element_sites_)
+        m.element_refs[site.ref].off = m.leaves[site.leaf].states[site.state].off;
 
     // Every override must have landed on something. A typo here is otherwise
     // completely silent, which is the worst possible failure for the layer

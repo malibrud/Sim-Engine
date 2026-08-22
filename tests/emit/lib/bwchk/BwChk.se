@@ -1,0 +1,40 @@
+// `se.sig.dt.Butterworth` — the block array states were added for (§6.4a) —
+// driven by a sine at twice its cutoff, at two orders.
+//
+// The check is the magnitude response, which the bilinear transform makes
+// EXACT rather than approximate: prewarping puts the analog cutoff at
+// wa = K*tan(pi*fc/fs), so the digital filter's gain at a digital frequency f
+// is the analog Butterworth's gain at K*tan(pi*f/fs), and the K cancels:
+//
+//     |H(f)| = 1 / sqrt(1 + (tan(pi f/fs) / tan(pi fc/fs))^(2N))
+//
+// Two orders, and the second one is ODD deliberately: an odd order carries a
+// lone real pole, which is the one section that is not a conjugate pair and
+// the one place a cascade implementation goes wrong. At f = 2*fc the two gains
+// differ by a factor of two per order, so a section miscounted, dropped or
+// placed at the wrong radius moves the answer far outside tolerance.
+package bwchk;
+
+use se.sig.src;
+use se.sig.dt;
+
+node BwChk {
+    outputs {
+        drive (m/s^2): double;    // the source, for reference
+        even  (m/s^2): double;    // 4th order
+        odd   (m/s^2): double;    // 5th order — exercises the real pole
+    }
+
+    structure {
+        // 20 Hz on a 1 kHz base step: 50 samples per period, exactly, so an
+        // RMS taken over a whole number of periods is exact.
+        node src : src.Sine (m/s^2) { amplitude = 1.0; f = 20.0; };
+
+        node bw4 : dt.Butterworth (m/s^2) { fc = 10.0; order = 4; };
+        node bw5 : dt.Butterworth (m/s^2) { fc = 10.0; order = 5; };
+
+        src.y --> bw4.x, bw5.x, self.drive;
+        bw4.y --> self.even;
+        bw5.y --> self.odd;
+    }
+}

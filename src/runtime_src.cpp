@@ -41,6 +41,8 @@ const char* state_ref_hpp() {
 // ─────────────────────────────────────────────────────────────────────────────
 #pragma once
 
+#include <cstddef>
+
 namespace sim {
 
 // Not a `T&`. A reference member can be neither default-constructed nor
@@ -98,7 +100,66 @@ public:
     }
 };
 
+// The same argument one step further, for an array-shaped state (section 6.4a).
+//
+// `State`, `Der` and `Store` must still be default-constructible before
+// Sim::bind_state() runs, and now the LENGTH is not known at compile time
+// either, so a std::array member is not available even in principle: the extent
+// is a configuration result (section 6.2b step 4). A pointer plus a length,
+// rebound once, is what is left.
+//
+// Constness propagates through the subscript, which is the property that makes
+// this a view of the same kind as value_ref rather than a parallel mechanism:
+// in a const method `state` is a const State, `state.w1` is a const array_ref,
+// and `state.w1[i]` is a `const T&`. So `state.w1[i] = ...` fails to compile in
+// output() for exactly the reason `state.omega = ...` does.
+template <class T>
+class array_ref {
+    T* p_ = nullptr;
+    std::size_t n_ = 0;
+
+public:
+    array_ref() = default;
+
+    // Bound once, from Sim::bind_state() / Sim::bind_discrete_array().
+    void bind(T* p, std::size_t n) {
+        p_ = p;
+        n_ = n;
+    }
+
+    std::size_t size() const { return n_; }
+    bool empty() const { return n_ == 0; }
+
+    T& operator[](std::size_t i) { return p_[i]; }
+    const T& operator[](std::size_t i) const { return p_[i]; }
+
+    T* data() { return p_; }
+    const T* data() const { return p_; }
+    T* begin() { return p_; }
+    T* end() { return p_ + n_; }
+    const T* begin() const { return p_; }
+    const T* end() const { return p_ + n_; }
+
+    void fill(T v) {
+        for (std::size_t i = 0; i < n_; ++i) p_[i] = v;
+    }
+
+    // Copy-ASSIGNMENT moves the elements, not the binding — the same rule as
+    // value_ref, and load-bearing for the same reason. `dis = nxt` at the
+    // bottom of the tick is a whole-block struct copy, and this is the member
+    // that makes the array-shaped slice of it commit rather than rebind. The
+    // implicit copy-assignment would repoint dis at nxt's storage and the state
+    // would never move; it compiles clean and is wrong at run time.
+    array_ref(const array_ref&) = default;
+    array_ref& operator=(const array_ref& o) {
+        const std::size_t n = n_ < o.n_ ? n_ : o.n_;
+        for (std::size_t i = 0; i < n; ++i) p_[i] = o.p_[i];
+        return *this;
+    }
+};
+
 using state_ref = value_ref<double>;
+using state_arr = array_ref<double>;
 
 }  // namespace sim
 )SERT";
@@ -365,6 +426,50 @@ inline std::string rate_error(const char* path, double rate, double base_rate) {
         o << "; the nearest legal rates are " << base_rate / lo << " Hz and "
           << base_rate / hi << " Hz";
     }
+    return o.str();
+}
+
+// ─── Array extents (section 6.4a, section 15.5a) ─────────────────────────────
+//
+// An extent is a section-7 expression over ordinary overridable settings, so it
+// is evaluated at configuration and only then does it have to be an exact
+// non-negative integer. This is the same shape of check as decimation_of(): the
+// DSL compiler applied the rule to what it could see, and this applies it to
+// what actually arrived. Zero is legal and yields no slots.
+inline bool extent_of(double v, std::size_t& out) {
+    out = 0;
+    if (!(v >= 0.0)) return false;
+    const double n = std::floor(v + 0.5);
+    // A tolerance rather than equality, for the same reason decimation_of()
+    // uses one: the value reaches here through decimal literals and possibly a
+    // unit conversion, so an intended integer need not be exact.
+    if (std::fabs(v - n) > 1e-9 * (n > 1.0 ? n : 1.0)) return false;
+    out = static_cast<std::size_t>(n);
+    return true;
+}
+
+inline std::string extent_error(const char* path, double v) {
+    std::ostringstream o;
+    o << "the extent of " << path << " is " << v
+      << ", which is not an exact non-negative integer";
+    return o.str();
+}
+
+// section 13.4 / section 13.5 — an index past the extent CONFIGURATION computed.
+// Not a compile error: the same settings source may be valid against one order
+// and invalid against another.
+inline std::string index_error(const char* path, std::size_t n) {
+    std::ostringstream o;
+    o << path << " is past the configured extent (" << n
+      << (n == 1 ? " element)" : " elements)");
+    return o.str();
+}
+
+// section 15.5a — the one error the host handshake makes possible, and the
+// cheapest possible check.
+inline std::string bind_error(const char* what, std::size_t given, std::size_t want) {
+    std::ostringstream o;
+    o << what << ": " << given << " slots given, " << want << " expected";
     return o.str();
 }
 

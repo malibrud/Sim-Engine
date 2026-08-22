@@ -1,0 +1,10 @@
+// §13.4 — an array state is addressed one element at a time. There is no path
+// naming the whole array: §7 has no aggregate value to assign to it, and the
+// declared default already initialises every element uniformly.
+//
+// The index is checked at CONFIGURATION, not here: the extent is not known
+// until §6.2b step 4, and this same file would be valid against one `n` and
+// invalid against another.
+x[1] = 2 (-);
+
+k0 = 1 (1/s);

@@ -1,0 +1,70 @@
+﻿# ----------------------------------------------------------------------------
+#  GENERATED — DO NOT EDIT.
+#  Unit manifest for: Sim.generated.hpp
+#  sim: BwChk   root: bwchk.BwChk   base step: 0.001 s
+#
+#  Units are checked by the DSL compiler at every declarative site and then
+#  ERASED — the generated C++ is plain `double` throughout. This file is where
+#  the erased information goes. It is a real generator output, not
+#  documentation: it is the contract for anyone writing an external solver,
+#  feeding the root boundary, or overriding a setting from outside the model.
+#
+#  Every value named here is IN THE UNIT SHOWN. `-` means dimensionless.
+# ----------------------------------------------------------------------------
+
+[state.continuous]        # slot | model path | unit  -- the solver's ABI
+#  This model has array-shaped states (§6.4a), so no slot number is
+#  known here: an extent does not settle until configuration. The extent
+#  is printed AS WRITTEN, and the concrete rows come from
+#  Sim::state_map() once configure() has run (§15.6).
+          (none)
+
+[state.discrete]          # Sim::dis; offsets from Sim::discrete_map()
+          src.u                   -           double
+
+[state.discrete.array]    # Sim::dis_arr; rows from Sim::discrete_array_map()
+dis_arr[?]  bw4.w1 [param.nbq]    -           dynamic
+dis_arr[?]  bw4.w2 [param.nbq]    -           dynamic
+dis_arr[?]  bw5.w1 [param.nbq]    -           dynamic
+dis_arr[?]  bw5.w2 [param.nbq]    -           dynamic
+
+[signals]                 # Sim::sig; offsets from Sim::signal_map()
+          src.y                   m/s^2       double
+          bw4.y                   m/s^2       double
+          bw5.y                   m/s^2       double
+
+[boundary.in]             # root inputs the host must drive, as sig.in.*
+          (none)
+
+[boundary.out]            # root outputs the host may read
+          src.y                   m/s^2
+          bw4.y                   m/s^2
+          bw5.y                   m/s^2
+
+[settings]                # configurable; value is the elaborated default
+          src.amplitude           m/s^2       = 1.0
+          src.f                   Hz          = 20.0
+          src.phase               rad         = 0.0
+          src.offset              m/s^2       = 0.0
+          src.rate                Hz          = 1000.0
+          bw4.fc                  Hz          = 10.0
+          bw4.order               -           = 4
+          bw4.nbq                 -           = 2   <- std::floor((std::ceil(bw4.order / 2.0)) + 0.5)
+          bw4.fs                  Hz          = 1000.0
+          bw5.fc                  Hz          = 10.0
+          bw5.order               -           = 5
+          bw5.nbq                 -           = 3   <- std::floor((std::ceil(bw5.order / 2.0)) + 0.5)
+          bw5.fs                  Hz          = 1000.0
+
+[decimation]              # derived from `rate` at configuration
+          src                     1000 Hz     = every 1 tick
+
+[types]
+
+[recorded]                # columns of bwchk.csv
+          time                    s
+          src.out.y               m/s^2
+          bw4.out.y               m/s^2
+          bw5.out.y               m/s^2
+          bw4.state.w1[0]         -
+          bw5.state.w1[2]         -

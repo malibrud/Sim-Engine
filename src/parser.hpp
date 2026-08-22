@@ -57,7 +57,12 @@ private:
     void recover_to_definition();
 
     // ─── Shared productions ──────────────────────────────────────────────────
-    bool parse_path(ast::Path& out, bool allow_keywords = false);
+    // `allow_index` admits a trailing `[N]` on the last segment (§6.4a):
+    // an element of an array state, as an override target (§13.4) or a
+    // recorded column (§13.5). The index rides ON the last segment, so
+    // `Path::str()` still spells the whole thing and every downstream matcher
+    // keeps working on one string.
+    bool parse_path(ast::Path& out, bool allow_keywords = false, bool allow_index = false);
     bool parse_qualified_name(ast::Path& out);
     ast::UnitPtr parse_unit();
     ast::UnitPtr parse_unit_expr();
@@ -78,8 +83,13 @@ private:
     bool parse_node_def(ast::NodeDef& out);
     bool parse_node_item(ast::NodeDef& node);
     bool parse_field_list(std::vector<ast::FieldDecl>& out, const char* what,
-                          bool allow_records, ast::SectionMark* sec_units = nullptr,
+                          bool allow_records, bool allow_extent = false,
+                          ast::SectionMark* sec_units = nullptr,
                           std::vector<ast::UnitParamDecl>* unit_params = nullptr);
+    // §6.4a — `[expr]` between the name and the unit. Always parsed where one
+    // could appear, so that a rejected extent is rejected by its own rule
+    // rather than by a cascade of punctuation errors.
+    bool parse_extent(ast::ExprPtr& out, Loc& loc, const char* what, bool allowed);
     bool parse_unit_param_list(std::vector<ast::UnitParamDecl>& out);
     bool parse_setting_list(std::vector<ast::SettingDecl>& out);
     bool parse_state_list(std::vector<ast::StateDecl>& out);
