@@ -240,6 +240,42 @@ function Check-Manifest($stem, $outDir) {
     Compare-Text "tests/emit/$stem.manifest" $expected $actual
 }
 
+# The topology diagram (SPEC 15.x). Opt-in the same way the manifest is: drop a
+# <name>.topology beside the .sim and it is compared.
+#
+# The lint is not decoration. Mermaid's comment stripper needs at least one
+# character after the `%%`, so a BARE `%%` line is not treated as a comment: it
+# survives into the parser, concatenates with whatever follows, and the diagram
+# fails to render with an error pointing at line 1 that mentions none of this.
+# The emitter cannot express one any more, and this is the assertion that it
+# stays that way -- a golden-file diff would not catch it being reintroduced
+# somewhere new, because the diff would just be accepted on -Update.
+function Check-Topology($stem, $outDir) {
+    $produced = Join-Path $outDir 'Sim.topology.mmd'
+    if (-not (Test-Path $produced)) {
+        Write-Host "FAIL tests/emit/$stem : no Sim.topology.mmd was written" -ForegroundColor Red
+        $script:fail++
+        return
+    }
+    $lines = Get-Content $produced
+    $bare = @($lines | Where-Object { $_ -eq '%%' })
+    if ($bare.Count -gt 0) {
+        Write-Host ("FAIL tests/emit/$stem.topology : " + $bare.Count +
+                    " bare '%%' line(s); Mermaid will not parse the diagram") -ForegroundColor Red
+        $script:fail++
+    } else {
+        Write-Host "ok   tests/emit/$stem.topology : no bare '%%' lines" -ForegroundColor Green
+        $script:pass++
+    }
+
+    $expected = Join-Path $root ("tests\emit\" + $stem + '.topology')
+    if (-not (Test-Path $expected)) { return }
+    # -Encoding UTF8 for the manifest's reason: sec writes BOM-less UTF-8 and
+    # PowerShell 5.1 would otherwise decode it as the ANSI codepage.
+    $actual = (Get-Content -Raw -Encoding UTF8 $produced) -replace "`r`n", "`n"
+    Compare-Text "tests/emit/$stem.topology" $expected $actual
+}
+
 $emitDirs = @{}
 foreach ($f in (Get-ChildItem -Path (Join-Path $root 'tests\emit') -File -Filter '*.sim' |
                 Sort-Object Name)) {
@@ -248,6 +284,7 @@ foreach ($f in (Get-ChildItem -Path (Join-Path $root 'tests\emit') -File -Filter
         $stem = [IO.Path]::GetFileNameWithoutExtension($f.Name)
         $emitDirs[$stem] = $d
         Check-Manifest $stem $d
+        Check-Topology $stem $d
     }
 }
 

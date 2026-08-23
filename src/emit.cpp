@@ -195,6 +195,7 @@ public:
     std::string hpp();
     std::string main_cpp(const std::string& header_name);
     std::string manifest();
+    std::string topology() const;
     std::string build_script(bool windows, const std::string& header_name);
 
 private:
@@ -1933,6 +1934,288 @@ std::string Emitter::main_cpp(const std::string& header_name) {
     return t.str();
 }
 
+// — The topology diagram —
+//
+//  A picture of the model as it actually RUNS, which is why it is drawn from
+//  the flat model rather than from the `.se` hierarchy. Composites have
+//  evaporated by this point (§15.2), so a `subgraph` below is the path
+//  prefix one left behind and not a runtime object. Drawing the source
+//  hierarchy instead would show what was WRITTEN; this shows what got built,
+//  which is the thing whose behaviour anyone is trying to understand.
+//
+//  Mermaid rather than Graphviz because it renders with nothing installed —
+//  GitHub, VS Code, any markdown preview — and because it is text, so it
+//  diffs and can be a checked expectation exactly as the manifest already is.
+//  Both formats are a printer over this one walk, so a `--dot` twin later is
+//  a second printer and not a second traversal.
+
+std::string Emitter::topology() const {
+    Out t;
+
+    // `#` opens a Mermaid entity code and `"` closes a label. Neither is
+    // hypothetical: a file-private declaration's fq name carries a `#`
+    // (`Checks#Vec3`), and a unit can be arbitrary text.
+    auto esc = [](const std::string& in) {
+        std::string r;
+        for (char c : in) {
+            if (c == '#') r += "#35;";
+            else if (c == '"') r += "#quot;";
+            else r += c;
+        }
+        return r;
+    };
+    auto lab = [&](const std::string& in) { return "\"" + esc(in) + "\""; };
+
+    // A generated identifier is unique (I5) and C-safe, which is nearly enough
+    // to be a Mermaid node id as well. The gap is Mermaid's own keywords: a
+    // leaf called `end` would close the enclosing subgraph instead of naming a
+    // node, and the diagram would silently draw the wrong shape rather than
+    // fail. Renaming the handful of collisions keeps every other id readable.
+    auto id = [](const std::string& ident) {
+        static const char* const reserved[] = {"end",   "graph", "subgraph", "class",
+                                               "click", "style", "linkStyle", "direction",
+                                               "flowchart"};
+        for (const char* r : reserved)
+            if (ident == r) return ident + "_";
+        return ident;
+    };
+
+    // What a wire carries, as a reader wants it: a unit for a scalar, the
+    // record's own name for a record (§5.3 — the whole record travels).
+    auto type_of = [](const Type& ty) -> std::string {
+        if (!ty.is_record) return ty.unit.str();
+        const std::size_t dot = ty.record->fq.rfind('.');
+        std::string r =
+            dot == std::string::npos ? ty.record->fq : ty.record->fq.substr(dot + 1);
+        // §5.2 — the binding, not just the type. `Vec3` alone would make two
+        // ports look interchangeable when `Vec3(m)` into `Vec3(m/s)` is
+        // SE0410: a record travels as one value and cannot be converted on the
+        // way through, so the arguments ARE part of what crosses the wire.
+        if (!ty.unit_args.empty()) {
+            r += "(";
+            for (std::size_t i = 0; i < ty.unit_args.size(); ++i)
+                r += (i ? ", " : "") + ty.unit_args[i].str();
+            r += ")";
+        }
+        return r;
+    };
+
+    // Position in the §8.5 order, so each group lists its nodes in the order
+    // the tick actually calls them and Mermaid lays them out left to right.
+    std::vector<std::size_t> rank(m_.leaves.size(), 0);
+    for (std::size_t k = 0; k < m_.order.size(); ++k) rank[m_.order[k]] = k;
+
+    // ---- the composite tree, recovered from the paths ----------------------
+    struct Group {
+        std::string name;
+        std::vector<std::size_t> leaves;
+        std::vector<std::size_t> subs;
+    };
+    std::vector<Group> groups;
+    std::map<std::string, std::size_t> group_of;
+    groups.push_back(Group{std::string(), {}, {}});
+    group_of[std::string()] = 0;
+
+    std::function<std::size_t(const std::string&)> ensure =
+        [&](const std::string& path) -> std::size_t {
+        auto it = group_of.find(path);
+        if (it != group_of.end()) return it->second;
+        const std::size_t dot = path.rfind('.');
+        const std::size_t parent =
+            ensure(dot == std::string::npos ? std::string() : path.substr(0, dot));
+        groups.push_back(
+            Group{dot == std::string::npos ? path : path.substr(dot + 1), {}, {}});
+        const std::size_t id = groups.size() - 1;
+        group_of[path] = id;
+        groups[parent].subs.push_back(id);
+        return id;
+    };
+
+    for (std::size_t i = 0; i < m_.leaves.size(); ++i) {
+        const std::string& path = m_.leaves[i].path;
+        const std::size_t dot = path.rfind('.');
+        groups[ensure(dot == std::string::npos ? std::string() : path.substr(0, dot))]
+            .leaves.push_back(i);
+    }
+    for (Group& g : groups)
+        std::sort(g.leaves.begin(), g.leaves.end(),
+                  [&](std::size_t a, std::size_t b) { return rank[a] < rank[b]; });
+
+    // ---- header ------------------------------------------------------------
+    //  One comment line. It is a function rather than a literal for one
+    //  reason, and it is a sharp one: Mermaid's comment stripper requires at
+    //  least one character after the `%%`, so a BARE `%%` line is not a
+    //  comment. It survives into the parser, concatenates with whatever
+    //  follows -- three of them in a row become `%%%%%%flowchart` -- and the
+    //  whole diagram fails to render with an error that points at line 1 and
+    //  names none of this. An empty line is therefore emitted as an actual
+    //  blank line, which Mermaid does accept, and a bare `%%` cannot be
+    //  written here by accident.
+    auto cmt = [&](const std::string& text) {
+        if (text.empty()) t << "\n";
+        else t << "%%  " << text << "\n";
+    };
+    const std::string rule = "%% " + std::string(74, '-');
+
+    t << rule << "\n";
+    cmt("GENERATED — DO NOT EDIT.");
+    cmt("Topology for: " + m_.name + "   root: " + m_.root->fq);
+    cmt("");
+    cmt("Signal flow, as the model RUNS. Composites are flattened by now");
+    cmt("(§15.2), so a subgraph is the path prefix one left behind, not a");
+    cmt("runtime object. Nodes are listed in §8.5 schedule order.");
+    cmt("");
+    cmt("  A --> B    B's `output()` READS this input: an algebraic");
+    cmt("             dependency, and what the §8.5 sort is over");
+    cmt("  A -.-> B   it does not. The value reaches B through a state, so");
+    cmt("             the edge orders nothing and a cycle through it is");
+    cmt("             legal (§8.6)");
+    cmt("  ( )        the root boundary: the host writes in, reads out");
+    cmt("  thick      the node owns continuous state — the solver");
+    cmt("             integrates it, so every edge leaving it is delayed");
+    cmt("");
+    {
+        std::string base = "Base step " + dbl(m_.step) + " s";
+        if (m_.step > 0.0) base += "  (" + dbl(1.0 / m_.step) + " Hz)";
+        cmt(base + "; a node that samples slower says so.");
+    }
+    t << rule << "\n";
+    t << "flowchart LR\n";
+
+    // ---- the root boundary the host drives ---------------------------------
+    for (const BoundaryIn& b : m_.boundary_in)
+        t << "    se_in_" << b.ident << "([" << lab("in." + b.ident + "<br/>" +
+                                                    type_of(b.type)) << "])\n";
+
+    // ---- nodes, nested by composite ----------------------------------------
+    std::function<void(std::size_t, const std::string&)> draw =
+        [&](std::size_t g, const std::string& ind) {
+        for (std::size_t i : groups[g].leaves) {
+            const Leaf& leaf = m_.leaves[i];
+            const std::size_t dot = leaf.path.rfind('.');
+            std::string name = leaf.path.empty()
+                                   ? std::string("<root>")
+                                   : (dot == std::string::npos ? leaf.path
+                                                               : leaf.path.substr(dot + 1));
+            std::string text = name + "<br/>" + leaf.node->fq;
+            // §9.2 — only a node that declares `rate` can be off the base
+            // step, and only then is the number worth the ink.
+            if (dynamic_rate(leaf) && m_.step > 0.0) {
+                char buf[64];
+                std::snprintf(buf, sizeof buf, "%g Hz",
+                              1.0 / (m_.step * static_cast<double>(leaf.decimation)));
+                text += "<br/>";
+                text += buf;
+            }
+            t << ind << id(leaf.ident) << "[" << lab(text) << "]\n";
+        }
+        for (std::size_t sub : groups[g].subs) {
+            t << ind << "subgraph sg" << sub << "[" << lab(groups[sub].name) << "]\n";
+            t << ind << "    direction LR\n";
+            draw(sub, ind + "    ");
+            t << ind << "end\n";
+        }
+    };
+    draw(0, "    ");
+
+    // ---- the root outputs the host may read --------------------------------
+    //  `boundary_out` is expanded field by field, because that is what a host
+    //  wiring itself up needs (§15.6). A diagram wants the PORT, so the rows
+    //  are collapsed back onto the producer they all came from.
+    std::map<std::string, std::size_t> leaf_by_ident;
+    for (std::size_t i = 0; i < m_.leaves.size(); ++i) leaf_by_ident[m_.leaves[i].ident] = i;
+
+    std::vector<std::pair<std::string, std::string>> outs;   // producer ident, port
+    for (const BoundaryOut& b : m_.boundary_out) {
+        if (b.expr.rfind("sig.", 0) != 0) continue;
+        const std::string rest = b.expr.substr(4);
+        const std::size_t d1 = rest.find('.');
+        if (d1 == std::string::npos) continue;
+        const std::string ident = rest.substr(0, d1);
+        const std::string after = rest.substr(d1 + 1);
+        const std::size_t d2 = after.find('.');
+        const std::string port = d2 == std::string::npos ? after : after.substr(0, d2);
+        bool seen = false;
+        for (const auto& o : outs) seen = seen || (o.first == ident && o.second == port);
+        if (!seen) outs.emplace_back(ident, port);
+    }
+    for (std::size_t k = 0; k < outs.size(); ++k) {
+        auto it = leaf_by_ident.find(outs[k].first);
+        if (it == leaf_by_ident.end()) continue;
+        const Leaf& leaf = m_.leaves[it->second];
+        const std::string path =
+            leaf.path.empty() ? outs[k].second : leaf.path + "." + outs[k].second;
+        const Field* port = nullptr;
+        for (const Field& f : leaf.ports_out)
+            if (f.name == outs[k].second) port = &f;
+        t << "    se_out" << k << "([" << lab("out " + path + "<br/>" +
+                                              (port ? type_of(port->type) : std::string("?")))
+          << "])\n";
+    }
+
+    // ---- wires -------------------------------------------------------------
+    t << "\n";
+    for (std::size_t i = 0; i < m_.leaves.size(); ++i) {
+        const Leaf& leaf = m_.leaves[i];
+        const ast::Method* out = leaf.node->method(ast::Method::Which::Output);
+        for (const Field& port : leaf.ports_in) {
+            auto it = leaf.inputs.find(port.name);
+            if (it == leaf.inputs.end()) continue;   // unconnected; SE0430 said so
+            const InputSource& src = it->second;
+
+            // The SAME question schedule.cpp asks when it builds the sort: only
+            // `output()`'s parameter list constrains ordering (§8.3).
+            bool feedthrough = false;
+            if (out)
+                for (const std::string& q : out->params)
+                    if (q == port.name) feedthrough = true;
+
+            std::string from, label;
+            if (src.kind == InputSource::Kind::Boundary) {
+                from = "se_in_" + src.boundary.substr(std::strlen("sig.in."));
+                label = port.name;
+            } else {
+                from = id(m_.leaves[src.producer].ident);
+                label = src.port;
+            }
+
+            // A conversion folded to a constant at elaboration (§4.2) is
+            // invisible in the generated code, so this is the only place it
+            // shows: the two declared units, in the direction they convert.
+            std::string ty = type_of(port.type);
+            if (src.converts() && src.kind == InputSource::Kind::Leaf) {
+                const Leaf& prod = m_.leaves[src.producer];
+                for (const Field& f : prod.ports_out)
+                    if (f.name == src.port && !f.type.is_record)
+                        ty = f.type.unit.str() + " to " + ty;
+            }
+            t << "    " << from << (feedthrough ? " -->|" : " -.->|") << lab(label + " (" + ty + ")")
+              << "| " << id(leaf.ident) << "\n";
+        }
+    }
+    for (std::size_t k = 0; k < outs.size(); ++k) {
+        auto it = leaf_by_ident.find(outs[k].first);
+        if (it == leaf_by_ident.end()) continue;
+        t << "    " << id(outs[k].first) << " --> se_out" << k << "\n";
+    }
+
+    // ---- where the solver's state lives ------------------------------------
+    //  Stroke width only, no fill: the diagram renders on whatever background
+    //  the viewer has, and a colour that reads in one theme is unreadable in
+    //  the other.
+    std::string ct;
+    for (const Leaf& leaf : m_.leaves) {
+        if (!leaf.has_continuous()) continue;
+        if (!ct.empty()) ct += ",";
+        ct += id(leaf.ident);
+    }
+    if (!ct.empty()) {
+        t << "\n    classDef se_solver stroke-width:3px\n";
+        t << "    class " << ct << " se_solver\n";
+    }
+    return t.str();
+}
+
 // ─── The unit manifest (§15.6) ───────────────────────────────────────────────
 
 std::string Emitter::manifest() {
@@ -2159,6 +2442,8 @@ bool emit(Diagnostics& diag, const Model& m, const EmitOptions& opt) {
     if (opt.write_main)
         ok = write_file(diag, path(main_name), e.main_cpp(header_name), opt.quiet) && ok;
     ok = write_file(diag, path(opt.stem + ".units.txt"), e.manifest(), opt.quiet) && ok;
+    if (opt.write_topology)
+        ok = write_file(diag, path(opt.stem + ".topology.mmd"), e.topology(), opt.quiet) && ok;
     if (opt.write_runtime) {
         ok = write_file(diag, path("state_ref.hpp"), state_ref_hpp(), opt.quiet) && ok;
         ok = write_file(diag, path("se_runtime.hpp"), se_runtime_hpp(), opt.quiet) && ok;

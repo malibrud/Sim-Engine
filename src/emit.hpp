@@ -6,6 +6,7 @@
 //      <name>.generated.hpp   the model, the schedule, the host API
 //      <name>.main.cpp        the batch driver, and nothing else
 //      <name>.units.txt       the unit manifest — load-bearing, not docs (§15.6)
+//      <name>.topology.mmd    the signal-flow graph, as a Mermaid diagram
 //      state_ref.hpp          fixed engine runtime header (§15.5)
 //      se_runtime.hpp         fixed engine runtime header
 //      build.bat / build.sh   the direct reference build (§12.4)
@@ -35,6 +36,7 @@ struct EmitOptions {
     bool write_main = true;
     bool write_runtime = true;
     bool write_build = true;
+    bool write_topology = true;
     bool quiet = false;
 };
 

@@ -1,0 +1,52 @@
+﻿%% --------------------------------------------------------------------------
+%%  GENERATED — DO NOT EDIT.
+%%  Topology for: Vec3Chk   root: vec3.Vec3Chk
+
+%%  Signal flow, as the model RUNS. Composites are flattened by now
+%%  (§15.2), so a subgraph is the path prefix one left behind, not a
+%%  runtime object. Nodes are listed in §8.5 schedule order.
+
+%%    A --> B    B's `output()` READS this input: an algebraic
+%%               dependency, and what the §8.5 sort is over
+%%    A -.-> B   it does not. The value reaches B through a state, so
+%%               the edge orders nothing and a cycle through it is
+%%               legal (§8.6)
+%%    ( )        the root boundary: the host writes in, reads out
+%%    thick      the node owns continuous state — the solver
+%%               integrates it, so every edge leaving it is delayed
+
+%%  Base step 0.001 s  (1000.0 Hz); a node that samples slower says so.
+%% --------------------------------------------------------------------------
+flowchart LR
+    src["src<br/>vec3.Vec3Chk#35;Accel"]
+    sc["sc<br/>se.math.Scale3"]
+    sp["sp<br/>se.math.Split3"]
+    lx["lx<br/>se.sig.ct.Biquad"]
+    ly["ly<br/>se.sig.ct.Biquad"]
+    lz["lz<br/>se.sig.ct.Biquad"]
+    mg["mg<br/>se.math.Merge3"]
+    nm["nm<br/>se.math.Norm3"]
+    om["om<br/>vec3.Vec3Chk#35;Omega"]
+    arm["arm<br/>vec3.Vec3Chk#35;Arm"]
+    cr["cr<br/>se.math.Cross3"]
+    se_out0(["out mg.v<br/>Vec3(m/s)"])
+    se_out1(["out nm.y<br/>m/s"])
+    se_out2(["out cr.y<br/>Vec3(rad*m/s)"])
+
+    src -->|"a (Vec3(m/s^2))"| sc
+    sc -->|"y (Vec3(m/s))"| sp
+    sp -->|"x (m/s)"| lx
+    sp -->|"y (m/s)"| ly
+    sp -->|"z (m/s)"| lz
+    lx -->|"y (m/s)"| mg
+    ly -->|"y (m/s)"| mg
+    lz -->|"y (m/s)"| mg
+    mg -->|"v (Vec3(m/s))"| nm
+    om -->|"w (Vec3(rad/s))"| cr
+    arm -->|"r (Vec3(m))"| cr
+    mg --> se_out0
+    nm --> se_out1
+    cr --> se_out2
+
+    classDef se_solver stroke-width:3px
+    class lx,ly,lz se_solver

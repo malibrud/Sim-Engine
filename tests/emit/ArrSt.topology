@@ -1,0 +1,31 @@
+﻿%% --------------------------------------------------------------------------
+%%  GENERATED — DO NOT EDIT.
+%%  Topology for: ArrSt   root: arrst.ArrSt
+
+%%  Signal flow, as the model RUNS. Composites are flattened by now
+%%  (§15.2), so a subgraph is the path prefix one left behind, not a
+%%  runtime object. Nodes are listed in §8.5 schedule order.
+
+%%    A --> B    B's `output()` READS this input: an algebraic
+%%               dependency, and what the §8.5 sort is over
+%%    A -.-> B   it does not. The value reaches B through a state, so
+%%               the edge orders nothing and a cycle through it is
+%%               legal (§8.6)
+%%    ( )        the root boundary: the host writes in, reads out
+%%    thick      the node owns continuous state — the solver
+%%               integrates it, so every edge leaving it is delayed
+
+%%  Base step 0.001 s  (1000.0 Hz); a node that samples slower says so.
+%% --------------------------------------------------------------------------
+flowchart LR
+    root["<root><br/>arrst.ArrSt"]
+    se_out0(["out sum<br/>-"])
+    se_out1(["out tail<br/>-"])
+    se_out2(["out first<br/>-"])
+
+    root --> se_out0
+    root --> se_out1
+    root --> se_out2
+
+    classDef se_solver stroke-width:3px
+    class root se_solver
