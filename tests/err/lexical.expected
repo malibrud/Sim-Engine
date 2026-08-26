@@ -1,8 +1,8 @@
 ﻿error[SE0106]: malformed number literal `1e`
- --> tests/err/lexical.se:7:25
+ --> tests/err/lexical.se:7:24
   |
-7 |         a (-): double = 1e;
-  |                         ^^
+7 |         a: double(-) = 1e;
+  |                        ^^
   = note: §3.5: digits, one optional `.`, one optional `e`/`E` exponent
   = note: there are no type suffixes, digit separators, hex or octal literals
 

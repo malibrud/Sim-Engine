@@ -276,15 +276,33 @@ struct ArrayVar {
 // Where a leaf input's value comes from. A wire is not its own variable
 // (§15.3): it names the producer's `Out` member, plus any unit conversion the
 // two declared units imply, folded to a constant.
+// One field's affine conversion. A record wire carries one of these per leaf
+// scalar field, flattened depth-first in declaration order, because §5.2 binds
+// a parametric record's units at the reference and the two ends of a wire may
+// therefore have bound them differently.
+struct FieldConv {
+    double scale = 1.0;
+    double offset = 0.0;
+    bool converts() const { return scale != 1.0 || offset != 0.0; }
+};
+
 struct InputSource {
     enum class Kind { Leaf, Boundary };
     Kind kind = Kind::Leaf;
     std::size_t producer = 0;          // index into Model::leaves
     std::string port;                  // producer's output port
     std::string boundary;              // Kind::Boundary — the Sim member name
-    double scale = 1.0;                // consumer_value = scale * x + offset
+    double scale = 1.0;                // scalar: consumer_value = scale * x + offset
     double offset = 0.0;
-    bool converts() const { return scale != 1.0 || offset != 0.0; }
+    // Record ports only; empty for a scalar. Same flattening order the emitter
+    // walks when it writes the brace initialiser.
+    std::vector<FieldConv> field_convs;
+    bool converts() const {
+        if (scale != 1.0 || offset != 0.0) return true;
+        for (const FieldConv& f : field_convs)
+            if (f.converts()) return true;
+        return false;
+    }
 };
 
 struct Leaf {

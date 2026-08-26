@@ -5,15 +5,15 @@ package tests;
 
 node Vehicle {
     settings {
-        total_mass (kg): double = 1500.0;
-        ctl_rate   (Hz): double = 100.0;
+        total_mass: double(kg) = 1500.0;
+        ctl_rate: double(Hz) = 100.0;
     }
     inputs {
-        throttle (-):   double;
-        road     (m/s): double;
+        throttle: double(-);
+        road: double(m/s);
     }
     outputs {
-        speed  (m/s): double;
+        speed: double(m/s);
         report: Telemetry;
     }
 
@@ -44,11 +44,11 @@ node Vehicle {
 // File-private: not addressable by any package path, visible only in this file.
 node Mixer {
     inputs {
-        a (N*m): double;
-        b (N*m): double;
+        a: double(N*m);
+        b: double(N*m);
     }
     outputs {
-        total (N*m): double;
+        total: double(N*m);
         report: Telemetry;
     }
 

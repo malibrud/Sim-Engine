@@ -25,31 +25,31 @@ node Prbs {
     units { U; }
 
     settings {
-        amplitude (U): double = 1.0;
-        offset    (U): double = 0.0;
+        amplitude: double(U) = 1.0;
+        offset: double(U) = 0.0;
 
         // Register width. One period is 2^order - 1 samples: at order 11 and a
         // 1 kHz rate that is 2.047 s.
-        order (-): int = 11;
+        order: int(-) = 11;
 
         // Any nonzero value; the all-zero register is the one state a maximal
         // LFSR cannot leave, which `init()` rejects.
-        seed (-): int = 1;
+        seed: int(-) = 1;
 
-        rate (Hz): double = sample_rate;
+        rate: double(Hz) = sample_rate;
     }
 
-    outputs { y (U): double; }
+    outputs { y: double(U); }
 
     // The shift register, held masked to `order` bits so it is always a small
     // positive `int`. That is the point of masking rather than letting it run:
     // there is no uint32-through-int round trip anywhere in this node, which
     // would be implementation-defined before C++20.
-    states { discrete reg (-): int = 1; }
+    states { discrete reg: int(-) = 1; }
 
     vars {
-        mask (-): int;      // (1 << order) - 1
-        taps (-): int;      // XOR feedback mask, maximal for this order
+        mask: int(-);      // (1 << order) - 1
+        taps: int(-);      // XOR feedback mask, maximal for this order
     }
 
     // Tap sets for the standard maximal-length polynomials. A `switch` rather

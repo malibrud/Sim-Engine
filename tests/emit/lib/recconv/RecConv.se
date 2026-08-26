@@ -1,0 +1,46 @@
+// A record wire whose two ends bound the parametric type differently:
+// `Vec3(mm)` into `Vec3(m)`. §5.2 — compatible units convert at EVERY wire,
+// records included, so this is legal and each field picks up the same factor of
+// 1/1000 that a scalar `(mm)` -> `(m)` port would.
+//
+// This is the acceptance test for that rule. Before records converted it was
+// `SE0410`, so a case that passes without the per-field conversion in
+// `Elaborator::port_conversion()` and `Emitter::input_expr()` is not testing
+// anything.
+//
+// 1000 mm + 2000 mm + 3000 mm read as metres is 1 + 2 + 3 = 6 m, and 6.0 is a
+// value no plausible failure produces: dropping the conversion gives 6000.
+package recconv;
+
+use se.math;
+
+node RecConv {
+    outputs { y: double(m); }
+
+    structure {
+        node src : Millimetres {};
+
+        // Bound `(m)`, while `src.v` is bound `(mm)`. The wire between them is
+        // the whole point of the case.
+        node sp : math.Split3 (m) {};
+
+        node s1 : math.Sum (m) {};
+        node s2 : math.Sum (m) {};
+
+        src.v --> sp.v;
+        sp.x  --> s1.a;
+        sp.y  --> s1.b;
+        s1.y  --> s2.a;
+        sp.z  --> s2.b;
+        s2.y  --> self.y;
+    }
+}
+
+node Millimetres {
+    outputs { v: math.Vec3(mm); }
+    output() {
+        out.v.x = 1000.0;
+        out.v.y = 2000.0;
+        out.v.z = 3000.0;
+    }
+}

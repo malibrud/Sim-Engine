@@ -28,17 +28,19 @@ std::string trim_1line(const std::string& s, std::size_t max = 48) {
     return one;
 }
 
-// Renders exactly as the source spells it: `name (unit): type` or `name: Type`.
+// Renders exactly as the source spells it: `name: type(unit)`, one shape for
+// scalars and records alike (§5.1). `bool` takes no argument list.
 void dump_type(std::ostream& o, const ast::TypeRef& t) {
     if (t.is_scalar) {
-        o << " (" << unit_to_string(t.unit.get()) << "): " << t.scalar;
-    } else {
-        o << ": " << t.record.str();
-        // §5.2 — a parametric record binds its units at the reference site.
-        for (std::size_t k = 0; k < t.unit_args.size(); ++k)
-            o << (k ? ", " : "(") << unit_to_string(t.unit_args[k].get());
-        if (!t.unit_args.empty()) o << ")";
+        o << ": " << t.scalar;
+        if (t.scalar != "bool") o << "(" << unit_to_string(t.unit.get()) << ")";
+        return;
     }
+    o << ": " << t.record.str();
+    // §5.2 — a parametric record binds its units at the reference site.
+    for (std::size_t k = 0; k < t.unit_args.size(); ++k)
+        o << (k ? ", " : "(") << unit_to_string(t.unit_args[k].get());
+    if (!t.unit_args.empty()) o << ")";
 }
 
 void dump_expr_field(std::ostream& o, const char* label, const ast::Expr* e) {

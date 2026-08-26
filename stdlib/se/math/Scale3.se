@@ -10,7 +10,7 @@ use se.math;
 
 node Scale3 {
     units    { U; Gain; }
-    settings { k (Gain): double = 1.0; }
+    settings { k: double(Gain) = 1.0; }
 
     inputs   { v: math.Vec3(U); }
     outputs  { y: math.Vec3(U*Gain); }

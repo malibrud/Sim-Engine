@@ -1,14 +1,14 @@
 ﻿error[SE0414]: unknown unit symbol `sec`
-  --> tests/emit/lib/checks/Checks.se:33:24
+  --> tests/emit/lib/checks/Checks.se:33:31
    |
-33 |     settings { period (sec): double = 1.0; }
-   |                        ^^^ not a unit in Appendix A
+33 |     settings { period: double(sec) = 1.0; }
+   |                               ^^^ not a unit in Appendix A
    = help: did you mean `(deg)`, `(rev)` or `(s)`?
 
 error[SE0431]: a `continuous` state must be `double`
   --> tests/emit/lib/checks/Checks.se:40:26
    |
-40 |     states  { continuous n (-): int = 0; }
+40 |     states  { continuous n: int(-) = 0; }
    |                          ^ declared `int`
    = note: the solver's ABI is one flat `double` array (§15.5)
    = help: make it `discrete` if it is not integrated
@@ -37,10 +37,10 @@ error[SE0320]: node `Both` has both code and a `structure` block
    = help: move the code into a child leaf node
 
 error[SE0415]: `(deg)` may not be a declared unit
-   --> tests/emit/lib/checks/Checks.se:105:25
+   --> tests/emit/lib/checks/Checks.se:105:32
     |
-105 |     settings { heading (deg): double = 90.0; }
-    |                         ^^^ declare this in radians
+105 |     settings { heading: double(deg) = 90.0; }
+    |                                ^^^ declare this in radians
     = note: units are erased in bodies (§4.4), so `sin(state.theta)` on a degree-valued accessor is silently wrong, and no dimensional system can catch it
     = help: declare the radian unit and convert at the literal — `theta (rad): double = 90 (deg);`
 
@@ -66,20 +66,21 @@ error[SE0410]: incompatible unit arguments across a wire
 25 |         j.v --> k.v;
    |                 ^^^ `(m)` -> `(m/s)`
    = note: both ports are `checks.Checks#Vec3`, but bound `U` differently
-   = note: a record travels as one value and is not copied (§15.3), so its fields cannot be converted per wire the way a scalar's can
+   = note: source is m
+   = note: destination is m/s
 
 error[SE0410]: incompatible units for setting `f`
-   --> tests/emit/lib/checks/Checks.se:113:33
+   --> tests/emit/lib/checks/Checks.se:113:32
     |
-113 |     settings { f (Hz): double = 1.0 (rad/s); }
-    |                                 ^^^ `(rad/s)` where `(Hz)` is declared
+113 |     settings { f: double(Hz) = 1.0 (rad/s); }
+    |                                ^^^ `(rad/s)` where `(Hz)` is declared
     = note: value is rad/s
     = note: target is 1/s
 
 error[SE0430]: input `d.u` is not connected
   --> tests/emit/lib/checks/Checks.se:90:16
    |
-90 |     inputs   { u (-): double; }
+90 |     inputs   { u: double(-); }
    |                ^ declared here
    = note: an unconnected input is an error: there is no implicit zero (§6.3)
 

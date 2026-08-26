@@ -13,18 +13,18 @@ package se.sig.dt;
 node Integrator {
     units { U; }
 
-    settings { fs (Hz): double = sample_rate; }
+    settings { fs: double(Hz) = sample_rate; }
 
-    inputs  { x (U): double; }
+    inputs  { x: double(U); }
     // The output unit is DERIVED, not declared: integrating m/s^2 gives m/s.
     // Wiring this into a port that expected the input's unit is a hard error,
     // which is the whole reason the unit is written as an expression.
-    outputs { y (U*s): double; }
+    outputs { y: double(U*s); }
 
     // Direct Form II of (1/K)(1 + z^-1)/(1 - z^-1): one state.
-    states { discrete w1 (-): double = 0.0; }
+    states { discrete w1: double(-) = 0.0; }
 
-    vars { g (-): double; }
+    vars { g: double(-); }
 
     init() { var.g = 1.0 / (2.0 * param.fs); }   // T/2
 

@@ -11,8 +11,8 @@ package se.math;
 node Sum {
     units { U; }
 
-    inputs  { a (U): double;  b (U): double; }
-    outputs { y (U): double; }
+    inputs  { a: double(U);  b: double(U); }
+    outputs { y: double(U); }
 
     // Reads both inputs at the sample instant, so it is feedthrough on both and
     // cannot break a loop. That is what an adder is; put the state in the block

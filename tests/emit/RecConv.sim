@@ -1,0 +1,13 @@
+// §5.2 — a record wire converts per field. See lib/recconv/RecConv.se.
+sim RecConv {
+    root: recconv.RecConv {};
+
+    step:     1 (ms);
+    solver:   rk4;
+    duration: 3 (ms);
+
+    record: {
+        file: "recconv.csv";
+        signals { s2.y; }
+    }
+}

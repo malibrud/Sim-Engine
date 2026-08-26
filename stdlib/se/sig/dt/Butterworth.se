@@ -21,8 +21,8 @@ node Butterworth {
     units { U; }
 
     settings {
-        fc    (Hz): double;                          // cutoff, required
-        order (-):  int    = 4;
+        fc: double(Hz);                          // cutoff, required
+        order: int(-)    = 4;
 
         // The section count, named ONCE. The extent is a §7 expression and the
         // loop bound is C++, so the two cannot share a subexpression; writing
@@ -31,27 +31,27 @@ node Butterworth {
         // nothing checking that they agree (§6.4a). An override may also pin
         // this directly, detaching the section count from `order` exactly as
         // §13.3 describes for any derived setting.
-        nbq   (-):  int    = ceil(param.order / 2);
+        nbq: int(-)    = ceil(param.order / 2);
 
-        fs    (Hz): double = sample_rate;
+        fs: double(Hz) = sample_rate;
     }
 
-    inputs  { x (U): double; }
-    outputs { y (U): double; }
+    inputs  { x: double(U); }
+    outputs { y: double(U); }
 
     // Direct Form II, per section.
     states {
-        discrete w1 [param.nbq] (-): double = 0.0;
-        discrete w2 [param.nbq] (-): double = 0.0;
+        discrete w1 [param.nbq]: double(-) = 0.0;
+        discrete w2 [param.nbq]: double(-) = 0.0;
     }
 
     // The per-element coefficients the array states are filtered by, which is
     // why states and vars grew extents together: an array state with scalar
     // coefficients would describe nothing worth describing (§6.5).
     vars {
-        a1 [param.nbq] (-): double;   a2 [param.nbq] (-): double;
-        b0 [param.nbq] (-): double;   b1 [param.nbq] (-): double;
-        b2 [param.nbq] (-): double;
+        a1 [param.nbq]: double(-);   a2 [param.nbq]: double(-);
+        b0 [param.nbq]: double(-);   b1 [param.nbq]: double(-);
+        b2 [param.nbq]: double(-);
     }
 
     // Pole placement and the bilinear transform, in C++ because that is where

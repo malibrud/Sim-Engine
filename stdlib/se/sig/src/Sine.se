@@ -23,23 +23,23 @@ node Sine {
     units { U; }
 
     settings {
-        amplitude (U):   double = 1.0;
-        f         (Hz):  double = 1.0;
-        phase     (rad): double = 0.0;    // radians is the only declarable
+        amplitude: double(U) = 1.0;
+        f: double(Hz) = 1.0;
+        phase: double(rad) = 0.0;    // radians is the only declarable
                                           // angle unit (§4.5)
-        offset    (U):   double = 0.0;
+        offset: double(U) = 0.0;
 
-        rate (Hz): double = sample_rate;
+        rate: double(Hz) = sample_rate;
     }
 
-    outputs { y (U): double; }
+    outputs { y: double(U); }
 
     // Normalised phase, one turn per period.
-    states { discrete u (-): double = 0.0; }
+    states { discrete u: double(-) = 0.0; }
 
     vars {
-        du (-): double;      // turns per sample
-        p0 (-): double;      // `phase`, in turns
+        du: double(-);      // turns per sample
+        p0: double(-);      // `phase`, in turns
     }
 
     // The 2*pi lives here, on erased units, for `LowPass2`'s reason: once angle

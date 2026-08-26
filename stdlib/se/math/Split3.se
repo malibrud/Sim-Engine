@@ -17,7 +17,7 @@ node Split3 {
     units { U; }
 
     inputs  { v: math.Vec3(U); }
-    outputs { x (U): double;  y (U): double;  z (U): double; }
+    outputs { x: double(U);  y: double(U);  z: double(U); }
 
     // Feedthrough on `v`: it is a rename, not a delay. Putting state here would
     // hide a sample of latency inside what reads as pure plumbing.

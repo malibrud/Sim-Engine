@@ -3,13 +3,13 @@ model-file
   package tests
   node Vehicle  [line 6]  kind=composite
     settings
-      total_mass (kg): double = 1500.0
-      ctl_rate (Hz): double = 100.0
+      total_mass: double(kg) = 1500.0
+      ctl_rate: double(Hz) = 100.0
     inputs
-      throttle (-): double
-      road (m/s): double
+      throttle: double(-)
+      road: double(m/s)
     outputs
-      speed (m/s): double
+      speed: double(m/s)
       report: Telemetry
     structure
       node front : Axle
@@ -27,10 +27,10 @@ model-file
       mix.report --> self.report
   node Mixer  [line 45]  kind=leaf
     inputs
-      a (N*m): double
-      b (N*m): double
+      a: double(N*m)
+      b: double(N*m)
     outputs
-      total (N*m): double
+      total: double(N*m)
       report: Telemetry
     output(a, b)   [feedthrough]
       body @line 55 (113 bytes): "out.total = in.a + in.b; out.report.torque = ..."

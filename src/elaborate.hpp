@@ -157,6 +157,10 @@ private:
         std::string source;        // the producing endpoint's path
         double scale = 1.0;
         double offset = 0.0;
+        // Record ports only — one entry per leaf scalar field. Every hop on one
+        // chain carries the same record type, so these compose element-wise
+        // exactly as `scale`/`offset` do for a scalar.
+        std::vector<FieldConv> field_convs;
         Loc loc;
         const Source* src = nullptr;
     };
@@ -165,7 +169,7 @@ private:
     void collect_wires(const NodeInfo* def, const std::string& path, Model& m,
                        const std::map<std::string, std::vector<Unit>>& child_binding);
     bool port_conversion(const Field& from, const Field& to, const Source& src, Loc loc,
-                         double& scale, double& offset);
+                         double& scale, double& offset, std::vector<FieldConv>& field_convs);
     void resolve_inputs(Model& m);
     void resolve_boundary(const NodeInfo* root, Model& m);
 

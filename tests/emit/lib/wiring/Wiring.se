@@ -5,8 +5,8 @@ package wiring;
 // (SE0443), an unconnected input (SE0430) and incompatible units across a
 // wire (SE0410).
 node Wiring {
-    inputs  { a (-): double;  b (-): double; }
-    outputs { y (-): double; }
+    inputs  { a: double(-);  b: double(-); }
+    outputs { y: double(-); }
 
     structure {
         node p : Source {};
@@ -30,18 +30,18 @@ node Wiring {
 }
 
 node Source {
-    outputs { v (-): double; }
+    outputs { v: double(-); }
     output() { out.v = 1.0; }
 }
 
 node Metres {
-    outputs { len (m): double; }
+    outputs { len: double(m); }
     output() { out.len = 2.0; }
 }
 
 node Sink {
-    inputs  { u (-): double;  w (-): double;  z (-): double;  spare (-): double; }
-    outputs { total (-): double; }
+    inputs  { u: double(-);  w: double(-);  z: double(-);  spare: double(-); }
+    outputs { total: double(-); }
     output(u, w, z, spare) {
         out.total = in.u + in.w + in.z + in.spare;
     }

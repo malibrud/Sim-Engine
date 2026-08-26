@@ -3,11 +3,11 @@ model-file
   package tests
   node Tricky  [line 6]  kind=leaf
     settings
-      gain (-): double = 1.0
+      gain: double(-) = 1.0
     outputs
-      y (-): double
+      y: double(-)
     states
-      continuous x (-): double ic=0.0
+      continuous x: double(-) ic=0.0
     declarations @line 17 (169 bytes): "#include <string> // a brace in a line commen..."
     init()
       body @line 24 (639 bytes): "// } in a line comment /* } in a block commen..."

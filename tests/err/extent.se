@@ -4,15 +4,15 @@
 package tests;
 
 type Bundle {
-    v [3] (m/s): double;
+    v [3]: double(m/s);
 }
 
 node Bad {
-    settings { n (-): int = 4; }
-    inputs   { u [param.n] (m): double; }
-    outputs  { y (m): double; }
-    states   { continuous ok [param.n] (m): double = 0.0; }
-    vars     { fine [param.n] (-): double; }
+    settings { n: int(-) = 4; }
+    inputs   { u [param.n]: double(m); }
+    outputs  { y: double(m); }
+    states   { continuous ok [param.n]: double(m) = 0.0; }
+    vars     { fine [param.n]: double(-); }
 
     derivative() { der.ok[0] = 1.0; }
     output() { out.y = state.ok[0]; }

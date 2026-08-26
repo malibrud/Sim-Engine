@@ -7,7 +7,7 @@
 package tests;
 
 node UnitParams {
-    outputs { y (m/s): double; }
+    outputs { y: double(m/s); }
 
     structure {
         node hp  : Section   (m/s^2) { wn = 3.1; zeta = 1.4; };
@@ -22,11 +22,11 @@ node UnitParams {
 // its rate tap is one time-derivative down.
 node Section {
     units    { U; }
-    settings { wn (rad/s): double; zeta (-): double; }
-    inputs   { x (U): double; }
-    outputs  { y (U): double; y_dot (U/s): double; }
-    states   { discrete w1 (-): double = 0.0;
-               discrete w2 (-): double = 0.0; }
+    settings { wn: double(rad/s); zeta: double(-); }
+    inputs   { x: double(U); }
+    outputs  { y: double(U); y_dot: double(U/s); }
+    states   { discrete w1: double(-) = 0.0;
+               discrete w2: double(-) = 0.0; }
 
     output(x)  { out.y = in.x; out.y_dot = 0.0; }
     next(x) { next.w1 = in.x; next.w2 = state.w1; }
@@ -36,9 +36,9 @@ node Section {
 // what makes mis-wiring a velocity into a position port a hard error.
 node Integrate {
     units   { U; }
-    inputs  { x (U): double; }
-    outputs { y (U*s): double; }
-    states  { discrete a (-): double = 0.0; }
+    inputs  { x: double(U); }
+    outputs { y: double(U*s); }
+    states  { discrete a: double(-) = 0.0; }
 
     output()   { out.y = state.a; }
     next(x) { next.a = state.a + in.x; }

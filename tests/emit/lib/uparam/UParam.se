@@ -5,7 +5,7 @@
 package uparam;
 
 node UParam {
-    outputs { y (m/s): double; }
+    outputs { y: double(m/s); }
 
     structure {
         node src : Ramp                {};
@@ -25,8 +25,8 @@ node UParam {
 }
 
 node Ramp {
-    outputs { y (m/s^2): double; }
-    states  { discrete t (-): double = 0.0; }
+    outputs { y: double(m/s^2); }
+    states  { discrete t: double(-) = 0.0; }
 
     output()   { out.y = state.t; }
     next()  { next.t = state.t + 1.0; }
@@ -37,12 +37,12 @@ node Section {
     units    { U; }
     // A setting may be declared IN the unit parameter — this is what a scale
     // block's limit needs, and it means the binding converts per instance.
-    settings { k (-): double = 1.0;
-               limit (U): double = 100.0;
+    settings { k: double(-) = 1.0;
+               limit: double(U) = 100.0;
                // §10.4 — no `rate` declared, so this is the base step.
-               fs (Hz): double = sample_rate; }
-    inputs   { x (U): double; }
-    outputs  { y (U): double; }
+               fs: double(Hz) = sample_rate; }
+    inputs   { x: double(U); }
+    outputs  { y: double(U); }
 
     output(x) { out.y = param.k * in.x; }
 }
@@ -52,13 +52,13 @@ node Section {
 // wrong rate are silently wrong, which is the whole reason these exist.
 node Decimated {
     units    { U; }
-    settings { rate (Hz): double = 200.0;
-               fs   (Hz): double = sample_rate;
-               dt   (s):  double = time_step;
+    settings { rate: double(Hz) = 200.0;
+               fs: double(Hz) = sample_rate;
+               dt: double(s) = time_step;
                // The two spellings must agree by construction.
-               unity (-): double = sample_rate * time_step; }
-    inputs   { x (U): double; }
-    outputs  { y (U): double; }
+               unity: double(-) = sample_rate * time_step; }
+    inputs   { x: double(U); }
+    outputs  { y: double(U); }
 
     output(x) { out.y = param.unity * in.x; }
 }
@@ -67,9 +67,9 @@ node Decimated {
 // this node is checked against a unit nobody wrote down.
 node Integrate {
     units   { U; }
-    inputs  { x (U): double; }
-    outputs { y (U*s): double; }
-    states  { discrete a (-): double = 0.0; }
+    inputs  { x: double(U); }
+    outputs { y: double(U*s); }
+    states  { discrete a: double(-) = 0.0; }
 
     output()   { out.y = state.a; }
     next(x) { next.a = state.a + in.x; }

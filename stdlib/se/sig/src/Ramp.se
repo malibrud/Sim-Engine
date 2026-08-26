@@ -15,18 +15,18 @@ node Ramp {
     units { U; }
 
     settings {
-        slope   (U/s): double;              // required
-        initial (U):   double = 0.0;
-        t_start (s):   double = 0.0;
+        slope: double(U/s);              // required
+        initial: double(U) = 0.0;
+        t_start: double(s) = 0.0;
 
-        rate (Hz): double = sample_rate;
+        rate: double(Hz) = sample_rate;
     }
 
-    outputs { y (U): double; }
+    outputs { y: double(U); }
 
-    states { discrete t (s): double = 0.0; }
+    states { discrete t: double(s) = 0.0; }
 
-    vars { ts (s): double; }
+    vars { ts: double(s); }
 
     init() { var.ts = 1.0 / param.rate; }
 

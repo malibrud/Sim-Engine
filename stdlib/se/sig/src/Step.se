@@ -17,30 +17,30 @@ node Step {
     units { U; }
 
     settings {
-        initial (U): double = 0.0;
+        initial: double(U) = 0.0;
         // Not `final`: that is a reserved word (Appendix B) — the teardown
         // lifecycle method — so the far end of the step is `target`.
-        target  (U): double = 1.0;
-        t_step  (s): double = 0.0;
+        target: double(U) = 1.0;
+        t_step: double(s) = 0.0;
 
         // Reserved (§6.2): declared so an instance may be re-rated, defaulting
         // to the base step. `sample_rate` reads the base rate here — the
         // reserved setting is resolved before any other, so this is not
         // circular (§10.4).
-        rate (Hz): double = sample_rate;
+        rate: double(Hz) = sample_rate;
     }
 
-    outputs { y (U): double; }
+    outputs { y: double(U); }
 
     // Elapsed time. Public surface: the IC channel reaches it (§13.4), so a
     // sim file can start a run with the step already past.
-    states { discrete t (s): double = 0.0; }
+    states { discrete t: double(s) = 0.0; }
 
     // The node's own sample period. A `var` rather than a setting: `param.rate`
     // already carries the rate, and a second `ts` setting would put a derived
     // duplicate of it in the configuration schema (§15.6) for a reader to
     // override out of sync.
-    vars { ts (s): double; }
+    vars { ts: double(s); }
 
     init() { var.ts = 1.0 / param.rate; }
 

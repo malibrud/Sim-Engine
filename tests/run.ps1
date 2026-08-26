@@ -395,6 +395,37 @@ if (-not $cl) {
         }
     }
 
+    # SPECIFICATION 5.2 -- a record wire converts field by field, the same way a
+    # scalar port does. RecConv drives 1000/2000/3000 mm through a Vec3(m) port
+    # and sums the three, so the recorded column is 6 exactly. Drop the
+    # conversion and it reads 6000, so this is a real check and not a smoke test.
+    if ($emitDirs.ContainsKey('RecConv')) {
+        $rcDir = $emitDirs['RecConv']
+        Push-Location $rcDir
+        & '.\RecConv.exe' 2>&1 | Out-Null
+        $ran = ($LASTEXITCODE -eq 0)
+        Pop-Location
+        $worst = [double]::PositiveInfinity
+        $csv = Join-Path $rcDir 'recconv.csv'
+        if ($ran -and (Test-Path $csv)) {
+            $worst = 0.0
+            foreach ($line in (Get-Content $csv | Select-Object -Skip 1)) {
+                if (-not $line) { continue }
+                $err = [Math]::Abs([double]($line -split ',')[1] - 6.0)
+                if ($err -gt $worst) { $worst = $err }
+            }
+        }
+        if ($worst -lt 1e-12) {
+            Write-Host ("ok   build/emit/RecConv : Vec3(mm) into Vec3(m) converts " +
+                        "per field") -ForegroundColor Green
+            $script:pass++
+        } else {
+            Write-Host ("FAIL build/emit/RecConv : expected 6 m, off by " + $worst) `
+                -ForegroundColor Red
+            $script:fail++
+        }
+    }
+
     # ArrSt is the array-state model (SPEC 6.4a): three independent decays in
     # ONE continuous array state, a scalar continuous state beside them in the
     # same block, a discrete array state used as a shift register, and a scalar

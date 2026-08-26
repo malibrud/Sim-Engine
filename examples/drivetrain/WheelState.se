@@ -8,7 +8,7 @@ package drivetrain;
 //     name: TypeName;       // record
 // One grammar, two shapes.
 type WheelState {
-    speed  (rad/s): double;   // wheel angular velocity
-    torque (N*m):   double;   // net torque applied this step
-    slip   (-):     double;   // longitudinal slip ratio (dimensionless)
+    speed: double(rad/s);   // wheel angular velocity
+    torque: double(N*m);   // net torque applied this step
+    slip: double(-);   // longitudinal slip ratio (dimensionless)
 }

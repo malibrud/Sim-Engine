@@ -2,10 +2,10 @@
 package tests;
 
 node Bad {
-    outputs { y (m/s): double; }
+    outputs { y: double(m/s); }
     states {
-        omega (rad/s): double = 0.0;
-        continuous ok (m): double = 1.0;
+        omega: double(rad/s) = 0.0;
+        continuous ok: double(m) = 1.0;
     }
     derivative()  { der.ok = 1.0; }
     output() { out.y = state.ok; }

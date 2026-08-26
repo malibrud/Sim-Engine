@@ -3,7 +3,7 @@ model-file
   package tests
   node UnitParams  [line 9]  kind=composite
     outputs
-      y (m/s): double
+      y: double(m/s)
     structure
       node hp : Section (m/s^2)
         wn = 3.1
@@ -15,16 +15,16 @@ model-file
     units
       U
     settings
-      wn (rad/s): double  [required]
-      zeta (-): double  [required]
+      wn: double(rad/s)  [required]
+      zeta: double(-)  [required]
     inputs
-      x (U): double
+      x: double(U)
     outputs
-      y (U): double
-      y_dot (U/s): double
+      y: double(U)
+      y_dot: double(U/s)
     states
-      discrete   w1 (-): double ic=0.0
-      discrete   w2 (-): double ic=0.0
+      discrete   w1: double(-) ic=0.0
+      discrete   w2: double(-) ic=0.0
     output(x)   [feedthrough]
       body @line 31 (32 bytes): "out.y = in.x; out.y_dot = 0.0;"
     next(x)
@@ -33,11 +33,11 @@ model-file
     units
       U
     inputs
-      x (U): double
+      x: double(U)
     outputs
-      y (U*s): double
+      y: double(U*s)
     states
-      discrete   a (-): double ic=0.0
+      discrete   a: double(-) ic=0.0
     output()   [no feedthrough — sort root]
       body @line 43 (18 bytes): "out.y = state.a;"
     next(x)

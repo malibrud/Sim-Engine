@@ -1,7 +1,7 @@
 ﻿error[SE0234]: a record field may not carry an extent
  --> tests/err/extent.se:7:7
   |
-7 |     v [3] (m/s): double;
+7 |     v [3]: double(m/s);
   |       ^^^ arrays are not permitted here
   = note: a port and a record field both live in the signal block, whose offsets come from `offsetof` — a run-time-sized member would destroy that (§15.5)
   = note: only a state and a var may be array-shaped (§6.4a)
@@ -10,7 +10,7 @@
 error[SE0234]: an input port may not carry an extent
   --> tests/err/extent.se:12:18
    |
-12 |     inputs   { u [param.n] (m): double; }
+12 |     inputs   { u [param.n]: double(m); }
    |                  ^^^^^^^^^ arrays are not permitted here
    = note: a port and a record field both live in the signal block, whose offsets come from `offsetof` — a run-time-sized member would destroy that (§15.5)
    = note: only a state and a var may be array-shaped (§6.4a)

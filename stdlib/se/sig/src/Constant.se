@@ -11,9 +11,9 @@ package se.sig.src;
 node Constant {
     units { U; }
 
-    settings { value (U): double = 0.0; }
+    settings { value: double(U) = 0.0; }
 
-    outputs { y (U): double; }
+    outputs { y: double(U); }
 
     // No inputs, so `output()` takes an empty list and the node is a sort root
     // (§8.5): it needs no predecessor and can break an algebraic loop.

@@ -2,9 +2,9 @@
 model-file
   package tests
   type Telemetry  [line 4]
-    torque (N*m): double
-    ok (-): bool
+    torque: double(N*m)
+    ok: bool
     stamp: Sample
   type Sample  [line 11]
-    t (s): double
-    n (-): int
+    t: double(s)
+    n: int(-)

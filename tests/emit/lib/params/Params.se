@@ -5,9 +5,9 @@ package params;
 // integer divisor of the base step (SE0450).
 node Params {
     settings {
-        total_mass (kg): double = 1500.0;
+        total_mass: double(kg) = 1500.0;
     }
-    outputs { y (-): double; }
+    outputs { y: double(-); }
 
     structure {
         node needy : Needy {};                    // SE0420: `mass` is required
@@ -19,23 +19,23 @@ node Params {
 }
 
 node Needy {
-    settings { mass (kg): double; }               // no default => required
-    outputs  { q (-): double; }
+    settings { mass: double(kg); }               // no default => required
+    outputs  { q: double(-); }
     output() { out.q = param.mass; }
 }
 
 node Ring {
     settings {
-        a (-): double = param.b + 1.0;
-        b (-): double = param.c * 2.0;
-        c (-): double = param.a - 1.0;
+        a: double(-) = param.b + 1.0;
+        b: double(-) = param.c * 2.0;
+        c: double(-) = param.a - 1.0;
     }
-    outputs  { z (-): double; }
+    outputs  { z: double(-); }
     output() { out.z = param.a; }
 }
 
 node Slow {
-    settings { rate (Hz): double = 100.0; }
-    outputs  { z (-): double; }
+    settings { rate: double(Hz) = 100.0; }
+    outputs  { z: double(-); }
     output() { out.z = 0.0; }
 }

@@ -3,21 +3,21 @@ package drivetrain;
 // Continuous producer: integrates wheel speed, packs a WheelState record.
 node Wheel {
     settings {
-        inertia (kg*m^2): double = 0.9;
-        radius  (m):      double = 0.31;
+        inertia: double(kg*m^2) = 0.9;
+        radius: double(m) = 0.31;
     }
     inputs {
-        drive_torque (N*m): double;   // from the driveline
-        ground_speed (m/s): double;   // vehicle longitudinal speed
+        drive_torque: double(N*m);   // from the driveline
+        ground_speed: double(m/s);   // vehicle longitudinal speed
     }
     outputs {
         ws: WheelState;               // the whole record leaves on one wire
     }
     states {
-        continuous omega (rad/s): double = 0.0;
+        continuous omega: double(rad/s) = 0.0;
     }
     vars {
-        inertia_inv (1/(kg*m^2)): double;
+        inertia_inv: double(1/(kg*m^2));
     }
 
     init() {

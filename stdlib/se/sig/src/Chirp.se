@@ -25,30 +25,30 @@ node Chirp {
     units { U; }
 
     settings {
-        amplitude (U):  double = 1.0;
-        f0        (Hz): double = 0.1;
-        f1        (Hz): double = 10.0;
-        sweep     (s):  double = 10.0;    // time to travel from f0 to f1
-        offset    (U):  double = 0.0;
+        amplitude: double(U) = 1.0;
+        f0: double(Hz) = 0.1;
+        f1: double(Hz) = 10.0;
+        sweep: double(s) = 10.0;    // time to travel from f0 to f1
+        offset: double(U) = 0.0;
 
         // Restart the sweep at `sweep` rather than running past `f1`.
         //
         // Defaulted `= 1`, not `= true`: the elaboration expression language
         // (§7.1) has no boolean literal, and a nonzero number renders as
         // `true`. This is not a typo to be tidied.
-        repeat (-): bool = 1;
+        repeat: bool = 1;
 
-        rate (Hz): double = sample_rate;
+        rate: double(Hz) = sample_rate;
     }
 
-    outputs { y (U): double; }
+    outputs { y: double(U); }
 
     // Elapsed time within the current sweep.
-    states { discrete t (s): double = 0.0; }
+    states { discrete t: double(s) = 0.0; }
 
     vars {
-        ts (s):  double;
-        kq (Hz): double;      // (f1 - f0) / (2 * sweep) -- the quadratic term
+        ts: double(s);
+        kq: double(Hz);      // (f1 - f0) / (2 * sweep) -- the quadratic term
     }
 
     init() {

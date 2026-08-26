@@ -14,7 +14,7 @@ use se.sig.ct;
 node Vec3Chk {
     outputs {
         speed:  math.Vec3(m/s);
-        mag     (m/s):     double;
+        mag: double(m/s);
         tangent: math.Vec3(rad*m/s);
     }
 

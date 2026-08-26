@@ -2,13 +2,13 @@
 package tests;
 
 type Telemetry {
-    torque (N*m): double;   // scalar field
-    ok     (-):   bool;     // bool must be dimensionless
+    torque: double(N*m);   // scalar field
+    ok: bool;     // bool must be dimensionless
     stamp: Sample;          // a record field: same line shape, two forms
 }
 
 // File-private record.
 type Sample {
-    t (s): double;
-    n (-): int;
+    t: double(s);
+    n: int(-);
 }

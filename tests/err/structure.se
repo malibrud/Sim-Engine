@@ -3,16 +3,16 @@
 package tests;
 
 node Loose {
-    inputs  { u (-): double; }
-    outputs { y (-): double; }
+    inputs  { u: double(-); }
+    outputs { y: double(-); }
 
     node inner : Gain { k = 2.0; };
     self.u --> inner.u;
 }
 
 node MissingSemi {
-    inputs  { u (-): double; }
-    outputs { y (-): double; }
+    inputs  { u: double(-); }
+    outputs { y: double(-); }
 
     structure {
         node g : Gain { k = 2.0; }
@@ -20,8 +20,8 @@ node MissingSemi {
 }
 
 node BadEndpoint {
-    inputs  { u (-): double; }
-    outputs { y (-): double; }
+    inputs  { u: double(-); }
+    outputs { y: double(-); }
 
     structure {
         node g : Gain { k = 2.0; };

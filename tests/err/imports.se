@@ -4,7 +4,7 @@ package tests;
 use se.mech.*;
 
 node Fine {
-    outputs { y (-): double; }
+    outputs { y: double(-); }
     output() { out.y = 0.0; }
 }
 

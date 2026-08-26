@@ -486,8 +486,14 @@ void Emitter::leaf_class(const NodeInfo& node) {
         for (const std::string& p : meth.params) {
             const Field* f = node.input(p);
             if (!f) continue;
-            if (f->type.is_record) rows.push_back({"const " + cpp_type(f->type) + "&",
-                                                   p + ";", std::string()});
+            // By value, like a scalar input. A record used to alias the
+            // producer's storage through a reference, which left nowhere to
+            // apply a per-field unit conversion (§5.2); now both kinds of input
+            // are materialised in the callee's parameter block and both
+            // convert. The copy is the price, and it is three doubles for a
+            // `Vec3`.
+            if (f->type.is_record)
+                rows.push_back({cpp_type(f->type), p + ";", std::string()});
             else rows.push_back(field_row(p, f->type, "{}"));
         }
         emit_struct(o_, name.c_str(), rows,
@@ -598,6 +604,48 @@ std::string Emitter::input_expr(const Leaf& leaf, const std::string& port) const
                            ? s.boundary
                            : "sig." + m_.leaves[s.producer].ident + "." + s.port;
     if (!s.converts()) return expr;
+
+    // A record converts field by field, so it is rebuilt as a brace initialiser
+    // over the same depth-first order the elaborator flattened (§5.2). Walking
+    // `ports_in` rather than the definition's ports is what gives the concrete
+    // record type after unit substitution (§6.2a).
+    if (!s.field_convs.empty()) {
+        const Field* pf = nullptr;
+        for (const Field& f : leaf.ports_in)
+            if (f.name == port) { pf = &f; break; }
+        if (pf && pf->type.is_record) {
+            std::size_t k = 0;
+            std::function<std::string(const Type&, const std::string&)> build =
+                [&](const Type& t, const std::string& base) -> std::string {
+                std::string r = cpp_type(t) + "{";
+                for (std::size_t i = 0; i < t.record->fields.size(); ++i) {
+                    const Field& f = t.record->fields[i];
+                    const Type ft = field_type(t, f);
+                    const std::string sub_expr = base + "." + f.name;
+                    if (i) r += ", ";
+                    if (ft.is_record) {
+                        r += build(ft, sub_expr);
+                        continue;
+                    }
+                    if (k >= s.field_convs.size()) {
+                        r += sub_expr;
+                        continue;
+                    }
+                    const FieldConv& fc = s.field_convs[k++];
+                    if (!fc.converts()) {
+                        r += sub_expr;
+                        continue;
+                    }
+                    std::string v = sub_expr + " * " + dbl(fc.scale);
+                    if (fc.offset != 0.0) v += " + " + dbl(fc.offset);
+                    r += "(" + v + ")";
+                }
+                return r + "}";
+            };
+            return build(pf->type, expr);
+        }
+    }
+
     // The conversion the two declared units imply, folded to a constant. It
     // lands here because the `In` view is a copy anyway; nothing else in the
     // generated code ever needs conversion machinery.
@@ -1988,9 +2036,9 @@ std::string Emitter::topology() const {
         std::string r =
             dot == std::string::npos ? ty.record->fq : ty.record->fq.substr(dot + 1);
         // §5.2 — the binding, not just the type. `Vec3` alone would make two
-        // ports look interchangeable when `Vec3(m)` into `Vec3(m/s)` is
-        // SE0410: a record travels as one value and cannot be converted on the
-        // way through, so the arguments ARE part of what crosses the wire.
+        // ports look interchangeable when `Vec3(m)` into `Vec3(m/s)` is SE0410
+        // and `Vec3(mm)` into `Vec3(m)` silently scales every field, so the
+        // arguments ARE part of what crosses the wire.
         if (!ty.unit_args.empty()) {
             r += "(";
             for (std::size_t i = 0; i < ty.unit_args.size(); ++i)

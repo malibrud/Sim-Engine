@@ -441,14 +441,9 @@ bool Resolver::resolve_type(const FileInfo& file, const ast::TypeRef& ref, Type&
                               "`theta (rad): double = 90 (deg);`")});
             return false;
         }
-        // §5.1 — `bool` must be declared `(-)`. A scaled or dimensioned truth
-        // value is meaningless, and catching it here beats erasing it silently.
-        if (out.scalar == "bool" && !(out.unit.dimensionless() && out.unit.scale == 1.0)) {
-            diag_.error("SE0410", *file.src, ref.loc,
-                        "a `bool` must be declared `(-)`",
-                        "declared `(" + out.unit.str() + ")`");
-            return false;
-        }
+        // §5.1 — `bool` needs no rule here any more: it declares zero unit
+        // parameters, so the parser's arity check has already rejected any
+        // attempt to give it one.
         return true;
     }
     out.is_record = true;

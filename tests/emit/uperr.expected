@@ -25,7 +25,7 @@ error[SE0410]: incompatible units across a wire
 error[SE0430]: input `few.x` is not connected
   --> tests/emit/lib/uperr/UPErr.se:34:15
    |
-34 |     inputs  { x (U): double; }
+34 |     inputs  { x: double(U); }
    |               ^ declared here
    = note: an unconnected input is an error: there is no implicit zero (§6.3)
 

@@ -3,7 +3,7 @@
 package uperr;
 
 node UPErr {
-    outputs { y (m/s^2): double; }
+    outputs { y: double(m/s^2); }
 
     structure {
         node src : Ramp                {};
@@ -25,22 +25,22 @@ node UPErr {
 }
 
 node Ramp {
-    outputs { y (m/s^2): double; }
+    outputs { y: double(m/s^2); }
     output() { out.y = 1.0; }
 }
 
 node Section {
     units   { U; }
-    inputs  { x (U): double; }
-    outputs { y (U): double; }
+    inputs  { x: double(U); }
+    outputs { y: double(U); }
     output(x) { out.y = in.x; }
 }
 
 node Integrate {
     units   { U; }
-    inputs  { x (U): double; }
-    outputs { y (U*s): double; }
-    states  { discrete a (-): double = 0.0; }
+    inputs  { x: double(U); }
+    outputs { y: double(U*s); }
+    states  { discrete a: double(-) = 0.0; }
     output()   { out.y = state.a; }
     next(x) { next.a = state.a + in.x; }
 }

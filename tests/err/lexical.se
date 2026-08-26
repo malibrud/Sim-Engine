@@ -4,10 +4,10 @@ package tests;
 
 node Bad {
     settings {
-        a (-): double = 1e;
-        b (-): double = 2.0;
+        a: double(-) = 1e;
+        b: double(-) = 2.0;
     }
-    outputs { y (-): double; }
+    outputs { y: double(-); }
     build {
         define "unterminated
         link "bad\escape";

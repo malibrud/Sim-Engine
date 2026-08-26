@@ -14,12 +14,12 @@ node ScaleLimit {
     units { U; }
 
     settings {
-        gain  (-): double = 1.0;
-        limit (U): double;             // required: an unlimited scale is a Gain
+        gain: double(-) = 1.0;
+        limit: double(U);             // required: an unlimited scale is a Gain
     }
 
-    inputs  { x (U): double; }
-    outputs { y (U): double; }
+    inputs  { x: double(U); }
+    outputs { y: double(U); }
 
     output(x) {
         const double v = param.gain * in.x;

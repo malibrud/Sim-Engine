@@ -1416,9 +1416,11 @@ void Elaborator::instantiate(const NodeInfo* def, const std::string& path,
 // ═════════════════════════════════════════════════════════════════════════════
 
 bool Elaborator::port_conversion(const Field& from, const Field& to, const Source& src,
-                                 Loc loc, double& scale, double& offset) {
+                                 Loc loc, double& scale, double& offset,
+                                 std::vector<FieldConv>& field_convs) {
     scale = 1.0;
     offset = 0.0;
+    field_convs.clear();
     if (from.type.is_record != to.type.is_record) {
         diag_.error("SE0410", src, loc, "a record and a scalar cannot be wired together",
                     std::string(from.type.is_record ? "record -> scalar"
@@ -1426,37 +1428,69 @@ bool Elaborator::port_conversion(const Field& from, const Field& to, const Sourc
         return false;
     }
     if (from.type.is_record) {
-        // A record travels as one value, so the two ports must be the same
-        // record: per-field conversion would need a copy, and §15.3 says a
-        // wire is not its own variable.
+        // The two ends must be the same record: a wire carries the whole value,
+        // and there is no structural conversion between two different shapes.
         if (from.type.record != to.type.record) {
             diag_.error("SE0410", src, loc, "record types do not match",
                         "`" + from.type.record->fq + "` -> `" + to.type.record->fq + "`",
-                        {note("a wire carries the whole record and coincides with the "
-                              "producer's storage (§5.3, §15.3)")});
+                        {note("a wire carries the whole record (§5.3)")});
             return false;
         }
-        // §5.2 — two references to one parametric record are the same type only
-        // if they bound it the same way. `Vec3(m)` into `Vec3(m/s)` is the same
-        // mistake as `(m)` into `(m/s)` on a scalar port, and gets the same
-        // error: unlike a scalar it cannot be converted, because a record wire
-        // coincides with the producer's storage.
+        // §5.2 binds a parametric record's units at the REFERENCE, so the two
+        // ends may have bound them differently. Differing *scales* are what the
+        // per-field walk below converts; differing *dimensions* are an error,
+        // and it belongs on the argument rather than on each field it reaches —
+        // one wrong argument to `Vec3` is one mistake, not three.
+        bool args_ok = true;
         for (std::size_t i = 0; i < from.type.unit_args.size(); ++i) {
             const Unit& a = from.type.unit_args[i];
             const Unit& b = to.type.unit_args[i];
-            if (compatible(a, b) && a.scale == b.scale) continue;
+            if (compatible(a, b)) continue;
             const std::string& pname = from.type.record->unit_params[i];
-            diag_.error("SE0410", src, loc,
-                        "incompatible unit arguments across a wire",
+            diag_.error("SE0410", src, loc, "incompatible unit arguments across a wire",
                         "`(" + a.str() + ")` -> `(" + b.str() + ")`",
-                        {note("both ports are `" + from.type.record->fq +
-                              "`, but bound `" + pname + "` differently"),
-                         note("a record travels as one value and is not copied "
-                              "(§15.3), so its fields cannot be converted per wire "
-                              "the way a scalar's can")});
-            return false;
+                        {note("both ports are `" + from.type.record->fq + "`, but bound `" +
+                              pname + "` differently"),
+                         note("source is " + a.dim_str()),
+                         note("destination is " + b.dim_str())});
+            args_ok = false;
         }
-        return true;
+        if (!args_ok) return false;
+
+        // Compatible arguments, so every field derived from them is compatible
+        // too and converts on its own terms — exactly as a scalar port does.
+        // `field_type()` performs the substitution, including threading a nested
+        // record's arguments down. The per-field error below is a backstop for a
+        // field whose unit does not come from the arguments at all.
+        bool ok = true;
+        std::function<void(const Type&, const Type&, const std::string&)> walk =
+            [&](const Type& a, const Type& b, const std::string& prefix) {
+                for (const Field& f : a.record->fields) {
+                    const Type af = field_type(a, f);
+                    const Type bf = field_type(b, f);
+                    const std::string name = prefix.empty() ? f.name : prefix + "." + f.name;
+                    if (af.is_record) {
+                        walk(af, bf, name);
+                        continue;
+                    }
+                    if (!compatible(af.unit, bf.unit)) {
+                        diag_.error(
+                            "SE0410", src, loc, "incompatible units across a wire",
+                            "`(" + af.unit.str() + ")` -> `(" + bf.unit.str() + ")`",
+                            {note("field `" + name + "` of `" + a.record->fq + "`"),
+                             note("source is " + af.unit.dim_str()),
+                             note("destination is " + bf.unit.dim_str())});
+                        ok = false;
+                        continue;
+                    }
+                    FieldConv fc;
+                    fc.scale = af.unit.scale / bf.unit.scale;
+                    fc.offset = (af.unit.offset - bf.unit.offset) / bf.unit.scale;
+                    field_convs.push_back(fc);
+                }
+            };
+        walk(from.type, to.type, "");
+        return ok;
     }
     if (!compatible(from.type.unit, to.type.unit)) {
         diag_.error("SE0410", src, loc, "incompatible units across a wire",
@@ -1566,7 +1600,7 @@ void Elaborator::collect_wires(const NodeInfo* def, const std::string& path, Mod
             hop.source = skey;
             hop.loc = d.loc;
             hop.src = &src;
-            if (!port_conversion(sf, df, src, d.loc, hop.scale, hop.offset))
+            if (!port_conversion(sf, df, src, d.loc, hop.scale, hop.offset, hop.field_convs))
                 failed_ = true;
 
             auto existing = producers_.find(dkey);
@@ -1636,6 +1670,21 @@ void Elaborator::resolve_inputs(Model& m) {
             }
             in.scale = s;
             in.offset = o;
+
+            // A record's fields compose the same way, element-wise. Every hop
+            // on one chain carries the same record type (port_conversion has
+            // already rejected any that does not), so the vectors agree in
+            // length; a hop that reported none simply leaves the identity.
+            for (std::size_t j = chain.size(); j-- > 0;) {
+                const std::vector<FieldConv>& hop = chain[j]->field_convs;
+                if (hop.empty()) continue;
+                if (in.field_convs.empty()) in.field_convs.resize(hop.size());
+                for (std::size_t f = 0; f < hop.size() && f < in.field_convs.size(); ++f) {
+                    in.field_convs[f].scale = hop[f].scale * in.field_convs[f].scale;
+                    in.field_convs[f].offset =
+                        hop[f].scale * in.field_convs[f].offset + hop[f].offset;
+                }
+            }
             leaf.inputs[port.name] = in;
         }
     }

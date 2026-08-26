@@ -6,8 +6,8 @@ package loop;
 // honest — the message must name the cycle, name each offending parameter with
 // a file and line, and state the fix.
 node Loop {
-    inputs  { setpoint (-): double; }
-    outputs { y        (-): double; }
+    inputs  { setpoint: double(-); }
+    outputs { y: double(-); }
 
     structure {
         node ctl : Controller {};
@@ -21,18 +21,18 @@ node Loop {
 }
 
 node Controller {
-    settings { kp (-): double = 2.0; }
-    inputs   { r (-): double;  fb (-): double; }
-    outputs  { cmd (-): double; }
+    settings { kp: double(-) = 2.0; }
+    inputs   { r: double(-);  fb: double(-); }
+    outputs  { cmd: double(-); }
 
     // Direct (Mealy) form: zero added latency, but a feedthrough node.
     output(r, fb) { out.cmd = param.kp * (in.r - in.fb); }
 }
 
 node Actuator {
-    settings { g (-): double = 0.5; }
-    inputs   { u (-): double; }
-    outputs  { f (-): double; }
+    settings { g: double(-) = 0.5; }
+    inputs   { u: double(-); }
+    outputs  { f: double(-); }
 
     output(u) { out.f = param.g * in.u; }
 }

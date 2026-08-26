@@ -7,7 +7,7 @@ use se.math;
 node Merge3 {
     units { U; }
 
-    inputs  { x (U): double;  y (U): double;  z (U): double; }
+    inputs  { x: double(U);  y: double(U);  z: double(U); }
     outputs { v: math.Vec3(U); }
 
     output(x, y, z) {

@@ -1,7 +1,7 @@
 ﻿error[SE0220]: duplicate `settings` section
  --> tests/err/sections.se:7:5
   |
-7 |     settings { b (-): double = 2.0; }
+7 |     settings { b: double(-) = 2.0; }
   |     ^^^^^^^^ already declared
   = note: `settings` first appears on line 5
   = note: a section may appear at most once, so its contents are always contiguous and reviewable in one place (§6)
@@ -9,7 +9,7 @@
 error[SE0221]: unknown section `state`
  --> tests/err/sections.se:9:5
   |
-9 |     state { x (-): double = 0.0; }
+9 |     state { x: double(-) = 0.0; }
   |     ^^^^^
   = help: did you mean `states`?
   = note: the sections are settings, inputs, outputs, states, vars, native, declarations, build, structure (§6)

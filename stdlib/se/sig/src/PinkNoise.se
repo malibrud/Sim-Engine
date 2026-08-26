@@ -29,34 +29,34 @@ node PinkNoise {
     units { U; }
 
     settings {
-        sigma (U): double = 1.0;      // standard deviation of the OUTPUT
-        mean  (U): double = 0.0;
+        sigma: double(U) = 1.0;      // standard deviation of the OUTPUT
+        mean: double(U) = 0.0;
 
-        f_lo (Hz): double = 1.0;      // below this the spectrum flattens
-        f_hi (Hz): double = 1000.0;   // above this it flattens too
+        f_lo: double(Hz) = 1.0;      // below this the spectrum flattens
+        f_hi: double(Hz) = 1000.0;   // above this it flattens too
 
-        seed (-): int = 12345;
+        seed: int(-) = 12345;
 
-        rate (Hz): double = sample_rate;
+        rate: double(Hz) = sample_rate;
     }
 
-    outputs { y (U): double; }
+    outputs { y: double(U); }
 
     states {
-        discrete k (-): int = 0;
+        discrete k: int(-) = 0;
 
         // One per section. `(-)` because a canonical filter state has no honest
         // unit when the gains carry none -- the same reason `dt.Biquad`'s Direct
         // Form II states are dimensionless. Public surface: these are the slot
         // names an IC override addresses.
-        discrete s0 (-): double = 0.0;
-        discrete s1 (-): double = 0.0;
-        discrete s2 (-): double = 0.0;
+        discrete s0: double(-) = 0.0;
+        discrete s1: double(-) = 0.0;
+        discrete s2: double(-) = 0.0;
     }
 
     vars {
-        p0 (-): double;  p1 (-): double;  p2 (-): double;   // pole coefficients
-        g  (-): double;                                     // output normalisation
+        p0: double(-);  p1: double(-);  p2: double(-);   // pole coefficients
+        g: double(-);                                     // output normalisation
     }
 
     declarations {

@@ -18,8 +18,8 @@ use se.sig.ct;
 
 node ContBq {
     outputs {
-        lp_y (-): double;
-        hp_y (-): double;
+        lp_y: double(-);
+        hp_y: double(-);
     }
 
     structure {
@@ -45,7 +45,7 @@ node ContBq {
 // File-private: a unit step that is already high at t = 0, so the closed forms
 // hold from the first sample. Purely algebraic — no states, so no next().
 node Step {
-    outputs { u (-): double; }
+    outputs { u: double(-); }
 
     output() { out.u = 1.0; }
 }

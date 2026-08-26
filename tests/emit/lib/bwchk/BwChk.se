@@ -20,9 +20,9 @@ use se.sig.dt;
 
 node BwChk {
     outputs {
-        drive (m/s^2): double;    // the source, for reference
-        even  (m/s^2): double;    // 4th order
-        odd   (m/s^2): double;    // 5th order — exercises the real pole
+        drive: double(m/s^2);    // the source, for reference
+        even: double(m/s^2);    // 4th order
+        odd: double(m/s^2);    // 5th order — exercises the real pole
     }
 
     structure {

@@ -7,11 +7,11 @@
 // fields. That is exactly what a unit parameter is for (§5.2, §6.2a).
 //
 // The binding is per REFERENCE, not per instance, because a type is never
-// instantiated. Two ports that bound `U` differently are different types, and
-// wiring one into the other is `SE0410` -- the same error a scalar `(m)` into
-// `(m/s)` gets, and for a stronger reason: a record travels as one value and
-// coincides with the producer's storage (§15.3), so unlike a scalar it cannot
-// be converted on the way through.
+// instantiated. Two ports that bound `U` COMPATIBLY convert, field by field and
+// exactly as a scalar port does: `Vec3(mm)` into `Vec3(m)` folds a factor of
+// 1/1000 into each field at elaboration (§5.2). Two that bound it to different
+// DIMENSIONS are `SE0410` -- the same error a scalar `(m)` into `(m/s)` gets,
+// reported once against the argument rather than once per field.
 //
 // COORDINATE CONVENTION -- SAE, right-handed, as the field comments state. This
 // is documentation and nothing else: the compiler does not model frames, and it
@@ -29,7 +29,7 @@ package se.math;
 type Vec3 {
     units { U; }
 
-    x (U): double;   // points forward for a body frame, north for a global one
-    y (U): double;   // points right for a body frame, east for a global one
-    z (U): double;   // points down, in both
+    x: double(U);   // points forward for a body frame, north for a global one
+    y: double(U);   // points right for a body frame, east for a global one
+    z: double(U);   // points down, in both
 }

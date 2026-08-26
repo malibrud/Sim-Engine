@@ -420,6 +420,34 @@ Examples, all from working models:
 `(deg)` and `(rpm)` are well-formed unit expressions, but they may appear only as
 a literal suffix or a display unit — never as a *declared* unit. See §4.5.
 
+**Where a unit may appear.** Two roles, and one shape for each:
+
+| Role | Sites (§17) | Form | Accepts |
+|---|---|---|---|
+| **Argument** binding a `units { }` parameter | `type_ref` on a `setting`, port, state, var or record field; `unit_args` on an instance | `Path(u1, u2, …)` | zero, one or N, per the target's `units` section |
+| **Suffix** on a numeric literal | `primary` | `315 (mm)` | the full unit language, `deg` and `rpm` included |
+
+`units { U; }` is the third site and the only one containing no unit expression:
+it *declares* the parameters the argument role binds.
+
+**A scalar type is unit-parametric like any other.** `double`, `float` and `int`
+each take exactly one unit argument; `bool` takes none, having no dimension to
+carry. So `limit: double(m/s)` and `force: math.Vec3(N)` are the same
+construct — a type reference with its units bound at the reference — and the
+declaration grammar has one production rather than a scalar shape and a record
+shape (§5.1).
+
+That uniformity is not only cosmetic. **Compatible units convert at every wire**,
+whatever the type: `(mm)` into `(m)` folds a factor of 1000 at elaboration
+(§4.2), and `Vec3(mm)` into `Vec3(m)` folds the same factor into each field. The
+one thing that never converts is a *dimension* — `(m)` into `(m/s)` is `SE0410`,
+and so is `Vec3(m)` into `Vec3(m/s)`, reported once against the offending
+argument rather than once per field it reaches.
+
+The two roles still differ in what they accept, which is the last column: a
+declared unit may not name `deg`, `rev` or `rpm` (§4.5), while a literal suffix
+may.
+
 ### 4.2 Dimensions and equivalence
 
 A unit expression evaluates to a **dimension** — a rational exponent vector over
@@ -501,7 +529,10 @@ on a `(deg)` accessor is silently wrong and *no* dimensional system catches it.
 Therefore **a declared unit may not contain a non-radian angle unit**: `(deg)`,
 `(rpm)`, and `(deg/s)` are legal as literal suffixes and as display units, and
 illegal as the declared unit of a setting, state, port, or field (`SE0415`).
-Writing `theta (rad): double = 90 (deg);` is correct and converts at elaboration.
+Writing `theta: double(rad) = 90 (deg);` is correct and converts at elaboration.
+In §4.1's terms the restriction lands on the **argument** role alone; the literal
+suffix and display roles keep the full unit language, which is exactly what makes
+that line spellable.
 
 **Why this is nearly free here.** The identities that normally make angle-as-a-
 dimension expensive — `v = ωr`, `τ = Iα` — live *only inside bodies*, where
@@ -531,13 +562,31 @@ The scalar type set is closed:
 | `double` | `double` | The only type permitted for a `continuous` state. |
 | `float` | `float` | |
 | `int` | `int` | |
-| `bool` | `bool` | Must be declared `(-)`. |
+| `bool` | `bool` | Takes no unit argument: a truth value has no dimension. |
 
-A scalar declaration is always `name (unit): type;` — the unit is not optional,
-and `(-)` is how you spell dimensionless. Requiring it makes an omission a syntax
-error rather than an unnoticed dimensionless default.
+**Every declaration has one shape**, `name: Type(units);`, whether `Type` is a
+scalar or a record (§5.2):
 
-**A `state` or a `var` may carry an extent** — `name [n] (unit): type;` — making
+```
+gain:   double(-)     = 1.0;
+limit:  double(m/s^2);
+ticks:  int(-)        = 0;
+ok:     bool;
+force:  math.Vec3(N);
+```
+
+A scalar type is unit-parametric like any other type. `double`, `float` and `int`
+declare exactly one unit parameter, so the argument is not optional and `(-)` is
+how you spell dimensionless; omitting it is `SE0205` at parse time, not an
+unnoticed dimensionless default. `bool` declares none, so `ok: bool(-)` is the
+same arity error from the other side. Nothing about `bool` needs a rule of its
+own — the arity check it shares with every other type is the whole of it.
+
+The payoff is in §5.2 and §4.1: because a scalar and a record are the same
+construct, **compatible units convert at every wire** rather than at scalar wires
+only, and the language has one rule to state instead of a rule and an exception.
+
+**A `state` or a `var` may carry an extent** — `name [n]: type(unit);` — making
 it an array of that scalar type (§6.4, §6.5). The scalar type set is unchanged;
 an extent is a property of the declaration, not a new type. Ports, settings,
 record fields and natives may not carry one (`SE0234`).
@@ -551,22 +600,22 @@ A `type` declaration defines a record that travels over a wire as one value:
 package drivetrain;
 
 type WheelState {
-    speed  (rad/s): double;   // wheel angular velocity
-    torque (N*m):   double;   // net torque applied this step
-    slip   (-):     double;   // longitudinal slip ratio
+    speed:  double(rad/s);   // wheel angular velocity
+    torque: double(N*m);     // net torque applied this step
+    slip:   double(-);       // longitudinal slip ratio
 }
 ```
 
-- A record field line is **syntactically identical to a scalar port line**, so a
-  port is either `name (unit): ctype;` or `name: TypeName;`. One grammar, two
-  shapes.
+- A record field line is **identical to a scalar port line**, because a scalar
+  type is itself unit-parametric (§5.1): every declaration is
+  `name: Type(units);` and only the name of the type differs.
 - **A record may be parametric over its field units**, with the same `units { U; }`
   section a node uses (§6.2a):
 
   ```
   type Vec3 {
       units { U; }
-      x (U): double;  y (U): double;  z (U): double;
+      x: double(U);  y: double(U);  z: double(U);
   }
   ```
 
@@ -574,18 +623,22 @@ type WheelState {
   `Vec3(rad/s)`. **The binding site is every reference, not an instantiation** —
   a type is never instantiated — so the arguments ride the port declaration:
   `force: math.Vec3(N);`. Arity is checked there (`SE0313`).
-- **Two references that bound a record differently are different types.** Wiring
-  `Vec3(m)` into `Vec3(m/s)` is `SE0410`, matching §6.2a's rule for
-  differently-bound node instances. Unlike a scalar port it cannot be *converted*
-  on the way through: a record travels as one value and coincides with the
-  producer's storage (§15.3).
+- **A record converts field by field, exactly as a scalar port does.** Wiring
+  `Vec3(mm)` into `Vec3(m)` is legal: the arguments are dimensionally compatible,
+  so each field picks up the same factor of 1/1000, folded at elaboration and
+  applied where the value is read into the consumer's view (§15.3). There is no
+  scalar-only conversion rule to remember.
+- **Dimensions still never convert.** `Vec3(m)` into `Vec3(m/s)` is `SE0410`,
+  matching §6.2a's rule for differently-bound node instances and the plain `(m)`
+  into `(m/s)` on a scalar port. One wrong argument is one mistake, so it is
+  reported against the argument rather than against each field it reaches.
 - **Arguments may be unit expressions over the referring node's own parameters.**
   Inside `units { P; Q; }` a port may read `c: math.Vec3(P*Q)`, which is what
   makes one `Cross3` cover every pair of dimensions instead of one per pair. Such
   an argument is itself parametric and is bound again when that node is
   instantiated.
 - **A parametric field threads down through nesting.** In
-  `type Pose { units { U; } p: Vec3(U); heading (rad): double; }` a reference to
+  `type Pose { units { U; } p: Vec3(U); heading: double(rad); }` a reference to
   `Pose(m)` substitutes into `Vec3` as well, so `p.x` reports `(m)`.
 - Fields may themselves be records; a cycle in the field graph is an error
   (`SE0310`).
@@ -666,9 +719,9 @@ a declaration that changes meaning.
 
 ```
 settings {
-    inertia     (kg*m^2): double;                           // required
-    radius      (m):      double = 0.31;                    // default
-    corner_mass (kg):     double = param.total_mass / 4.0;  // derived
+    inertia: double(kg*m^2);                           // required
+    radius: double(m) = 0.31;                    // default
+    corner_mass: double(kg) = param.total_mass / 4.0;  // derived
 }
 ```
 
@@ -712,7 +765,7 @@ count or wiring, should one ever be added; they are currently unreachable.
 **Reserved setting: `rate`.** A node may declare
 
 ```
-settings { rate (Hz): double = 200.0; }
+settings { rate: double(Hz) = 200.0; }
 ```
 
 `rate` is an ordinary setting in **every** respect — declared, defaulted, bound at
@@ -740,8 +793,8 @@ units as expressions over them:
 ```
 node Integrator {
     units    { U; }
-    inputs   { x (U):   double; }
-    outputs  { y (U*s): double; }
+    inputs   { x: double(U); }
+    outputs  { y: double(U*s); }
 }
 ```
 
@@ -898,11 +951,11 @@ deliberately does not cover them.
 
 ```
 inputs {
-    drive_torque (N*m): double;      // scalar port
+    drive_torque: double(N*m);      // scalar port
     ws:                 WheelState;  // record port
 }
 outputs {
-    torque_cut (N*m): double;
+    torque_cut: double(N*m);
 }
 ```
 
@@ -924,9 +977,9 @@ an output's from `output()`.
 
 ```
 states {
-    continuous omega (rad/s): double = 0.0;
-    discrete   cut   (N*m):   double = 0.0;
-    discrete   ticks (-):     int    = 0;
+    continuous omega: double(rad/s) = 0.0;
+    discrete   cut: double(N*m) = 0.0;
+    discrete   ticks: int(-)    = 0;
 }
 ```
 
@@ -969,12 +1022,12 @@ to the solver.
 A state may carry an **extent**, making it an array of `double`:
 
 ```
-settings { order (-): int = 4; }
-vars     { nbq (-): int; }
+settings { order: int(-) = 4; }
+vars     { nbq: int(-); }
 
 states {
-    discrete w1 [param.nbq] (-): double = 0.0;
-    discrete w2 [param.nbq] (-): double = 0.0;
+    discrete w1 [param.nbq]: double(-) = 0.0;
+    discrete w2 [param.nbq]: double(-) = 0.0;
 }
 ```
 
@@ -1029,24 +1082,24 @@ node Butterworth {
     units { U; }
 
     settings {
-        fc    (Hz): double = 2.0;                    // cutoff
-        order (-):  int    = 4;                      // filter order
-        nbq   (-):  int    = ceil(param.order / 2);  // sections, named once
-        rate  (Hz): double = 1000.0;                 // §6.2's reserved setting
+        fc: double(Hz) = 2.0;                    // cutoff
+        order: int(-)    = 4;                      // filter order
+        nbq: int(-)    = ceil(param.order / 2);  // sections, named once
+        rate: double(Hz) = 1000.0;                 // §6.2's reserved setting
     }
 
-    inputs  { x (U): double; }
-    outputs { y (U): double; }
+    inputs  { x: double(U); }
+    outputs { y: double(U); }
 
     states {                                         // Direct Form II, per section
-        discrete w1 [param.nbq] (-): double = 0.0;
-        discrete w2 [param.nbq] (-): double = 0.0;
+        discrete w1 [param.nbq]: double(-) = 0.0;
+        discrete w2 [param.nbq]: double(-) = 0.0;
     }
 
     vars {
-        a1 [param.nbq] (-): double;   a2 [param.nbq] (-): double;
-        b0 [param.nbq] (-): double;   b1 [param.nbq] (-): double;
-        b2 [param.nbq] (-): double;
+        a1 [param.nbq]: double(-);   a2 [param.nbq]: double(-);
+        b0 [param.nbq]: double(-);   b1 [param.nbq]: double(-);
+        b2 [param.nbq]: double(-);
     }
 
     // Pole placement and the bilinear transform, in C++ because that is where
@@ -1140,7 +1193,7 @@ had to be written a particular way to stay honest.
   going geometrically. Writing the section as first order costs one branch and
   removes the mode entirely. This is the shape `se.sig.dt.Butterworth` ships.
 
-**Narrowing to an `int` setting.** `nbq (-): int = ceil(param.order / 2);` binds
+**Narrowing to an `int` setting.** `nbq: int(-) = ceil(param.order / 2);` binds
 a §7 expression, evaluated in `double` (§7.2), to a setting declared `int`. The
 question predates array extents — it applies to any `int` setting with a
 computed default — but it becomes load-bearing here, because an extent must
@@ -1169,7 +1222,7 @@ elaboration when nothing overridable feeds it, and a configuration failure
 ### 6.5 `vars`
 
 ```
-vars { inertia_inv (1/(kg*m^2)): double; }
+vars { inertia_inv: double(1/(kg*m^2)); }
 ```
 
 Per-instance persistent storage that is **not state**: private C++ members,
@@ -1905,8 +1958,8 @@ Two constants in the §7 expression language, giving the node's **effective** ra
 
 ```
 node Biquad {
-    settings { wn (rad/s): double;
-               fs (Hz):    double = sample_rate; }   // 1 kHz base step -> 1000
+    settings { wn: double(rad/s);
+               fs: double(Hz) = sample_rate; }   // 1 kHz base step -> 1000
 }
 ```
 
@@ -2428,12 +2481,22 @@ whole signal set has one address, one size, and one offset table.
 base ticks, so the held value is simply the variable still sitting there. No hold
 buffer exists.
 
-**A record crosses a wire by reference, a scalar by value.** An `In_` view holds
-`const WheelState&` for a record port and a plain `double` for a scalar one.
-That is the ordinary C++ convention, and it also decides where a unit conversion
-lives: only a scalar port can convert (a record wire requires identical types),
-and the scalar is a copy, so the conversion folds into it. Nothing else in the
-generated code ever needs conversion machinery.
+**Every input is materialised in the callee's `In_` view, by value.** A record
+port holds a `WheelState`, a scalar port a `double`. The view is not wire
+storage — the wire is still the producer's `Out` member, and fan-out still costs
+nothing — it is the parameter block one call reads through.
+
+By value for both is what lets **both convert**. A conversion folds to a constant
+and lands in the view's initialiser: a scalar as `sig.src.y * 0.001`, a record as
+a brace initialiser applying each field's own factor,
+`Vec3{(sig.src.v.x * 0.001), (sig.src.v.y * 0.001), (sig.src.v.z * 0.001)}`.
+Nothing else in the generated code ever needs conversion machinery.
+
+The cost is a struct copy per record input per call — three doubles for a `Vec3`
+— where an earlier lowering passed `const WheelState&`. That reference is what
+made `Vec3(mm)` into `Vec3(m)` an error rather than a conversion: aliasing the
+producer's storage left nowhere to put the factor. Paying the copy buys the
+uniform rule of §5.2, and it is stated here rather than left to be discovered.
 
 ### 15.4 Enforcement falls out of the lowering
 
@@ -2791,12 +2854,12 @@ buy is already guaranteed at generation time.
 error[SE0230]: state `omega` must be declared `continuous` or `discrete`
   --> examples/drivetrain/Wheel.se:17:5
    |
-17 |     omega (rad/s): double = 0.0;
+17 |     omega: double(rad/s) = 0.0;
    |     ^^^^^ expected `continuous` or `discrete` before the state name
    = note: there is deliberately no default state kind — the two differ in
            write accessor (`der.` vs `next.`), in schedule, and in whether
            they enter the solver's state vector
-   = help: write `continuous omega (rad/s): double = 0.0;`
+   = help: write `continuous omega: double(rad/s) = 0.0;`
 ```
 
 Required elements: severity and code, a one-line message, a `file:line:column`
@@ -2847,7 +2910,7 @@ of thing wearing the same name.
 | `SE0202` | 2 | Missing `package` declaration |
 | `SE0203` | 2 | `use` declaration after a definition |
 | `SE0204` | 2 | Expected a definition (`node` or `type`) |
-| `SE0205` | 2 | Expected a unit annotation |
+| `SE0205` | 2 | Wrong number of unit arguments on a scalar type |
 | `SE0206` | 2 | Malformed unit expression |
 | `SE0207` | 2 | Unknown scalar type |
 | `SE0208` | 2 | Expected `;` |
@@ -2882,7 +2945,7 @@ of thing wearing the same name.
 | `SE0310` | 3 | Cycle in record field types |
 | `SE0311` | 3 | Field-level wire endpoints are not supported |
 | `SE0312` | 4 | Recursive instantiation: a node transitively contains itself |
-| `SE0313` | 3 | Wrong number of unit arguments on a record reference |
+| `SE0313` | 3 | Wrong number of unit arguments on a type reference |
 | `SE0320` | 3 | Node has both code and a `structure` block |
 | `SE0330` | 3 | Duplicate member name in a node |
 | `SE0331` | 3 | Member name shadows a generated accessor |
@@ -2954,9 +3017,12 @@ definition      = type_def | node_def ;
 (* ─── record types ───────────────────────────────────────────────────── *)
 
 type_def        = "type" IDENT "{" [ units_sec ] { field_decl } "}" ;
-field_decl      = IDENT unit ":" scalar_type ";"
-                | IDENT ":" record_ref ";" ;
-record_ref      = qualified_name [ "(" unit_expr { "," unit_expr } ")" ] ;
+field_decl      = IDENT ":" type_ref ";" ;
+
+(* One production for every declaration, scalar or record. A one-segment path
+   naming a closed scalar type (5.1) takes its unit as the argument: one for
+   `double`/`float`/`int`, none for `bool`. *)
+type_ref        = qualified_name [ "(" unit_expr { "," unit_expr } ")" ] ;
 
 (* ─── nodes ──────────────────────────────────────────────────────────── *)
 
@@ -2969,25 +3035,23 @@ node_item       = settings_sec | units_sec | inputs_sec | outputs_sec | states_s
                 | helper_function ;
 
 settings_sec    = "settings" "{" { setting_decl } "}" ;
-setting_decl    = IDENT unit ":" scalar_type [ "=" expression ] ";" ;
+setting_decl    = IDENT ":" type_ref [ "=" expression ] ";" ;
 
 units_sec       = "units" "{" { unit_param } "}" ;      (* §6.2a *)
 unit_param      = IDENT ";" ;
 
 inputs_sec      = "inputs"  "{" { port_decl } "}" ;
 outputs_sec     = "outputs" "{" { port_decl } "}" ;
-port_decl       = IDENT unit ":" scalar_type ";"
-                | IDENT ":" record_ref ";" ;
+port_decl       = IDENT ":" type_ref ";" ;
 
 states_sec      = "states" "{" { state_decl } "}" ;
-state_decl      = state_kind IDENT [ extent ] unit ":" scalar_type
+state_decl      = state_kind IDENT [ extent ] ":" type_ref
                   [ "=" expression ] ";" ;
 state_kind      = "continuous" | "discrete" ;
 extent          = "[" expression "]" ;                  (* §6.4a *)
 
 vars_sec        = "vars" "{" { var_decl } "}" ;
-var_decl        = IDENT [ extent ] unit ":" scalar_type ";"
-                | IDENT ":" record_ref ";" ;
+var_decl        = IDENT [ extent ] ":" type_ref ";" ;
 
 native_sec      = "native" "{" { native_decl } "}" ;
 native_decl     = IDENT ":" VERBATIM_TO_SEMI ";" ;

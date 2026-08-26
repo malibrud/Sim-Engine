@@ -5,24 +5,24 @@ model-file
   use se.mech
   node Units  [line 9]  kind=leaf
     settings
-      total_mass (kg): double  [required]
-      corner_mass (kg): double = (param.total_mass / 4.0)
-      inertia (kg*m^2): double = 0.9
-      inv_inertia (1/(kg*m^2)): double = 1.0
-      jerk (m/s^3): double = 0.0
-      visc (kg/m/s): double = 1.8e-5
-      area_rt (m^(1/2)): double = 1.0
-      decay (s^-1): double = 0.5
-      ratio (-): double = 0.25
-      duty (%): double = 40.0
-      heading (rad): double = 90 (deg)
-      limit (m/s): double = 130 (km/h)
-      omega (rad/s): double = ((2.0 * pi) * 50.0)
-      diag (m): double = hypot(3.0, 4.0)
-      scaled (m): double = (-(2.0 ^ 2) + (max(1.0, 2.0) / (3.0 - 1.0)))
-      rooted (m): double = (sqrt((param.corner_mass / 4.0)) * 1.0)
-      flat (-): double = (2.0 ^ (3.0 ^ 2.0))
+      total_mass: double(kg)  [required]
+      corner_mass: double(kg) = (param.total_mass / 4.0)
+      inertia: double(kg*m^2) = 0.9
+      inv_inertia: double(1/(kg*m^2)) = 1.0
+      jerk: double(m/s^3) = 0.0
+      visc: double(kg/m/s) = 1.8e-5
+      area_rt: double(m^(1/2)) = 1.0
+      decay: double(s^-1) = 0.5
+      ratio: double(-) = 0.25
+      duty: double(%) = 40.0
+      heading: double(rad) = 90 (deg)
+      limit: double(m/s) = 130 (km/h)
+      omega: double(rad/s) = ((2.0 * pi) * 50.0)
+      diag: double(m) = hypot(3.0, 4.0)
+      scaled: double(m) = (-(2.0 ^ 2) + (max(1.0, 2.0) / (3.0 - 1.0)))
+      rooted: double(m) = (sqrt((param.corner_mass / 4.0)) * 1.0)
+      flat: double(-) = (2.0 ^ (3.0 ^ 2.0))
     outputs
-      y (-): double
+      y: double(-)
     output()   [no feedthrough — sort root]
       body @line 42 (22 bytes): "out.y = param.ratio;"

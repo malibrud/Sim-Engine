@@ -425,78 +425,109 @@ bool Parser::parse_unit_exponent(long& num, long& den) {
 
 // ─── Type references (§5.1) ──────────────────────────────────────────────────
 
+// One production for every declaration, scalar or record: `name: Path(u1, …)`.
+//
+// A one-segment path naming a member of the closed scalar type set (§5.1) is a
+// SCALAR reference and its argument list is its unit — exactly one argument for
+// `double`, `float` and `int`, none for `bool`, which has no dimension to carry.
+// Anything else is a record reference whose arguments bind that type's
+// `units { }` parameters (§5.2).
+//
+// Scalars and records therefore differ in what the name resolves to and in
+// nothing else. That is what lets "compatible units convert" hold at every wire
+// in the language rather than at scalar wires only.
 bool Parser::parse_type_ref(ast::TypeRef& out, const char* what) {
     out.loc = tok_.loc;
 
+    if (!at(Tok::Colon)) {
+        err("SE0205", tok_.loc, std::string("expected `:` after the ") + what,
+            "expected `: type(unit)`",
+            {note("every declaration is `name: Type(unit)` — one shape, whether the "
+                  "type is scalar or a record (\xc2\xa7""5.1)")});
+        return false;
+    }
+    advance();
+
+    if (!parse_qualified_name(out.record)) return false;
+    out.loc = out.record.loc;
+
+    // The path is complete, so a `(` here can be nothing but the argument list;
+    // this costs no lookahead, the same reasoning as an instance's arguments
+    // (§6.9.1).
+    std::vector<ast::UnitPtr> args;
+    Loc args_loc = out.loc;
     if (at(Tok::LParen)) {
-        out.is_scalar = true;
-        out.unit = parse_unit();
-        if (!out.unit) return false;
-        if (!expect(Tok::Colon, "SE0201", "after the unit")) return false;
-        if (!at(Tok::Ident)) {
-            err("SE0207", tok_.loc,
-                std::string("expected a scalar type, found ") + describe(tok_.kind),
-                "expected `double`, `float`, `int` or `bool`");
-            return false;
-        }
-        if (!contains(scalar_types(), tok_.text)) {
-            std::vector<Attachment> att;
-            const std::string did = closest(tok_.text, scalar_types());
-            if (!did.empty()) att.push_back(help("did you mean `" + did + "`?"));
-            att.push_back(note("the scalar type set is closed: `double`, `float`, `int`, "
-                               "`bool` (\xc2\xa7""5.1)"));
-            err("SE0207", tok_.loc, "unknown scalar type `" + tok_.text + "`", "", std::move(att));
-            advance();
-            return false;
-        }
-        out.scalar = tok_.text;
+        args_loc = tok_.loc;
         advance();
-        return true;
-    }
-
-    if (at(Tok::Colon)) {
-        advance();
-        out.is_scalar = false;
-        if (!parse_qualified_name(out.record)) return false;
-        out.loc = out.record.loc;
-        // `a: double;` is a scalar that forgot its unit, not a record whose type
-        // happens to be spelled `double`. Say the useful thing.
-        if (out.record.segs.size() == 1 && contains(scalar_types(), out.record.segs[0])) {
-            err("SE0205", out.loc, "missing unit annotation before `" + out.record.segs[0] + "`",
-                "expected `(unit):` here",
-                {note("the unit is not optional on a scalar declaration; `(-)` spells "
-                      "dimensionless (\xc2\xa7""5.1)"),
-                 help("write `" + std::string(what) + " (-): " + out.record.segs[0] +
-                      ";` if it really is dimensionless")});
-            return false;
-        }
-        // §5.2 — a parametric record binds its units HERE, at the reference,
-        // because a type is never instantiated. The path is complete and a `(`
-        // can be nothing but a unit argument list, so this costs no lookahead —
-        // the same reasoning as an instance's arguments (§6.9.1).
-        if (at(Tok::LParen)) {
-            out.unit_args_loc = tok_.loc;
-            advance();
-            for (;;) {
-                ast::UnitPtr u = parse_unit_expr();
-                if (!u) return false;
-                out.unit_args.push_back(std::move(u));
-                if (at(Tok::Comma)) {
-                    advance();
-                    continue;
-                }
-                break;
+        for (;;) {
+            ast::UnitPtr u = parse_unit_expr();
+            if (!u) return false;
+            args.push_back(std::move(u));
+            if (at(Tok::Comma)) {
+                advance();
+                continue;
             }
-            if (!expect(Tok::RParen, "SE0201", "to close the unit arguments")) return false;
+            break;
+        }
+        if (!expect(Tok::RParen, "SE0201", "to close the unit arguments")) return false;
+    }
+
+    const bool one_segment = out.record.segs.size() == 1;
+    const std::string head = one_segment ? out.record.segs[0] : std::string();
+
+    if (one_segment && contains(scalar_types(), head)) {
+        out.is_scalar = true;
+        out.scalar = head;
+        // Arity is checked HERE, at stage 2, so that an omitted unit is still a
+        // parse error rather than something resolution has to catch (§5.1).
+        const std::size_t want = head == "bool" ? 0u : 1u;
+        if (args.size() != want) {
+            std::vector<Attachment> att;
+            if (want == 0)
+                att.push_back(note("`bool` takes no unit: a scaled or dimensioned truth "
+                                   "value is meaningless (\xc2\xa7""5.1)"));
+            else
+                att.push_back(note("the unit is not optional; `(-)` spells dimensionless "
+                                   "(\xc2\xa7""5.1)"));
+            if (want == 1 && args.empty())
+                att.push_back(help("write `" + std::string(what) + ": " + head +
+                                   "(-)` if it really is dimensionless"));
+            err("SE0205", args.empty() ? out.loc : args_loc,
+                "`" + head + "` takes " +
+                    (want == 0 ? "no unit argument" : "one unit argument") + ", found " +
+                    std::to_string(args.size()),
+                want == 0 ? "expected `" + head + "`" : "expected `" + head + "(unit)`",
+                std::move(att));
+            return false;
+        }
+        // `bool` has no argument to take the unit from, so it is dimensionless
+        // by construction — the default `UnitExpr` kind.
+        if (want == 1) {
+            out.unit = std::move(args[0]);
+        } else {
+            out.unit = std::make_unique<ast::UnitExpr>();
+            out.unit->loc = out.loc;
         }
         return true;
     }
 
-    err("SE0205", tok_.loc, std::string("expected a unit annotation or `:` after the ") + what,
-        "expected `(unit):` or `: RecordType`",
-        {note("a declaration is either `name (unit): double;` or `name: RecordType;` — "
-              "one grammar, two shapes (\xc2\xa7""5.2)")});
-    return false;
+    // A one-segment near-miss on the closed scalar set is a typo, not a record
+    // nobody declared. Say so before resolution goes looking for a file.
+    if (one_segment) {
+        const std::string did = closest(head, scalar_types(), 2);
+        if (!did.empty()) {
+            err("SE0207", out.loc, "unknown scalar type `" + head + "`", "",
+                {help("did you mean `" + did + "`?"),
+                 note("the scalar type set is closed: `double`, `float`, `int`, "
+                      "`bool` (\xc2\xa7""5.1)")});
+            return false;
+        }
+    }
+
+    out.is_scalar = false;
+    out.unit_args = std::move(args);
+    out.unit_args_loc = args_loc;
+    return true;
 }
 
 // ─── Expressions (§7.1) ──────────────────────────────────────────────────────

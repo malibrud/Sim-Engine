@@ -3,18 +3,18 @@ model-file
   package tests
   node Net  [line 6]  kind=leaf
     settings
-      port (-): int = 9000
-      rate (Hz): double = 100.0
-      deadband (-): double = 1.0e-6
+      port: int(-) = 9000
+      rate: double(Hz) = 100.0
+      deadband: double(-) = 1.0e-6
     inputs
-      tx (-): double
+      tx: double(-)
     outputs
-      rx (-): double
+      rx: double(-)
     states
-      discrete   packets (-): int ic=0
+      discrete   packets: int(-) ic=0
     vars
-      last_rx (-): double
-      arrived (-): double
+      last_rx: double(-)
+      arrived: double(-)
     native
       sock: `SOCKET`
       buf: `std::array<char, 1024>`

@@ -4,13 +4,13 @@ package frames;
 // arithmetic of §13.6 has something to be checked against.
 node Frames {
     settings {
-        gain (-): double = 1.0;
+        gain: double(-) = 1.0;
     }
     outputs {
-        y (-): double;
+        y: double(-);
     }
     states {
-        continuous v (-): double = 1.0;
+        continuous v: double(-) = 1.0;
     }
 
     derivative()  { der.v = -param.gain * state.v; }

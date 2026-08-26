@@ -19,7 +19,7 @@ use se.sig.src;
 use se.math;
 
 node StdChk {
-    outputs { y (m/s^2): double; }
+    outputs { y: double(m/s^2); }
 
     structure {
         node ramp : src.Ramp (m/s^2) { slope = 1.0; };

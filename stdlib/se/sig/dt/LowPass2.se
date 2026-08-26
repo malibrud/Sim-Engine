@@ -18,27 +18,27 @@ node LowPass2 {
     units { U; }
 
     settings {
-        wn   (rad/s): double;                  // required
-        zeta (-):     double = 1.0;
+        wn: double(rad/s);                  // required
+        zeta: double(-) = 1.0;
 
         // s^2 + 2 zeta wn s + wn^2, prewarped below.
-        a1 (rad/s):     double = 2.0 * param.zeta * param.wn;
-        a2 ((rad/s)^2): double = param.wn * param.wn;
+        a1: double(rad/s) = 2.0 * param.zeta * param.wn;
+        a2: double((rad/s)^2) = param.wn * param.wn;
 
-        fs (Hz): double = sample_rate;
+        fs: double(Hz) = sample_rate;
     }
 
-    inputs  { x (U): double; }
-    outputs { y (U): double; }
+    inputs  { x: double(U); }
+    outputs { y: double(U); }
 
     states {
-        discrete w1 (-): double = 0.0;
-        discrete w2 (-): double = 0.0;
+        discrete w1: double(-) = 0.0;
+        discrete w2: double(-) = 0.0;
     }
 
     vars {
-        da1 (-): double;  da2 (-): double;
-        db0 (-): double;  db1 (-): double;  db2 (-): double;
+        da1: double(-);  da2: double(-);
+        db0: double(-);  db1: double(-);  db2: double(-);
     }
 
     // Prewarped so the designed break lands exactly at wn under the bilinear

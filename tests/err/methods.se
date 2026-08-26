@@ -5,15 +5,15 @@
 package tests;
 
 node NoParens {
-    inputs  { u (-): double; }
-    outputs { y (-): double; }
+    inputs  { u: double(-); }
+    outputs { y: double(-); }
 
     init { }
     output(u) { out.y = in.u; }
 }
 
 node HelperDeclaration {
-    outputs { y (-): double; }
+    outputs { y: double(-); }
 
     double declared_only(double v) const;
 
@@ -21,16 +21,16 @@ node HelperDeclaration {
 }
 
 node NearMiss {
-    inputs  { u (-): double; }
-    outputs { y (-): double; }
+    inputs  { u: double(-); }
+    outputs { y: double(-); }
 
     on_setp(u) { }
     output(u)  { out.y = in.u; }
 }
 
 node BadArity {
-    inputs  { u (-): double; }
-    outputs { y (-): double; }
+    inputs  { u: double(-); }
+    outputs { y: double(-); }
 
     init(u)     { }
     final(a, b) { }

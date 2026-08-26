@@ -3,7 +3,7 @@ package se.sig;
 node WnZeta2Poly {
     settings {
         wn  (rad/s) double;
-        zeta (-): double; 
+        zeta: double(-); 
     }
 
     inputs  {}

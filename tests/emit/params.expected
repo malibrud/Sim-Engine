@@ -24,7 +24,7 @@ error[SE0420]: required setting `mass` is not bound
 error[SE0421]: cycle among derived settings of `Ring`
   --> tests/emit/lib/params/Params.se:29:9
    |
-29 |         a (-): double = param.b + 1.0;
+29 |         a: double(-) = param.b + 1.0;
    |         ^ `a` depends on itself
    = note: cycle: a -> b -> c -> a
    = note: settings are a dependency graph requiring a topological sort, so a cycle has no value (§6.2)

@@ -5,7 +5,7 @@
 package tests;
 
 node Bad {
-    outputs { y (-): double; }
+    outputs { y: double(-); }
 
     output() {
         const char* s = "}";

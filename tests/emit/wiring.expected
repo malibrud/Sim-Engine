@@ -23,17 +23,17 @@ error[SE0410]: incompatible units across a wire
    = note: destination is -
 
 error[SE0430]: input `s.w` is not connected
-  --> tests/emit/lib/wiring/Wiring.se:43:31
+  --> tests/emit/lib/wiring/Wiring.se:43:30
    |
-43 |     inputs  { u (-): double;  w (-): double;  z (-): double;  spare (-): double; }
-   |                               ^ declared here
+43 |     inputs  { u: double(-);  w: double(-);  z: double(-);  spare: double(-); }
+   |                              ^ declared here
    = note: an unconnected input is an error: there is no implicit zero (§6.3)
 
 error[SE0430]: input `s.spare` is not connected
-  --> tests/emit/lib/wiring/Wiring.se:43:63
+  --> tests/emit/lib/wiring/Wiring.se:43:60
    |
-43 |     inputs  { u (-): double;  w (-): double;  z (-): double;  spare (-): double; }
-   |                                                               ^^^^^ declared here
+43 |     inputs  { u: double(-);  w: double(-);  z: double(-);  spare: double(-); }
+   |                                                            ^^^^^ declared here
    = note: an unconnected input is an error: there is no implicit zero (§6.3)
 
 5 errors emitted

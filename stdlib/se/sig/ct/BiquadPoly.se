@@ -17,18 +17,18 @@ node Biquad {
         B (-): se.math.Poly3 = { 0.0, 0.0, 1.0 };
     }
 
-    inputs  { x (U): double; }
-    outputs { y (U): double; }
+    inputs  { x: double(U); }
+    outputs { y: double(U); }
 
     states {
-        continuous w  (-): double = 0.0;
-        continuous wd (-): double = 0.0;
+        continuous w: double(-) = 0.0;
+        continuous wd: double(-) = 0.0;
     }
 
     vars {
-        n1 (-): double;  n2 (-): double;     // denominator, normalised by a0
-        d0 (-): double;                      // direct term
-        cw (-): double;  cwd (-): double;    // output taps on w and wd
+        n1: double(-);  n2: double(-);     // denominator, normalised by a0
+        d0: double(-);                      // direct term
+        cw: double(-);  cwd: double(-);    // output taps on w and wd
     }
 
     // Normalise by a0 once, so neither derivative() nor output() carries a division.

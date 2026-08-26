@@ -14,19 +14,19 @@ node Sawtooth {
     units { U; }
 
     settings {
-        amplitude (U):   double = 1.0;
-        f         (Hz):  double = 1.0;
-        phase     (rad): double = 0.0;
-        offset    (U):   double = 0.0;
+        amplitude: double(U) = 1.0;
+        f: double(Hz) = 1.0;
+        phase: double(rad) = 0.0;
+        offset: double(U) = 0.0;
 
-        rate (Hz): double = sample_rate;
+        rate: double(Hz) = sample_rate;
     }
 
-    outputs { y (U): double; }
+    outputs { y: double(U); }
 
-    states { discrete u (-): double = 0.0; }
+    states { discrete u: double(-) = 0.0; }
 
-    vars { du (-): double;  p0 (-): double; }
+    vars { du: double(-);  p0: double(-); }
 
     init() {
         var.du = param.f / param.rate;

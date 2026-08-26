@@ -20,17 +20,17 @@ node UniformNoise {
     units { U; }
 
     settings {
-        lo (U): double = -1.0;
-        hi (U): double =  1.0;
+        lo: double(U) = -1.0;
+        hi: double(U) =  1.0;
 
-        seed (-): int = 12345;
+        seed: int(-) = 12345;
 
-        rate (Hz): double = sample_rate;
+        rate: double(Hz) = sample_rate;
     }
 
-    outputs { y (U): double; }
+    outputs { y: double(U); }
 
-    states { discrete k (-): int = 0; }
+    states { discrete k: int(-) = 0; }
 
     declarations {
         #include <cstdint>

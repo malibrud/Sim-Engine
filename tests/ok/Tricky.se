@@ -5,13 +5,13 @@ package tests;
 
 node Tricky {
     settings {
-        gain (-): double = 1.0;
+        gain: double(-) = 1.0;
     }
     outputs {
-        y (-): double;
+        y: double(-);
     }
     states {
-        continuous x (-): double = 0.0;
+        continuous x: double(-) = 0.0;
     }
 
     declarations {
