@@ -637,6 +637,58 @@ ast::ExprPtr Parser::parse_primary() {
         return inner;
     }
 
+    // §6.2c — a record brace list. It is NOT a value in the sense of §7.2:
+    // nothing evaluates it, and no aggregate ever appears in the `Value` the
+    // elaborator computes. It is destructured against the target's field tree at
+    // the declaration site, and every leaf it yields is an ordinary scalar
+    // expression. That is what lets a setting be a record while §7 stays scalar.
+    //
+    // The two spellings are told apart by one token of lookahead — `IDENT =` is
+    // named, anything else is positional — and a list must be wholly one or the
+    // other (SE0243). An empty `{}` is a positional list of nothing, which only a
+    // fieldless record could accept; the arity check is what reports it.
+    if (at(Tok::LBrace)) {
+        e->kind = ast::Expr::Kind::Aggregate;
+        advance();
+        bool named = false;
+        bool first = true;
+        bool mixed = false;
+        while (!at(Tok::RBrace) && !at_end()) {
+            const bool this_named = at(Tok::Ident) && peek().kind == Tok::Equal;
+            if (first) {
+                named = this_named;
+                first = false;
+            } else if (this_named != named && !mixed) {
+                err("SE0243", tok_.loc,
+                    "a brace list mixes positional and named fields",
+                    this_named ? "named, where the list began positional"
+                               : "positional, where the list began named",
+                    {note("a brace list is wholly positional or wholly named; the two "
+                          "spellings desugar identically but may not be combined "
+                          "(\xc2\xa7""6.2c)")});
+                mixed = true;
+            }
+
+            Loc floc = tok_.loc;
+            if (this_named) {
+                e->field_names.push_back(tok_.text);
+                advance();  // the field name
+                advance();  // =
+            }
+            ast::ExprPtr v = parse_expr();
+            if (!v) return nullptr;
+            e->field_locs.push_back(floc);
+            e->args.push_back(std::move(v));
+
+            if (!accept(Tok::Comma)) break;
+        }
+        // Consume the closing brace even when the list was rejected, so the
+        // token stream stays balanced and recovery resumes at the `;` rather
+        // than mistaking this `}` for the end of the enclosing section.
+        if (!expect(Tok::RBrace, "SE0201", "to close the brace list")) return nullptr;
+        return mixed ? nullptr : std::move(e);
+    }
+
     if (at(Tok::Ident)) {
         const std::string name = tok_.text;
         const Loc name_loc = tok_.loc;
@@ -656,6 +708,17 @@ ast::ExprPtr Parser::parse_primary() {
             e->loc = name_loc;
             e->loc.length = tok_.loc.offset + tok_.loc.length - name_loc.offset;
             advance();
+            // §6.2c — further segments reach into a record setting:
+            // `param.offset.x`. They accumulate into `text` as a dotted string, so
+            // a leaf is an ordinary node in the §6.2 dependency sort and renders
+            // straight into C++ member access at stage 6. Whether the segments name
+            // real fields is the elaborator's job, not the parser's.
+            while (at(Tok::Dot) && peek().kind == Tok::Ident) {
+                advance();  // .
+                e->text += "." + tok_.text;
+                e->loc.length = tok_.loc.offset + tok_.loc.length - name_loc.offset;
+                advance();
+            }
             return e;
         }
 
@@ -1139,11 +1202,6 @@ bool Parser::parse_setting_list(std::vector<ast::SettingDecl>& out) {
             if (!parse_extent(unused_extent, unused_loc, "setting", false)) {
                 ok = false;
             } else if (!parse_type_ref(s.type, "setting")) {
-                ok = false;
-            } else if (!s.type.is_scalar) {
-                err("SE0231", s.type.loc, "a setting may not be a record type", "",
-                    {note("settings are scalars: the flow-down expression language is "
-                          "scalar (\xc2\xa7""5.2)")});
                 ok = false;
             } else if (at(Tok::Equal)) {
                 advance();

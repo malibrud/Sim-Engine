@@ -634,9 +634,16 @@ bool Elaborator::eval_call(const ast::Expr* e, const Source& src, const Env& env
 
 bool Elaborator::coerce(const Value& v, const Type& target, const Source& src, Loc loc,
                         const char* what, double& out, ExprCode* out_code) {
+    // §6.2c — a record target never reaches here: `destructure` splits it into
+    // leaves first, and each leaf is a scalar. This stays as a backstop, so a
+    // new caller that forgets to destructure fails loudly rather than emitting
+    // a struct assignment from a `double`.
     if (target.is_record) {
-        diag_.error("SE0410", src, loc,
-                    std::string(what) + " has a record type and cannot take a value", "");
+        diag_.error("SE0426", src, loc,
+                    std::string(what) + " is a record and cannot take a single value",
+                    "expected a brace list",
+                    {note("a record setting is written as a brace list, or as another "
+                          "setting of the same record type (\xc2\xa7""6.2c)")});
         return false;
     }
     if (v.bare) {
@@ -909,20 +916,169 @@ OverrideEntry* Elaborator::find_override(const std::string& path) {
 
 void Elaborator::apply_overrides(const NodeInfo* def, const std::string& path,
                                  std::map<std::string, Pin>& pinned) {
-    for (const auto& s : def->settings) {
-        OverrideEntry* o = find_override(sub(path, s.name));
-        if (!o) continue;
-        Value v;
-        if (!eval(o->value, *o->src, Env{}, v)) continue;
-        double d = 0.0;
-        if (coerce(v, s.type, *o->src, o->loc, ("setting `" + o->path + "`").c_str(), d)) {
-            // §13.3 — an override detaches from the flow-down, so it emits as a
-            // literal and the binding that would otherwise drive this setting is
-            // simply not run. Evaluated in an empty environment, so there is
-            // nothing it could depend on anyway.
-            pinned[s.name] = Pin{d, ec_num(d), true};
+    for (const auto& si : def->settings) {
+        // §6.2c — the leaves this setting carries. A record is addressed one
+        // leaf at a time and never as a whole, which is the rule §13.4 already
+        // states for an array state and for the same reason: §7 has no
+        // aggregate value, and §14.1's runtime loader reads a number.
+        std::vector<Leafling> leaves;
+        destructure(bound_type(si.type), nullptr, si.name, si.loc, *def->file->src,
+                    "setting `" + si.name + "`", leaves);
+
+        if (si.type.is_record) {
+            if (OverrideEntry* whole = find_override(sub(path, si.name))) {
+                std::string one;
+                for (const Leafling& lf : leaves) {
+                    if (!one.empty()) one += ", ";
+                    one += "`" + sub(path, lf.key) + "`";
+                }
+                diag_.error("SE0460", *whole->src, whole->loc,
+                            "override `" + whole->path + "` names a record, not a value",
+                            "a record has no single value",
+                            {note("address one field at a time: " + one),
+                             note("the same rule an array state follows (\xc2\xa7""13.4)")});
+                failed_ = true;
+            }
+        }
+
+        for (const Leafling& lf : leaves) {
+            OverrideEntry* o = find_override(sub(path, lf.key));
+            if (!o) continue;
+            Value v;
+            if (!eval(o->value, *o->src, Env{}, v)) continue;
+            double d = 0.0;
+            if (coerce(v, lf.type, *o->src, o->loc,
+                       ("setting `" + o->path + "`").c_str(), d)) {
+                // §13.3 — an override detaches from the flow-down, so it emits
+                // as a literal and the binding that would otherwise drive this
+                // setting is simply not run. Evaluated in an empty environment,
+                // so there is nothing it could depend on anyway.
+                pinned[lf.key] = Pin{d, ec_num(d), true};
+            }
         }
     }
+}
+
+// §6.2c — split a value across a record's field tree.
+//
+// This is where a brace list is consumed. It is deliberately NOT part of `eval`:
+// §7.2 says every value is a real number with a dimension, and that stays true
+// because an aggregate never becomes a `Value`. It is matched against the
+// declared shape here, at the declaration site, and what comes out the other
+// side is one ordinary scalar expression per leaf.
+bool Elaborator::destructure(const Type& target, const ast::Expr* value,
+                             const std::string& key, Loc decl_loc, const Source& src,
+                             const std::string& what, std::vector<Leafling>& out) {
+    const bool agg = value && value->kind == ast::Expr::Kind::Aggregate;
+
+    if (!target.is_record) {
+        if (agg) {
+            diag_.error("SE0426", src, value->loc,
+                        "a brace list where " + what + " declares a scalar",
+                        "`" + target.scalar + "(" + target.unit.str() + ")` is not a record",
+                        {note("a brace list initialises a record, field by field "
+                              "(\xc2\xa7""6.2c)")});
+            return false;
+        }
+        out.push_back(
+            Leafling{key, target, value, value ? value->loc : decl_loc, decl_loc});
+        return true;
+    }
+
+    const RecordInfo* rec = target.record;
+    if (!rec) return false;
+
+    // A whole-record copy — `limit = param.accel_limit`. One spelling reaches
+    // every leaf, so the per-leaf references are synthesised rather than
+    // written out. Whether the source really has those leaves is settled by the
+    // ordinary `param.*` lookup in `eval`, which reports SE0304 against the
+    // dotted name and lists what IS in scope.
+    if (value && value->kind == ast::Expr::Kind::Param) {
+        bool ok = true;
+        for (const Field& f : rec->fields) {
+            auto e = std::make_unique<ast::Expr>();
+            e->kind = ast::Expr::Kind::Param;
+            e->text = value->text + "." + f.name;
+            e->loc = value->loc;
+            const ast::Expr* raw = e.get();
+            synth_.push_back(std::move(e));
+            ok = destructure(field_type(target, f), raw, key + "." + f.name, decl_loc, src,
+                             what, out) && ok;
+        }
+        return ok;
+    }
+
+    if (value && !agg) {
+        diag_.error("SE0426", src, value->loc,
+                    "a value where " + what + " declares the record `" + rec->fq + "`",
+                    "expected a brace list",
+                    {note("\xc2\xa7""7 is a scalar language: a record is built field by "
+                          "field, not computed (\xc2\xa7""6.2c)")});
+        return false;
+    }
+
+    // Which expression initialises which field. A field with none is not an
+    // error here: it falls through with a null expression, and whether that
+    // means "keep the default" or "still required" is the caller's to decide.
+    std::vector<const ast::Expr*> supplied(rec->fields.size(), nullptr);
+    bool ok = true;
+
+    if (agg && value->field_names.empty()) {
+        // Positional: complete, and in the order the `type` declares.
+        if (value->args.size() != rec->fields.size()) {
+            std::string have;
+            for (const Field& f : rec->fields) {
+                if (!have.empty()) have += ", ";
+                have += f.name;
+            }
+            diag_.error("SE0423", src, value->loc,
+                        "`" + rec->fq + "` has " + std::to_string(rec->fields.size()) +
+                            " field(s), but the brace list gives " +
+                            std::to_string(value->args.size()),
+                        "wrong number of values",
+                        {note("fields, in order: " + have),
+                         help("a positional brace list must be complete; name the fields "
+                              "to give only some of them (\xc2\xa7""6.2c)")});
+            ok = false;
+        }
+        for (std::size_t i = 0; i < value->args.size() && i < rec->fields.size(); ++i)
+            supplied[i] = value->args[i].get();
+    } else if (agg) {
+        // Named: order-free, and may be partial.
+        for (std::size_t i = 0; i < value->field_names.size() && i < value->args.size();
+             ++i) {
+            const std::string& fname = value->field_names[i];
+            const Loc floc = i < value->field_locs.size() ? value->field_locs[i]
+                                                          : value->loc;
+            std::size_t idx = rec->fields.size();
+            for (std::size_t j = 0; j < rec->fields.size(); ++j)
+                if (rec->fields[j].name == fname) { idx = j; break; }
+            if (idx == rec->fields.size()) {
+                std::string have;
+                for (const Field& f : rec->fields) {
+                    if (!have.empty()) have += ", ";
+                    have += "`" + f.name + "`";
+                }
+                diag_.error("SE0424", src, floc,
+                            "`" + rec->fq + "` has no field `" + fname + "`",
+                            "unknown field", {help("it declares " + have)});
+                ok = false;
+                continue;
+            }
+            if (supplied[idx]) {
+                diag_.error("SE0425", src, floc,
+                            "field `" + fname + "` is given twice", "already given");
+                ok = false;
+                continue;
+            }
+            supplied[idx] = value->args[i].get();
+        }
+    }
+
+    for (std::size_t i = 0; i < rec->fields.size(); ++i)
+        ok = destructure(field_type(target, rec->fields[i]), supplied[i],
+                         key + "." + rec->fields[i].name, decl_loc, src, what, out) && ok;
+    return ok;
 }
 
 bool Elaborator::settings_of(const NodeInfo* def,
@@ -930,6 +1086,21 @@ bool Elaborator::settings_of(const NodeInfo* def,
                              const Source& src, Loc loc, std::vector<SettingValue>& out) {
     const Source& def_src = *def->file->src;
     Env env;
+
+    // §6.2c — every setting expanded to the scalars it actually carries, in
+    // declaration order. A scalar setting yields one leaf keyed by its own name,
+    // so the walk below is the walk it has always been; a record setting simply
+    // contributes more than one node to it.
+    bool shape_ok = true;
+    std::vector<Leafling> leaves;
+    for (const auto& si : def->settings) {
+        const std::size_t before = leaves.size();
+        if (!destructure(bound_type(si.type), si.default_value, si.name, si.loc, def_src,
+                         "setting `" + si.name + "`", leaves)) {
+            shape_ok = false;
+            for (std::size_t i = before; i < leaves.size(); ++i) leaves[i].errored = true;
+        }
+    }
     // What each setting will be assigned in the configuration program: a pinned
     // one keeps the expression that pinned it, a derived one gets its coerced
     // default below. Collected here rather than in `out` because the topological
@@ -939,10 +1110,10 @@ bool Elaborator::settings_of(const NodeInfo* def,
     // Every setting in scope reads as its own `param` member, whatever produced
     // its value: at configuration the member is what a sibling expression sees,
     // so an override of this setting reaches everything derived from it.
-    for (const auto& s : def->settings) {
-        auto it = pinned.find(s.name);
+    for (const Leafling& lf : leaves) {
+        auto it = pinned.find(lf.key);
         if (it == pinned.end()) continue;
-        resolved[s.name] = it->second;
+        resolved[lf.key] = it->second;
         // §6.2a — SUBSTITUTED, for the same reason the derived-default path
         // below coerces against `bound()`: a setting may be declared in a unit
         // parameter (`sigma (U)`), and a sibling expression that reads it must
@@ -950,60 +1121,66 @@ bool Elaborator::settings_of(const NodeInfo* def,
         // unsubstituted made every setting derived from a pinned unit-parametric
         // setting come out dimensionless, which surfaced as a bogus `SE0410`
         // pointing INTO the library rather than at the binding.
-        Value v{it->second.value, bound(s.type.unit), false};
-        v.code = ec_param(settings_path_, s.name);
+        Value v{it->second.value, lf.type.unit, false};
+        v.code = ec_param(settings_path_, lf.key);
         v.constant = false;
-        env[s.name] = std::move(v);
+        env[lf.key] = std::move(v);
     }
 
     // Topological evaluation of the unpinned defaults (§6.2). The graph is
     // walked depth-first; a back edge is a cycle.
     enum class Mark { White, Grey, Black };
     std::map<std::string, Mark> mark;
-    for (const auto& s : def->settings)
-        mark[s.name] = env.count(s.name) ? Mark::Black : Mark::White;
+    for (const Leafling& lf : leaves)
+        mark[lf.key] = env.count(lf.key) ? Mark::Black : Mark::White;
 
     std::vector<std::string> stack;
-    std::function<bool(const NodeInfo::SettingInfo&)> visit =
-        [&](const NodeInfo::SettingInfo& s) -> bool {
-        if (mark[s.name] == Mark::Black) return true;
-        if (mark[s.name] == Mark::Grey) {
+    std::function<bool(const Leafling&)> visit = [&](const Leafling& s) -> bool {
+        if (mark[s.key] == Mark::Black) return true;
+        if (mark[s.key] == Mark::Grey) {
             std::string cycle;
             for (const std::string& n : stack) cycle += n + " -> ";
-            cycle += s.name;
-            diag_.error("SE0421", def_src, s.loc,
+            cycle += s.key;
+            diag_.error("SE0421", def_src, s.decl_loc,
                         "cycle among derived settings of `" + def->def->name + "`",
-                        "`" + s.name + "` depends on itself",
+                        "`" + s.key + "` depends on itself",
                         {note("cycle: " + cycle),
                          note("settings are a dependency graph requiring a topological "
                               "sort, so a cycle has no value (§6.2)")});
-            mark[s.name] = Mark::Black;
+            mark[s.key] = Mark::Black;
             return false;
         }
-        mark[s.name] = Mark::Grey;
-        stack.push_back(s.name);
+        mark[s.key] = Mark::Grey;
+        stack.push_back(s.key);
 
         bool ok = true;
-        if (!s.default_value) {
+        if (s.errored) {
+            // The shape error is the diagnostic; `unbound` would be a second
+            // report of the same mistake.
+            ok = false;
+        } else if (!s.expr) {
             // §6.2 — no default means required, and every instantiation must
             // bind it. Checked statically, here.
             diag_.error("SE0420", src, loc,
-                        "required setting `" + s.name + "` is not bound",
+                        "required setting `" + s.key + "` is not bound",
                         "instantiated here",
                         {note("declared with no default, so every instantiation must "
                               "bind it (§6.2)",
-                              def->file->path + ":" + std::to_string(s.loc.line))});
+                              def->file->path + ":" +
+                                  std::to_string(s.decl_loc.line))});
             ok = false;
         } else {
             // Resolve dependencies first.
-            std::vector<const ast::Expr*> work{s.default_value};
+            std::vector<const ast::Expr*> work{s.expr};
             while (!work.empty()) {
                 const ast::Expr* e = work.back();
                 work.pop_back();
                 if (!e) continue;
                 if (e->kind == ast::Expr::Kind::Param) {
-                    for (const auto& other : def->settings)
-                        if (other.name == e->text && mark[other.name] != Mark::Black)
+                    // §6.2c — `param.offset.x` names a leaf, so the dotted
+                    // text IS the graph key and no field walk is needed here.
+                    for (const Leafling& other : leaves)
+                        if (other.key == e->text && mark[other.key] != Mark::Black)
                             ok = visit(other) && ok;
                 }
                 work.push_back(e->lhs.get());
@@ -1011,21 +1188,20 @@ bool Elaborator::settings_of(const NodeInfo* def,
                 for (const ast::ExprPtr& arg : e->args) work.push_back(arg.get());
             }
             Value v;
-            if (ok && eval(s.default_value, def_src, env, v)) {
+            if (ok && eval(s.expr, def_src, env, v)) {
                 // §6.2a — a setting may be declared in a unit parameter
-                // (`limit (U)`), so coerce against this instance's substituted
-                // unit rather than the definition's `(U)`.
-                Type target = s.type;
-                target.unit = bound(s.type.unit);
+                // (`limit (U)`), so this must coerce against the instance's
+                // substituted unit rather than the definition's `(U)`. §6.2c
+                // put the substituted unit on the leaf, so it is already right.
                 double d = 0.0;
                 ExprCode code;
-                if (coerce(v, target, def_src, s.default_value->loc,
-                           ("setting `" + s.name + "`").c_str(), d, &code)) {
-                    resolved[s.name] = Pin{d, std::move(code), v.constant};
-                    Value bound_v{d, target.unit, false};
-                    bound_v.code = ec_param(settings_path_, s.name);
+                if (coerce(v, s.type, def_src, s.loc,
+                           ("setting `" + s.key + "`").c_str(), d, &code)) {
+                    resolved[s.key] = Pin{d, std::move(code), v.constant};
+                    Value bound_v{d, s.type.unit, false};
+                    bound_v.code = ec_param(settings_path_, s.key);
                     bound_v.constant = false;
-                    env[s.name] = std::move(bound_v);
+                    env[s.key] = std::move(bound_v);
                 } else {
                     ok = false;
                 }
@@ -1034,11 +1210,11 @@ bool Elaborator::settings_of(const NodeInfo* def,
             }
         }
         stack.pop_back();
-        mark[s.name] = Mark::Black;
+        mark[s.key] = Mark::Black;
         return ok;
     };
 
-    bool ok = true;
+    bool ok = shape_ok;
 
     // §10.4 — `sample_rate` and `time_step` are this node's EFFECTIVE values,
     // so the reserved `rate` setting has to be resolved before any other
@@ -1047,9 +1223,9 @@ bool Elaborator::settings_of(const NodeInfo* def,
     // than an undefined value.
     effective_rate_ = base_rate_;
     effective_rate_code_ = ec_num(base_rate_);
-    for (const auto& s : def->settings) {
-        if (s.name != "rate") continue;
-        ok = visit(s) && ok;
+    for (const Leafling& lf : leaves) {
+        if (lf.key != "rate") continue;
+        ok = visit(lf) && ok;
         auto it = env.find("rate");
         if (it != env.end() && it->second.v > 0.0) effective_rate_ = it->second.v;
         // Only now, so that a `rate` default which itself mentions `sample_rate`
@@ -1058,31 +1234,40 @@ bool Elaborator::settings_of(const NodeInfo* def,
         break;
     }
 
-    for (const auto& s : def->settings) ok = visit(s) && ok;
+    for (const Leafling& lf : leaves) ok = visit(lf) && ok;
 
     slots_.clear();
-    for (const auto& s : def->settings) {
+    for (const Leafling& lf : leaves) {
         SettingValue sv;
-        sv.name = s.name;
-        // §15.6 promises the manifest reader that `value` is already in `unit`,
-        // so this has to be the substituted unit, not the definition's `(U)`.
-        sv.unit = bound(s.type.unit);
-        sv.scalar = s.type.scalar;
-        auto it = env.find(s.name);
+        sv.name = lf.key;
+        // §15.6 promises the manifest reader that `value` is already in `unit`.
+        // §6.2c put the substituted unit on the leaf, which for a record field
+        // means the field's own unit and not the record's arguments.
+        sv.unit = lf.type.unit;
+        sv.scalar = lf.type.scalar;
+        auto it = env.find(lf.key);
         sv.value = it == env.end() ? 0.0 : it->second.v;
 
-        // §6.2b — the same setting as one assignment in the configuration
-        // program. `def->settings` is already in the order the topological walk
-        // above settled, so appending here preserves it.
+        // §6.2b — the same leaf as one assignment in the configuration program.
+        // `leaves` is already in the order the topological walk above settled,
+        // so appending here preserves it.
         SettingSlot slot;
-        slot.path = sub(settings_path_, s.name);
+        slot.path = sub(settings_path_, lf.key);
         slot.owner = settings_path_;
-        slot.name = s.name;
+        slot.name = lf.key;
+        // §6.2c — the declaration the leaf belongs to. A dotted `name` addresses
+        // INTO a member; it cannot declare one, so a composite's parameter
+        // struct needs the setting itself (§15.5).
+        slot.decl = lf.key.substr(0, lf.key.find('.'));
+        if (const NodeInfo::SettingInfo* si = def->setting(slot.decl))
+            slot.decl_type = bound_type(si->type);
+        else
+            slot.decl_type = lf.type;
         slot.unit = sv.unit;
         slot.scalar = sv.scalar;
         slot.value = sv.value;
-        slot.rate = (s.name == "rate");
-        auto r = resolved.find(s.name);
+        slot.rate = (lf.key == "rate");
+        auto r = resolved.find(lf.key);
         if (r != resolved.end()) {
             slot.expr = r->second.code;
             slot.constant = r->second.constant;
@@ -1248,25 +1433,49 @@ void Elaborator::instantiate(const NodeInfo* def, const std::string& path,
                     failed_ = true;
                     continue;
                 }
-                Value v;
-                if (!eval(b.value.get(), def_src, env, v)) {
-                    failed_ = true;
-                    continue;
-                }
                 // §6.2a — the child's setting may be declared in one of the
                 // child's unit parameters, so the binding is checked against
                 // the CHILD's substitution, not this composite's.
                 Type child_target = target->type;
                 auto cb = child_bindings.find(inst.name);
                 if (cb != child_bindings.end())
-                    child_target.unit = unit_bind(target->type.unit, cb->second);
-                double d = 0.0;
-                ExprCode code;
-                if (coerce(v, child_target, def_src, b.loc,
-                           ("setting `" + b.name + "`").c_str(), d, &code))
-                    child_pinned[b.name] = Pin{d, std::move(code), v.constant};
-                else
+                    child_target = bind_type(target->type, cb->second);
+
+                // §6.2c — a binding may name a record, and then it pins one leaf
+                // per field. A scalar binding splits into exactly one leaf,
+                // which is the path this has always taken.
+                std::vector<Leafling> bl;
+                if (!destructure(child_target, b.value.get(), b.name, b.loc, def_src,
+                                 "setting `" + b.name + "`", bl)) {
                     failed_ = true;
+                    // The binding was meant to bind these, and saying so was the
+                    // whole error. Pin every leaf it covers so the child does not
+                    // answer one bad brace list with an SE0420 per field; the
+                    // values are inert, because the run is already refused.
+                    std::vector<Leafling> all;
+                    destructure(child_target, nullptr, b.name, b.loc, def_src,
+                                "setting `" + b.name + "`", all);
+                    for (const Leafling& lf : all)
+                        child_pinned.emplace(lf.key, Pin{0.0, ec_num(0.0), true});
+                    continue;
+                }
+                for (const Leafling& lf : bl) {
+                    // A partial named list leaves a field unmentioned; that leaf
+                    // simply is not pinned, and the child's own default runs.
+                    if (!lf.expr) continue;
+                    Value v;
+                    if (!eval(lf.expr, def_src, env, v)) {
+                        failed_ = true;
+                        continue;
+                    }
+                    double d = 0.0;
+                    ExprCode code;
+                    if (coerce(v, lf.type, def_src, lf.loc,
+                               ("setting `" + lf.key + "`").c_str(), d, &code))
+                        child_pinned[lf.key] = Pin{d, std::move(code), v.constant};
+                    else
+                        failed_ = true;
+                }
             }
             auto bit = child_bindings.find(inst.name);
             instantiate(child, sub(path, inst.name), child_pinned, def_src, inst.loc,
@@ -2033,15 +2242,32 @@ bool Elaborator::run(const ast::SimFile& sim, const Source& sim_src,
                         "setting `" + b.name + "` is bound twice", "already bound");
             continue;
         }
-        Value v;
-        if (!eval(b.value.get(), sim_src, Env{}, v)) continue;
-        double d = 0.0;
-        ExprCode code;
-        if (coerce(v, target->type, sim_src, b.loc, ("setting `" + b.name + "`").c_str(), d,
-                   &code))
-            // The root block is evaluated in an empty environment — there is no
-            // enclosing node whose settings it could read — so it always folds.
-            pinned[b.name] = Pin{d, std::move(code), v.constant};
+        // §6.2c — the root block binds a record the same way a `structure`
+        // binding does. The root has no unit arguments to substitute, so the
+        // declared type is already concrete.
+        std::vector<Leafling> bl;
+        if (!destructure(target->type, b.value.get(), b.name, b.loc, sim_src,
+                         "setting `" + b.name + "`", bl)) {
+            std::vector<Leafling> all;
+            destructure(target->type, nullptr, b.name, b.loc, sim_src,
+                        "setting `" + b.name + "`", all);
+            for (const Leafling& lf : all)
+                pinned.emplace(lf.key, Pin{0.0, ec_num(0.0), true});
+            continue;
+        }
+        for (const Leafling& lf : bl) {
+            if (!lf.expr) continue;
+            Value v;
+            if (!eval(lf.expr, sim_src, Env{}, v)) continue;
+            double d = 0.0;
+            ExprCode code;
+            if (coerce(v, lf.type, sim_src, lf.loc, ("setting `" + lf.key + "`").c_str(),
+                       d, &code))
+                // The root block is evaluated in an empty environment — there is
+                // no enclosing node whose settings it could read — so it always
+                // folds.
+                pinned[lf.key] = Pin{d, std::move(code), v.constant};
+        }
     }
 
     instantiate(m.root, "", pinned, sim_src, root_entry->loc, 0, m);

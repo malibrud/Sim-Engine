@@ -1,0 +1,51 @@
+// Per-axis odd-symmetric gain and saturation on a vector:
+// vout[i] = clamp(gain[i]*vin[i], -limit[i], +limit[i]), for i in {x, y, z}.
+//
+// This is `se.sig.ScaleLimit` done three times in one node, and it exists to be
+// the vector-native shape rather than a vector-shaped workaround. Before record
+// settings (§6.2c) the only spelling available was `Split3` -> three scalar
+// `ScaleLimit` blocks -> `Merge3`: six nodes and eleven wires for one vector
+// operation, with the three axes' parameters scattered across three instances
+// that nothing ties together. `examples/washout/Classical.se` and
+// `ClassicalFromScratch.se` are the same channel written both ways.
+//
+// THE THREE AXES ARE NOT INTERCHANGEABLE, which is why the parameters are a
+// `Vec3` and not a scalar. In a motion-cueing washout the vertical channel is
+// limited harder and scaled less than the horizontal ones, because a platform
+// has far less heave travel than surge or sway.
+//
+// `limit` is declared in the unit parameter, so it is checked and converted per
+// field and per instance: bind it as `(mm/s^2)` on an `(m/s^2)` instance and
+// each field picks up its own factor of 1/1000, folded at elaboration exactly
+// as a record wire's is (§5.2).
+package se.sig;
+
+use se.math;
+
+node ScaleLimit3 {
+    units { U; }
+
+    settings {
+        gain:  math.Vec3(-) = { 1.0, 1.0, 1.0 };
+        limit: math.Vec3(U);        // required: an unlimited scale is a Scale3
+    }
+
+    inputs  { vin: math.Vec3(U); }
+    outputs { vout: math.Vec3(U); }
+
+    output(vin) {
+        out.vout.x = absClamp( in.vin.x * param.gain.x, param.limit.x );
+        out.vout.y = absClamp( in.vin.y * param.gain.y, param.limit.y );
+        out.vout.z = absClamp( in.vin.z * param.gain.z, param.limit.z );
+    }
+
+    // `const` is not optional: `output()` is pure, so a non-const helper called
+    // from it fails to compile (§11.4). That is the intended outcome and not a
+    // nuisance -- it is what keeps the purity rule honest across a verbatim body
+    // the compiler never parses.
+    double absClamp( double val, double absLimit ) const {
+        if ( val < -absLimit ) return -absLimit;
+        if ( val > +absLimit ) return +absLimit;
+        return val;
+    }
+}

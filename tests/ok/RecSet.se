@@ -1,0 +1,98 @@
+// Record-typed settings (§6.2c), every surface the feature has.
+//
+// Records may be settings now; they still may not be states (§5.2), which is
+// the solver-ABI half of that rule and is unchanged.
+package tests;
+
+// A nested record, so the leaf walk has to recurse rather than just iterate.
+// `Pose` threads its own unit argument down into `p`, which is what makes a
+// leaf's unit the FIELD's unit and not the record's.
+type Vec3 {
+    units { U; }
+    x: double(U);
+    y: double(U);
+    z: double(U);
+}
+
+type Quat {
+    w: double(-);
+    x: double(-);
+    y: double(-);
+    z: double(-);
+}
+
+type Pose {
+    units { U; }
+    p: Vec3(U);
+    q: Quat;
+}
+
+node RecSet {
+    units { U; }
+
+    settings {
+        // Positional: complete, in the order `Vec3` declares its fields.
+        gain: Vec3(-) = { 1.0, 2.0, 3.0 };
+
+        // Named: order-free, and partial. `x` and `y` are still required, so
+        // every instantiation must bind them (§6.2).
+        offset: Vec3(m) = { z = 0.0 };
+
+        // Required outright: no default anywhere, so all three leaves are.
+        // Declared in the unit parameter, so each field converts per instance.
+        limit: Vec3(U);
+
+        // Nested, and the two spellings nest independently of each other.
+        seat: Pose(m) = { p = { 0.5, 0.0, 1.2 },
+                          q = { w = 1.0, x = 0.0, y = 0.0, z = 0.0 } };
+
+        // A leaf read from a scalar expression. `param.gain.x` is an ordinary
+        // node in the §6.2 dependency graph — the dotted name IS the key.
+        span:  double(m) = param.offset.z - param.seat.p.z;
+        scale: double(-) = param.gain.x * param.gain.y;
+
+        // A scalar setting is unaffected: one leaf, keyed by its own name.
+        trim: double(m) = 0.25;
+    }
+
+    inputs  { v: Vec3(U); }
+    outputs { y: Vec3(U); }
+
+    output(v) {
+        out.y.x = in.v.x * param.gain.x;
+        out.y.y = in.v.y * param.gain.y;
+        out.y.z = in.v.z * param.gain.z;
+    }
+}
+
+// The composite that binds them, exercising all three binding forms.
+node RecSetTop {
+    outputs { y: Vec3(m/s^2); }
+
+    settings {
+        cue: Vec3(m/s^2) = { 9.0, 9.0, 4.0 };
+    }
+
+    structure {
+        node src : RecSrc {};
+
+        node k : RecSet (m/s^2) {
+            // A whole-record copy: one spelling, three leaves.
+            limit = param.cue;
+            // Positional, with a per-field unit conversion on each leaf.
+            offset = { 1000.0 (mm), 2000.0 (mm), 3000.0 (mm) };
+            // Named and partial: `gain.y` keeps the definition's default.
+            gain = { x = 0.5, z = 0.25 };
+            // A scalar binding, unchanged.
+            trim = 0.5;
+        };
+
+        src.a --> k.v;
+        k.y   --> self.y;
+    }
+}
+
+node RecSrc {
+    outputs { a: Vec3(m/s^2); }
+    output() { out.a.x = 1.0; out.a.y = 2.0; out.a.z = 3.0; }
+}

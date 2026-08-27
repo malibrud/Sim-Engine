@@ -1,0 +1,60 @@
+// The §6.2c shape errors. All four need a RESOLVED record to check against, so
+// they are elaboration and not parsing: the parser accepts any brace list and
+// only the field tree can say whether it fits.
+//
+//   SE0423  wrong number of values in a positional brace list
+//   SE0424  unknown field name
+//   SE0425  a field given twice
+//   SE0426  a brace list where a scalar is declared, and the converse
+//
+// SE0460 is here too, from recbad.settings: an override that names the record
+// rather than one of its leaves.
+package recbad;
+
+use se.math;
+
+node RecBad {
+    outputs { y: double(-); }
+
+    structure {
+        node k : Sink {
+            // SE0423 — `Vec3` has three fields, the list gives two. A positional
+            // list must be complete; naming the fields is how you give only
+            // some of them.
+            short_list = { 1.0, 2.0 };
+
+            // SE0424 — `Vec3` declares x, y and z, and nothing called `w`.
+            unknown_field = { x = 1.0, w = 2.0 };
+
+            // SE0425 — `y` twice. Last-writer-wins is the rule for OVERRIDES
+            // (§13.3), which arrive from different sources; inside one brace
+            // list it can only be a mistake.
+            twice = { x = 1.0, y = 2.0, y = 3.0 };
+
+            // SE0426 — a brace list where the declaration says `double`.
+            scalar_target = { 1.0, 2.0, 3.0 };
+
+            // SE0426 the other way — §7 is a scalar language, so a record is
+            // built field by field and never computed.
+            record_target = 1.0;
+
+            // Bound so it is not also reported as SE0420.
+            fine = { 1.0, 2.0, 3.0 };
+        };
+
+        k.y --> self.y;
+    }
+}
+
+node Sink {
+    settings {
+        short_list:    math.Vec3(-);
+        unknown_field: math.Vec3(-);
+        twice:         math.Vec3(-);
+        scalar_target: double(-);
+        record_target: math.Vec3(-);
+        fine:          math.Vec3(-);
+    }
+    outputs { y: double(-); }
+    output() { out.y = param.fine.x; }
+}

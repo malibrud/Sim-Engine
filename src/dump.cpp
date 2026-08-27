@@ -121,6 +121,18 @@ std::string expr_to_string(const ast::Expr* e) {
             }
             return s + ")";
         }
+        // §6.2c — a record brace list. Named fields print as written, so the
+        // dump distinguishes the two spellings rather than normalising them: a
+        // partial named list and a positional one are different declarations.
+        case K::Aggregate: {
+            std::string s = "{";
+            for (std::size_t i = 0; i < e->args.size(); ++i) {
+                s += i ? ", " : " ";
+                if (i < e->field_names.size()) s += e->field_names[i] + " = ";
+                s += expr_to_string(e->args[i].get());
+            }
+            return s + (e->args.empty() ? "}" : " }");
+        }
     }
     return "?";
 }

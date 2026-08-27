@@ -911,17 +911,27 @@ void Emitter::sim_members() {
         for (const SettingSlot& s : m_.settings) {
             if (!done.insert(s.owner).second) continue;
             std::vector<Row> crows;
+            // §6.2c — one member per SETTING, not per leaf. A record setting
+            // carries several leaves whose `name` is a dotted path into it
+            // (`offset.x`); that addresses a member but cannot declare one, so
+            // the struct declares the record once and the leaves reach into it,
+            // exactly as a leaf node's `Param` does.
+            std::set<std::string> seen;
             for (const SettingSlot& t : m_.settings) {
                 if (t.owner != s.owner) continue;
+                if (!seen.insert(t.decl).second) continue;
                 Row r;
-                r.type = t.scalar;
-                r.decl = t.name + "{};";
-                r.comment = "// " + t.unit.str();
+                r.type = cpp_type(t.decl_type);
+                r.decl = t.decl + "{};";
+                // A record's fields carry their own units, and they are in
+                // `[types]`; naming one here would be naming the wrong thing.
+                r.comment = t.decl_type.is_record ? "" : "// " + t.unit.str();
                 crows.push_back(r);
             }
             o_ << "\n    struct {\n";
             for (const Row& r : crows)
-                o_ << "        " << pad(r.type, 8) << " " << pad(r.decl, 20) << r.comment
+                o_ << "        " << pad(r.type, 8) << " "
+                   << (r.comment.empty() ? r.decl : pad(r.decl, 20) + r.comment)
                    << "\n";
             o_ << "    } " << param_base(s.owner) << ";   // "
                << (s.owner.empty() ? std::string("<root>") : s.owner) << "\n";

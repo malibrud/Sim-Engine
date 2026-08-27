@@ -1,0 +1,9 @@
+// §6.2c — the shape errors, plus SE0460 for an override that names a record
+// rather than one of its leaves. See lib/recbad/RecBad.se.
+sim RecBad {
+    root: recbad.RecBad {};
+
+    step:     1 (ms);
+    duration: 1 (ms);
+    settings: "recbad.settings";
+}

@@ -293,7 +293,12 @@ foreach ($f in (Get-ChildItem -Path (Join-Path $root 'tests\emit') -File -Filter
 # out of nodes it declares itself.
 $examples = @(
     @{ name = 'drivetrain'; sim = 'examples/drivetrain/Drivetrain.sim'; roots = @('examples') },
-    @{ name = 'washout';    sim = 'examples/washout/Washout.sim';       roots = @('examples', 'stdlib') }
+    @{ name = 'washout';    sim = 'examples/washout/Washout.sim';       roots = @('examples', 'stdlib') },
+    # The same channel as `washout`, built from one vector block instead of
+    # Split3 + three scalar blocks + Merge3. It is the acceptance case for
+    # record settings (SPEC 6.2c), so it has to compile on every run.
+    @{ name = 'washout3';   sim = 'examples/washout/ClassicalFromScratch.sim';
+       roots = @('examples', 'stdlib') }
 )
 foreach ($ex in $examples) {
     $exDir = Join-Path $emitOut $ex.name
@@ -422,6 +427,74 @@ if (-not $cl) {
         } else {
             Write-Host ("FAIL build/emit/RecConv : expected 6 m, off by " + $worst) `
                 -ForegroundColor Red
+            $script:fail++
+        }
+    }
+
+    # RecSet is the record-settings model (SPEC 6.2c). Three axes are driven by
+    # three DIFFERENT ramps through three DIFFERENT gains into three DIFFERENT
+    # limits, so no two columns are interchangeable and each has its own closed
+    # form:
+    #
+    #   src.a = { t, 2t, 3t }              gain = { 1.0, 0.5, 2.0 }
+    #   x = min(1.0 * 1t, 1.0) = min( t, 1.0)
+    #   y = min(0.5 * 2t, 2.0) = min( t, 2.0)
+    #   z = min(2.0 * 3t, 1.5) = min(6t, 1.5)
+    #
+    # A fourth column asserts NESTED record settings, where the leaf walk has to
+    # recurse and a unit argument has to thread down two levels.
+    #
+    # That shape is the point. A leaf walk that read `gain.x` for all three axes,
+    # or `limit.x` for all three, would still produce a well-formed CSV that a
+    # golden diff would accept on -Update; these numbers refuse it.
+    #
+    # The z column carries two more assertions on its own. Its limit is declared
+    # `3000.0 (mm/s^2)` against an (m/s^2) site, so a leaf converts on its own
+    # like a record wire's field does; and recset.settings then overrides
+    # `cue.limit.z` to 1.5, which is the leaf-addressed override channel. Drop
+    # the conversion and the default is 3000 (never saturating); drop the
+    # override and it is 3. Only both working gives min(6t, 1.5).
+    if ($emitDirs.ContainsKey('RecSet')) {
+        $rsDir = $emitDirs['RecSet']
+        Push-Location $rsDir
+        & '.\RecSet.exe' 2>&1 | Out-Null
+        $ran = ($LASTEXITCODE -eq 0)
+        Pop-Location
+        $worst = [double]::PositiveInfinity
+        $csv = Join-Path $rsDir 'recset.csv'
+        if ($ran -and (Test-Path $csv)) {
+            $worst = 0.0
+            foreach ($line in (Get-Content $csv | Select-Object -Skip 1)) {
+                if (-not $line) { continue }
+                $c = $line -split ','
+                $t = [double]$c[0]
+                $errs = @([Math]::Abs([double]$c[1] - [Math]::Min($t, 1.0)),
+                          [Math]::Abs([double]$c[2] - [Math]::Min($t, 2.0)),
+                          [Math]::Abs([double]$c[3] - [Math]::Min(6.0 * $t, 1.5)),
+                          # The nested-record column. Six leaves, each weighted
+                          # by its own power of ten, so this ONE number names
+                          # every one of them: 1 + 20 + 300 + 4000 + 50000 +
+                          # 600000. Two leaves swapped, `lo` and `hi` flattened
+                          # into each other, or the nested unit argument not
+                          # threaded through Span into Vec3 (which would leave
+                          # hi.z at 6000 rather than 6) all move it by at least
+                          # 9 -- far outside any rounding.
+                          [Math]::Abs([double]$c[4] - 654321.0))
+                foreach ($e in $errs) { if ($e -gt $worst) { $worst = $e } }
+            }
+        }
+        # The state is t' = 1, which rk4 integrates exactly, so the only error
+        # here is the recorder's %.9g. The nested column is near 654321, where
+        # nine significant figures resolve about 1e-3; the ramp columns resolve
+        # about 1e-9. The failures this guards against are all O(1) or larger --
+        # a wrong leaf, a dropped conversion, a missed override -- so the bound
+        # is set by the file's precision and not by how tight it could be.
+        if ($worst -lt 1e-3) {
+            Write-Host ("ok   build/emit/RecSet : per-axis record settings match their " +
+                        "closed forms, max error " + $worst.ToString('E2')) -ForegroundColor Green
+            $script:pass++
+        } else {
+            Write-Host ("FAIL build/emit/RecSet : max error " + $worst) -ForegroundColor Red
             $script:fail++
         }
     }

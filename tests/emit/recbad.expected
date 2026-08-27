@@ -1,0 +1,44 @@
+﻿error[SE0423]: `se.math.Vec3` has 3 field(s), but the brace list gives 2
+  --> tests/emit/lib/recbad/RecBad.se:24:26
+   |
+24 |             short_list = { 1.0, 2.0 };
+   |                          ^ wrong number of values
+   = note: fields, in order: x, y, z
+   = help: a positional brace list must be complete; name the fields to give only some of them (§6.2c)
+
+error[SE0424]: `se.math.Vec3` has no field `w`
+  --> tests/emit/lib/recbad/RecBad.se:27:40
+   |
+27 |             unknown_field = { x = 1.0, w = 2.0 };
+   |                                        ^ unknown field
+   = help: it declares `x`, `y`, `z`
+
+error[SE0425]: field `y` is given twice
+  --> tests/emit/lib/recbad/RecBad.se:32:41
+   |
+32 |             twice = { x = 1.0, y = 2.0, y = 3.0 };
+   |                                         ^ already given
+
+error[SE0426]: a brace list where setting `scalar_target` declares a scalar
+  --> tests/emit/lib/recbad/RecBad.se:35:29
+   |
+35 |             scalar_target = { 1.0, 2.0, 3.0 };
+   |                             ^ `double(-)` is not a record
+   = note: a brace list initialises a record, field by field (§6.2c)
+
+error[SE0426]: a value where setting `record_target` declares the record `se.math.Vec3`
+  --> tests/emit/lib/recbad/RecBad.se:39:29
+   |
+39 |             record_target = 1.0;
+   |                             ^^^ expected a brace list
+   = note: §7 is a scalar language: a record is built field by field, not computed (§6.2c)
+
+error[SE0460]: override `k.fine` names a record, not a value
+ --> tests/emit/recbad.settings:4:1
+  |
+4 | k.fine = 3.0;
+  | ^ a record has no single value
+  = note: address one field at a time: `k.fine.x`, `k.fine.y`, `k.fine.z`
+  = note: the same rule an array state follows (§13.4)
+
+6 errors emitted

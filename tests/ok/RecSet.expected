@@ -1,0 +1,55 @@
+﻿=== tests/ok/RecSet.se ===
+model-file
+  package tests
+  type Vec3  [line 10]
+    units
+      U
+    x: double(U)
+    y: double(U)
+    z: double(U)
+  type Quat  [line 17]
+    w: double(-)
+    x: double(-)
+    y: double(-)
+    z: double(-)
+  type Pose  [line 24]
+    units
+      U
+    p: Vec3(U)
+    q: Quat
+  node RecSet  [line 30]  kind=leaf
+    units
+      U
+    settings
+      gain: Vec3(-) = { 1.0, 2.0, 3.0 }
+      offset: Vec3(m) = { z = 0.0 }
+      limit: Vec3(U)  [required]
+      seat: Pose(m) = { p = { 0.5, 0.0, 1.2 }, q = { w = 1.0, x = 0.0, y = 0.0, z = 0.0 } }
+      span: double(m) = (param.offset.z - param.seat.p.z)
+      scale: double(-) = (param.gain.x * param.gain.y)
+      trim: double(m) = 0.25
+    inputs
+      v: Vec3(U)
+    outputs
+      y: Vec3(U)
+    output(v)   [feedthrough]
+      body @line 61 (128 bytes): "out.y.x = in.v.x * param.gain.x; out.y.y = in..."
+  node RecSetTop  [line 69]  kind=composite
+    settings
+      cue: Vec3(m/s^2) = { 9.0, 9.0, 4.0 }
+    outputs
+      y: Vec3(m/s^2)
+    structure
+      node src : RecSrc
+      node k : RecSet (m/s^2)
+        limit = param.cue
+        offset = { 1000.0 (mm), 2000.0 (mm), 3000.0 (mm) }
+        gain = { x = 0.5, z = 0.25 }
+        trim = 0.5
+      src.a --> k.v
+      k.y --> self.y
+  node RecSrc  [line 95]  kind=leaf
+    outputs
+      a: Vec3(m/s^2)
+    output()   [no feedthrough — sort root]
+      body @line 97 (46 bytes): "out.a.x = 1.0; out.a.y = 2.0; out.a.z = 3.0;"

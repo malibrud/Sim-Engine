@@ -1,0 +1,15 @@
+// §6.2c — record-typed settings. See lib/recset/RecSet.se for what the four
+// recorded columns assert and why no two of them are interchangeable.
+sim RecSet {
+    root: recset.RecSet {};
+
+    step:     1 (ms);
+    solver:   rk4;
+    duration: 1 (s);
+    settings: "recset.settings";
+
+    record: {
+        file: "recset.csv";
+        signals { cue.vout.x; cue.vout.y; cue.vout.z; nest.y; }
+    }
+}

@@ -1,0 +1,10 @@
+// The vector-native build of the translational channel (§6.2c). Same boundary as
+// `Washout.sim`: a host writes the specific force into `sig.in` and reads the
+// commanded platform acceleration back.
+sim ClassicalFromScratch {
+    root: washout.ClassicalFromScratch {};
+
+    step:     1 (ms);
+    solver:   rk4;
+    duration: 2 (s);
+}

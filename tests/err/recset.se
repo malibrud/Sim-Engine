@@ -1,0 +1,26 @@
+// SE0243 — a brace list mixes positional and named fields. §6.2c
+//
+// The two spellings desugar identically, so combining them buys nothing and
+// costs the reader the one thing that made either legible: in a mixed list,
+// which field a bare value lands on depends on how many named ones preceded it.
+//
+// Stage 2, so this is the only one of the §6.2c codes that a bare `.se` file
+// reaches. The shape errors that need a resolved record — SE0423 through
+// SE0426 — are elaboration, and live in tests/emit/recbad.sim.
+package tests;
+
+type Vec3 {
+    units { U; }
+    x: double(U);
+    y: double(U);
+    z: double(U);
+}
+
+node Bad {
+    settings {
+        a: Vec3(-) = { 1.0, y = 2.0, 3.0 };   // positional, then named
+        b: Vec3(-) = { x = 1.0, 2.0 };        // named, then positional
+    }
+    outputs { y: double(-); }
+    output() { out.y = 0.0; }
+}

@@ -1,0 +1,113 @@
+// §6.2c — record-typed settings, end to end: declared, defaulted with a brace
+// list, flowed down as a whole record, overridden one leaf at a time, and read
+// per field inside a verbatim body.
+//
+// The assertion is arithmetic, not shape. Three axes are driven by three
+// DIFFERENT ramps through three DIFFERENT gains into three DIFFERENT limits, so
+// every column has its own closed form and no two are interchangeable. A leaf
+// walk that reads `gain.x` for all three axes, or `limit.x` for all three,
+// produces visibly wrong numbers rather than a plausible-looking file — which a
+// golden diff would happily accept.
+//
+//   src.a = { t, 2t, 3t }              gain = { 1.0, 0.5, 2.0 }
+//   cue.vout.x = min(1.0 * 1t, 1.0) = min(  t, 1.0)
+//   cue.vout.y = min(0.5 * 2t, 2.0) = min(  t, 2.0)
+//   cue.vout.z = min(2.0 * 3t, 1.5) = min( 6t, 1.5)
+//
+// `limit.z` is declared 3000 mm/s^2 against an (m/s^2) site — the per-leaf unit
+// conversion, asserted numerically rather than only in the manifest — and is
+// then moved to 1.5 by `recset.settings`, which is the override channel. Both
+// have to work for the z column to read min(6t, 1.5): drop the conversion and
+// the default is 3000, drop the override and it is 3.
+package recset;
+
+use se.math;
+use se.sig;
+
+// A record whose fields are themselves records (§5.2), so the leaf walk has to
+// recurse rather than iterate, and `Span(U)` has to thread its argument down
+// into both `Vec3`s.
+type Span {
+    units { U; }
+    lo: math.Vec3(U);
+    hi: math.Vec3(U);
+}
+
+node RecSet {
+    outputs {
+        y: math.Vec3(m/s^2);
+        n: double(m/s^2);
+    }
+
+    settings {
+        // Positional, complete, in field order.
+        gain: math.Vec3(-) = { 1.0, 0.5, 2.0 };
+
+        // Named and partial: `z` carries a unit suffix that has to convert on
+        // that leaf alone, while `x` and `y` are bare literals adopting the
+        // site's unit (§7.2). Three fields, three different spellings.
+        limit: math.Vec3(m/s^2) = { x = 1.0, y = 2.0, z = 3000.0 (mm/s^2) };
+
+        // Nested, and mixing the two spellings BETWEEN levels — which is legal;
+        // SE0243 is about mixing them WITHIN one list. `hi.z` arrives in mm/s^2
+        // against an (m/s^2) leaf, so the nested unit argument has to have been
+        // threaded through `Span` into `Vec3` for it to convert.
+        span: Span(m/s^2) = { lo = { 1.0, 2.0, 3.0 },
+                              hi = { x = 4.0, y = 5.0, z = 6000.0 (mm/s^2) } };
+    }
+
+    structure {
+        node src : Ramp3 {};
+
+        // A whole-record copy: one spelling reaches all three leaves, and it is
+        // emitted per leaf rather than folded, so an override of `cue.limit.z`
+        // still arrives at configuration (§6.2b step 3).
+        node cue : sig.ScaleLimit3 (m/s^2) {
+            gain  = param.gain;
+            limit = param.limit;
+        };
+
+        node nest : NestChk (m/s^2) { s = param.span; };
+
+        src.a    --> cue.vin;
+        cue.vout --> self.y;
+        nest.y   --> self.n;
+    }
+}
+
+// Each of the six leaves is weighted by a distinct power of ten, so the single
+// recorded number identifies every one of them:
+//
+//   1*1 + 2*10 + 3*100 + 4*1000 + 5*10000 + 6*100000 = 654321
+//
+// Swap any two leaves, thread the nested unit argument wrongly (`hi.z` would
+// read 6000 rather than 6), or flatten `lo` and `hi` into one another, and the
+// sum moves by at least 9 — which no rounding produces and no golden file
+// would have questioned.
+node NestChk {
+    units { U; }
+    settings { s: Span(U); }
+    outputs { y: double(U); }
+
+    output() {
+        out.y = param.s.lo.x *      1.0 + param.s.lo.y *     10.0
+              + param.s.lo.z *    100.0 + param.s.hi.x *   1000.0
+              + param.s.hi.y *  10000.0 + param.s.hi.z * 100000.0;
+    }
+}
+
+// Three ramps at three rates, from one continuous state. Units inside a body
+// are erased (§11), so the scaling here is plain arithmetic; what the compiler
+// checks is the declared `(m/s^2)` on the port.
+node Ramp3 {
+    outputs { a: math.Vec3(m/s^2); }
+    states   { continuous t: double(s) = 0.0; }
+
+    derivative() { der.t = 1.0; }
+
+    output() {
+        out.a.x = 1.0 * state.t;
+        out.a.y = 2.0 * state.t;
+        out.a.z = 3.0 * state.t;
+    }
+}

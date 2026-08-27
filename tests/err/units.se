@@ -1,5 +1,8 @@
 // SE0205 wrong unit-argument arity, SE0206 malformed unit, SE0207 unknown
-// scalar type, SE0231 a record-typed setting. §4.1, §5.1, §5.2
+// scalar type. §4.1, §5.1
+//
+// A record-typed setting used to belong here too, as SE0231. It is legal now
+// (§6.2c) and the code is retired; tests/err/recset.se carries what replaced it.
 package tests;
 
 node Bad {
@@ -9,7 +12,6 @@ node Bad {
         c: double(m^1.5) = 1.0;  // non-integer exponent
         d: dobule(m)     = 1.0;  // typo in the scalar type
         e: double(2*m)   = 1.0;  // only `1` may appear as a literal
-        f: Telemetry;            // settings are scalars
         g: bool(-)       = 1;    // `bool` takes no unit argument
     }
     outputs { y: double(-); }

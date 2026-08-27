@@ -183,6 +183,9 @@ struct Program {
 // One elaborated setting value. `value` is already in `unit`, post-conversion,
 // which is exactly what §15.6 promises the manifest reader.
 struct SettingValue {
+    // §6.2c — the leaf, dotted for a record setting: "offset.x". Both consumers
+    // want it that way: it is the tail of the §13.2 override path, and it is the
+    // key a child's flow-down expression names as `param.offset.x`.
     std::string name;
     Unit unit;
     std::string scalar;
@@ -219,7 +222,17 @@ using ExprCode = std::vector<ExprTok>;
 struct SettingSlot {
     std::string path;        // root-relative, §13.2: "fl.whl.inertia"
     std::string owner;       // the node holding it: "fl.whl" ("" at the root)
-    std::string name;        // the setting's own name: "inertia"
+    // §6.2c — the LEAF, which for a record setting is a dotted path into it:
+    // "inertia", or "offset.x". This is the right spelling in all three places
+    // it is used — the §13.2 override path, the §15.6 manifest row, and C++
+    // member access in `resolve_settings` — because a record lowers to a struct
+    // whose members carry the field names verbatim.
+    std::string name;
+    // The setting the leaf belongs to, and its declared type. A dotted `name` is
+    // not a declarable member name, so a composite's parameter struct declares
+    // `decl_type decl` once and every leaf addresses into it (§15.5).
+    std::string decl;        // "inertia" | "offset"
+    Type decl_type;          // unit-substituted, as declared
     std::string pin;         // the pinned-flag member guarding it
     Unit unit;
     std::string scalar;      // "double" / "int"

@@ -471,8 +471,10 @@ temperature *difference*.
 
 Every one of these is a declarative site, checked at stage 4:
 
-1. A setting default expression against the setting's declared unit.
-2. A setting binding at instantiation against the child setting's unit.
+1. A setting default expression against the setting's declared unit — per
+   leaf, for a record setting (§6.2c).
+2. A setting binding at instantiation against the child setting's unit, per leaf
+   in the same way.
 3. A state default against the state's unit.
 4. A wire: the producing port's unit against the consuming port's — per field,
    for records, and per unit argument for a parametric record (§5.2).
@@ -644,9 +646,12 @@ type WheelState {
   (`SE0310`).
 - Records lower to a plain C++ struct with one member per field, each annotated
   with its unit as a comment and listed in the manifest's `[types]` section.
-- Records may appear as `inputs`, `outputs`, and `vars`. They may **not** be
-  `settings` (settings are scalars, because the flow-down expression language is
-  scalar) or `states` (the solver ABI is a flat `double` vector).
+- Records may appear as `inputs`, `outputs`, `vars`, and `settings` (§6.2c).
+  They may **not** be `states`: the solver ABI is a flat `double` vector.
+  *This bullet used to bar settings as well, on the ground that the flow-down
+  expression language is scalar. That ground still holds and §7 is unchanged —
+  §6.2c does not make §7 record-valued, it splits a record setting into the
+  scalar leaves it carries before §7 ever sees it.*
 
 ### 5.3 What a wire carries
 
@@ -867,7 +872,11 @@ a.y --> b.x;              // error: (m/s) where (N) is declared
 ```
 
 A setting declared `(U)` converts per instance like any other declarative site: a
-node bound `(m/s^2)` and given `36000 (km/h^2)` receives `2.7778`.
+node bound `(m/s^2)` and given `36000 (km/h^2)` receives `2.7778`. A **record**
+setting (§6.2c) does the same one field at a time, exactly as a record port
+does: `limit: Vec3(U)` on a node bound `(m/s^2)`, given
+`{ 5000.0 (mm/s^2), … }`, receives `5.0` in each field, each factor folded at
+elaboration.
 
 ##### Leaf-only
 
@@ -946,6 +955,103 @@ with no source in reach, and the last three of the five are not detectable at
 compile time at all. They are reported by the model against a *path*, in the
 mechanism §14 defines for a rejected settings source, and the catalogue in §16.4
 deliberately does not cover them.
+
+#### 6.2c Record settings
+
+A setting is declared exactly the way a port is — the same `type_ref`, records
+included, nesting to any depth, with a concrete scalar at every leaf:
+
+```
+settings {
+    gain:   math.Vec3(-)     = { 1.0, 1.0, 1.0 };
+    limit:  math.Vec3(U);                            // every leaf required
+    offset: math.Vec3(m)     = { z = 0.0 };          // x and y still required
+    seat:   Pose(m)          = { p = { 0.5, 0.0, 1.2 },
+                                 q = { w = 1.0, x = 0, y = 0, z = 0 } };
+}
+```
+
+**A record setting is a tree of scalar leaf settings, and only the leaves are
+real.** This is the whole of the design. §6.2's dependency graph, `SE0421` cycle
+detection, required-ness, pinning, §6.2b step 3, the §13.2 override path and the
+§15.6 manifest row all keep operating on scalars, exactly as before; a record
+setting simply contributes more than one of them. Nothing in §7 became
+record-valued, which is why §7.2's "every value is a real number with a
+dimension" still holds without qualification.
+
+A leaf is named by a dotted path, and that one spelling is right in all three
+places it is used — as the tail of an override path, as a `param.*` reference,
+and as C++ member access in the generated `resolve_settings` — because a record
+lowers to a struct carrying the field names verbatim (§5.2).
+
+**Required-ness, defaults and pinning are per leaf.** `limit` above has no
+default, so all three of `limit.x`, `limit.y` and `limit.z` are required and
+`SE0420` names the leaf. `offset` defaults only `z`, so `offset.x` and
+`offset.y` remain required — which a positional list cannot express, and is the
+reason both spellings exist.
+
+##### The brace list
+
+A brace list is **not a value**. It is destructured against the declared field
+tree at the declaration site, and never evaluated: no aggregate ever becomes a
+§7 value. What survives destructuring is one ordinary scalar expression per
+leaf, checked and converted by the rules §7.2 already states.
+
+It has **two spellings, and a list is wholly one or the other** (`SE0243`) —
+the same "two equivalent spellings that desugar identically" as fan-out
+(§6.9.2):
+
+- **Positional** — matched to the order the `type` declares its fields, and
+  **must be complete** (`SE0423`). Terse, and the right choice for a `Vec3`.
+- **Named** — order-free and **may be partial**; an unnamed field falls through
+  to its own default, or stays required. An unknown field name is `SE0424`, and
+  a field given twice in one list is `SE0425`. Last-writer-wins is the rule for
+  *overrides* (§13.3), which arrive from different sources; inside one brace
+  list a repeat can only be a mistake.
+
+The two nest independently, so each level picks whichever reads better. A brace
+list where a scalar is declared — or a scalar expression where a record is —
+is `SE0426`.
+
+**Each leaf converts on its own**, exactly as a record wire's field does (§5.2):
+
+```
+limit = { 5000.0 (mm/s^2), 5000.0 (mm/s^2), 4000.0 (mm/s^2) };
+```
+
+##### Reaching a leaf, and copying a record
+
+`param.` reaches a leaf by the same dotted path, and the result is an ordinary
+scalar in an ordinary §7 expression:
+
+```
+settings { span: double(m) = param.limit.x - param.offset.x; }
+```
+
+A flow-down binding (§6.9.1) takes either brace spelling, and one form more:
+naming a setting of the same record type **copies it, leaf by leaf**.
+
+```
+node cue : sig.ScaleLimit3 (m/s^2) {
+    gain  = { 0.6, 0.6, 0.4 };
+    limit = param.accel_limit;      // one spelling, every leaf
+};
+```
+
+The copy is emitted per leaf rather than folded, so overriding the parent's
+`accel_limit.z` at configuration still reaches the child (§6.2b step 3). This is
+a copy and not arithmetic: **there is no record algebra**. `param.a + param.b`
+over two `Vec3`s is `SE0426`, and deliberately — a component-wise `+` would have
+to answer for `*` as well, and a language with a dot product in its *setting*
+expressions has stopped being the small total language §7.4 argues for.
+
+##### What did not change
+
+- **`rate` is scalar.** It must still be `double(Hz)` (`SE0422`).
+- **An override addresses a leaf, never a record** (§13.4).
+- **The compiled model's loader is untouched** (§14.1). It still reads a flat
+  path and a number with an optional unit suffix, because that is all a leaf
+  ever is.
 
 ### 6.3 `inputs` and `outputs`
 
@@ -1490,11 +1596,19 @@ multiplicative := unary { ( '*' | '/' ) unary }
 unary          := ( '+' | '-' ) unary | power
 power          := primary [ '^' unary ]              // right-associative
 primary        := number [ unit ]
-                | 'param' '.' identifier
+                | 'param' '.' identifier { '.' identifier }   // §6.2c
+                | aggregate                                   // §6.2c
                 | identifier '(' [ expression { ',' expression } ] ')'
                 | identifier                          // named constant
                 | '(' expression ')'
+
+aggregate      := '{' [ positional | named ] '}'
+positional     := expression { ',' expression }
+named          := identifier '=' expression { ',' identifier '=' expression }
 ```
+
+The trailing segments on `param.` reach a leaf of a record setting (§6.2c);
+`param.offset.x` is a scalar and behaves as any other `param.*` does.
 
 Precedence, loosest to tightest: `+ -` · `* /` · unary `+ -` · `^`. So `-2^2` is
 −4 and `2^3^2` is 2⁹, matching ordinary mathematical convention.
@@ -1502,6 +1616,15 @@ Precedence, loosest to tightest: `+ -` · `* /` · unary `+ -` · `^`. So `-2^2`
 ### 7.2 Values and units
 
 Every value is a real number with a dimension.
+
+**An `aggregate` is not a value, which is why that sentence needs no
+qualification.** A brace list never reaches the evaluator: it is destructured
+against the declared field tree at the declaration site (§6.2c), and what the
+evaluator sees is one ordinary scalar expression per leaf. So §7 has no
+aggregate type, no record arithmetic, and nothing that could fail to have a
+dimension. It appears in the grammar above rather than beside it because it may
+only occur where a §7 expression may, and the parser has no way to know a
+target's shape.
 
 - A literal with a unit suffix — `1500 (kg)` — has that unit.
 - A **bare literal takes the unit of the site it initialises**. `radius = 0.31`
@@ -2276,6 +2399,19 @@ bw.w1[3]            =    0 (-);     // one element of an array state (§6.4a)
 
 Layering: declared state default → `init()` code → external override.
 
+**A record setting is addressed one leaf at a time** (§6.2c), and never as a
+whole (`SE0460`):
+
+```
+cue.limit.z = 4.0 (m/s^2);       // ok
+cue.limit   = { … };             // SE0460 — a record has no single value
+```
+
+This is the same rule as the one below it, for the same reason: §7 has no
+aggregate value a running model could be handed, and §14.1's loader reads a
+number. The leaf paths are exactly the ones §15.6 lists, so a `.settings` file
+is checkable against the manifest without knowing that a record was involved.
+
 **An array state is addressed one element at a time.** There is no path naming
 the whole array, because §7 has no aggregate value to assign to it and the
 declared default already initialises every element uniformly. An index past the
@@ -2408,6 +2544,10 @@ which is the carrier `sec` never sees. A model exposes three operations:
 | `load_settings` | apply a §14 source; each binding pins its target |
 | `resolve_settings` | re-evaluate derived defaults and flow-down, skipping pinned |
 | `dump_settings` | emit a §14 source describing the model's current settings |
+
+**Record settings cost the runtime nothing** (§6.2c). A leaf is a flat path and
+a number, which is what this section already describes, so nothing below changed
+when records became settable.
 
 **The runtime accepts a restricted right-hand side.** `sec` evaluates all of §7;
 a compiled model accepts a **number with an optional unit suffix** and nothing
@@ -2766,6 +2906,8 @@ dis_arr[?]  bw.w2 [param.nbq]   -           dynamic
           whl.inertia           kg*m^2      = 0.9
           tc.rate               Hz          = 200.0
           bw.order              -           = 4
+          cue.limit.x           m/s^2       = 5.0
+          cue.limit.z           m/s^2       = 4.0
 
 [types]
 drivetrain.WheelState.speed     rad/s
@@ -2820,6 +2962,11 @@ configured model knows this and `sec` does not."
 
 A model with no array state has a fully static map, and may emit `state_map` as
 a static table exactly like the other two.
+
+**A record setting appears as one row per leaf** (§6.2c), addressed by the
+dotted path — which is what `[signals]` above already does for a record port,
+so this block gains rows and not a new shape. There is no row naming the record
+itself, because there is no value a §14 source could bind to one (§13.4).
 
 **`[settings]` is the configuration schema** (§14.1), not a record of what was
 baked. It names every path a §14 source may bind, the unit that source is checked
@@ -2922,7 +3069,7 @@ of thing wearing the same name.
 | `SE0220` | 2 | Duplicate section in a node |
 | `SE0221` | 2 | Unknown section name |
 | `SE0230` | 2 | State kind (`continuous`/`discrete`) omitted |
-| `SE0231` | 2 | A setting may not be a record type |
+| `SE0231` | — | *Retired.* A setting may not be a record type — lifted by §6.2c. The number stays burned; codes are stable. |
 | `SE0232` | 2 | A state may not be a record type |
 | `SE0233` | 2 | A `native` member may not carry a unit |
 | `SE0234` | 2 | An extent is not permitted on this declaration (port, setting, record field, `native`) |
@@ -2930,6 +3077,7 @@ of thing wearing the same name.
 | `SE0240` | 2 | Helper function has no body |
 | `SE0241` | 2 | `init` takes no parameters |
 | `SE0242` | 2 | `final` takes at most one parameter |
+| `SE0243` | 2 | A brace list mixes positional and named fields |
 | `SE0250` | 2 | Unknown platform atom in `when` |
 | `SE0251` | 2 | Unknown build primitive |
 | `SE0260` | 2 | Duplicate entry in `sim` |
@@ -2971,6 +3119,10 @@ of thing wearing the same name.
 | `SE0418` | 3 | A composite may not declare unit parameters |
 | `SE0419` | 4 | Wrong number of unit arguments at an instantiation |
 | `SE0422` | 4 | Reserved setting `rate` has the wrong unit or type |
+| `SE0423` | 4 | Wrong number of values in a positional brace list |
+| `SE0424` | 4 | Unknown field name in a brace list |
+| `SE0425` | 4 | A field is given twice in a brace list |
+| `SE0426` | 4 | A brace list where a scalar is declared, or a value where a record is |
 | `SE0430` | 4 | Unconnected input |
 | `SE0431` | 4 | A `continuous` state must be `double` |
 | `SE0432` | 4 | An array extent must be a dimensionless, non-negative integer |
@@ -3110,10 +3262,18 @@ multiplicative  = unary { ( "*" | "/" ) unary } ;
 unary           = ( "+" | "-" ) unary | power ;
 power           = primary [ "^" unary ] ;
 primary         = NUMBER [ unit ]
-                | "param" "." IDENT
+                | "param" "." IDENT { "." IDENT }      (* §6.2c *)
+                | aggregate                            (* §6.2c *)
                 | IDENT "(" [ expression { "," expression } ] ")"
                 | IDENT
                 | "(" expression ")" ;
+
+(* §6.2c — a record brace list. Wholly positional or wholly named, never
+   mixed (SE0243). It is destructured against the declared field tree at the
+   declaration site and never evaluated, so §7 stays scalar. *)
+aggregate       = "{" [ agg_positional | agg_named ] "}" ;
+agg_positional  = expression { "," expression } ;
+agg_named       = IDENT "=" expression { "," IDENT "=" expression } ;
 
 (* ─── sim file ───────────────────────────────────────────────────────── *)
 
@@ -3251,6 +3411,17 @@ Recorded so that their absence is visibly deliberate.
    which is a weaker sentence. A fixed-capacity or host-provided scratch arena
    would restore the stronger one, at the cost of a bound the modeller has to
    pick. Not taken; recorded because the weakening was deliberate.
+
+8b. **Record `states`** (§5.2). §6.2c opened records as settings by splitting
+   them into scalar leaves before §7 sees them; the same trick does not open
+   them as states, because the obstacle there is not the expression language but
+   the solver ABI, which is a flat `double` vector the host owns (§15.5). A
+   record state would have to be either scattered across that vector — which
+   makes `state.pose.p.x` an offset computation rather than a member access — or
+   held beside it, which is a second state block and a second ABI. Neither is
+   obviously right. `se.math.Split3`/`Merge3` cover the need meanwhile, and
+   `se.math.Vec3`'s fields are `double` deliberately so that nothing forecloses
+   it.
 
 **Deliberately deferred, each a pure extension:**
 

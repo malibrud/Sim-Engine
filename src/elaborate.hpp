@@ -98,6 +98,38 @@ private:
     bool coerce(const Value& v, const Type& target, const Source& src, Loc loc,
                 const char* what, double& out, ExprCode* out_code = nullptr);
 
+    // ─── §6.2c — record settings ─────────────────────────────────────────────
+    // One scalar a setting actually carries. A scalar setting yields exactly one
+    // of these, keyed by its own name, so every walk below is the walk it always
+    // was; a record setting simply contributes more than one node to it.
+    // Everything downstream works on leaves and never on the record: the §6.2
+    // dependency sort, pinning, the configuration program, the §15.6 manifest
+    // row, and the §13.2 override path.
+    struct Leafling {
+        std::string key;              // "gain" | "gain.x" | "seat.p.x"
+        Type type;                    // scalar, unit already substituted
+        const ast::Expr* expr;        // the value bound here, or null if none is
+        Loc loc;                      // the value's span, or the declaration's
+        Loc decl_loc;                 // the declaration's span, always
+        // A shape error was already reported for this leaf's setting, so it must
+        // not also be reported as unbound. One mistake, one diagnostic: a
+        // three-field record that fails to destructure would otherwise answer a
+        // single wrong brace list with SE0423 and three SE0420s.
+        bool errored = false;
+    };
+    // Splits `value` across `target`'s field tree, appending one Leafling per
+    // scalar leaf. A brace list is destructured HERE and never evaluated, which
+    // is what keeps §7 scalar (§7.2) while a setting may be a record. Reports
+    // SE0423–SE0426 and returns false on a shape error, having still produced
+    // whatever leaves it could so the model stays emittable.
+    bool destructure(const Type& target, const ast::Expr* value, const std::string& key,
+                     Loc decl_loc, const Source& src, const std::string& what,
+                     std::vector<Leafling>& out);
+    // Synthesised `param.<a>.<b>` nodes for a whole-record copy. Owned here
+    // because a Leafling borrows its expression and there is nothing in the AST
+    // to borrow: the copy is spelled once at the source and reaches N leaves.
+    std::vector<std::unique_ptr<ast::Expr>> synth_;
+
     // ─── Instantiation ───────────────────────────────────────────────────────
     void instantiate(const NodeInfo* def, const std::string& path,
                      std::map<std::string, Pin> pinned, const Source& src, Loc loc,

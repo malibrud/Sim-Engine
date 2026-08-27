@@ -65,12 +65,13 @@ using ExprPtr = std::unique_ptr<Expr>;
 
 struct Expr {
     enum class Kind {
-        Number,   // literal, with an optional unit suffix
-        Param,    // param.<name>
-        Call,     // f(args…)
-        Name,     // a named constant: pi, e, inf
-        Unary,    // + -
-        Binary,   // + - * / ^
+        Number,     // literal, with an optional unit suffix
+        Param,      // param.<name>, or param.<name>.<field>… into a record (§6.2c)
+        Call,       // f(args…)
+        Name,       // a named constant: pi, e, inf
+        Unary,      // + -
+        Binary,     // + - * / ^
+        Aggregate,  // { … } — a record brace list (§6.2c)
     };
 
     Kind kind = Kind::Number;
@@ -81,7 +82,12 @@ struct Expr {
     UnitPtr unit;                // Number: optional unit suffix
     char op = 0;                 // Unary / Binary
     ExprPtr lhs, rhs;            // Binary; Unary uses lhs
-    std::vector<ExprPtr> args;   // Call
+    std::vector<ExprPtr> args;   // Call; Aggregate: the field values, in order
+    // §6.2c — an Aggregate is positional when this is empty, and named when it
+    // is parallel to `args`. The two spellings never mix (SE0243), so one
+    // vector being empty-or-parallel is the whole discriminator.
+    std::vector<std::string> field_names;
+    std::vector<Loc> field_locs;   // Aggregate: per-field, for diagnostics
 };
 
 // ─── Types (§5) ──────────────────────────────────────────────────────────────

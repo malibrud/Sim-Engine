@@ -1,0 +1,82 @@
+﻿# ----------------------------------------------------------------------------
+#  GENERATED — DO NOT EDIT.
+#  Unit manifest for: Sim.generated.hpp
+#  sim: RecSet   root: recset.RecSet   base step: 0.001 s
+#
+#  Units are checked by the DSL compiler at every declarative site and then
+#  ERASED — the generated C++ is plain `double` throughout. This file is where
+#  the erased information goes. It is a real generator output, not
+#  documentation: it is the contract for anyone writing an external solver,
+#  feeding the root boundary, or overriding a setting from outside the model.
+#
+#  Every value named here is IN THE UNIT SHOWN. `-` means dimensionless.
+# ----------------------------------------------------------------------------
+
+[state.continuous]        # slot | model path | unit  -- the solver's ABI
+x[0]      src.t                   s
+xd[0]     src.t'                  -
+
+[state.discrete]          # Sim::dis; offsets from Sim::discrete_map()
+          (none)
+
+[signals]                 # Sim::sig; offsets from Sim::signal_map()
+          src.a.x                 m/s^2       double
+          src.a.y                 m/s^2       double
+          src.a.z                 m/s^2       double
+          cue.vout.x              m/s^2       double
+          cue.vout.y              m/s^2       double
+          cue.vout.z              m/s^2       double
+          nest.y                  m/s^2       double
+
+[boundary.in]             # root inputs the host must drive, as sig.in.*
+          (none)
+
+[boundary.out]            # root outputs the host may read
+          cue.vout.x              m/s^2
+          cue.vout.y              m/s^2
+          cue.vout.z              m/s^2
+          nest.y                  m/s^2
+
+[settings]                # configurable; value is the elaborated default
+          gain.x                  -           = 1.0
+          gain.y                  -           = 0.5
+          gain.z                  -           = 2.0
+          limit.x                 m/s^2       = 1.0
+          limit.y                 m/s^2       = 2.0
+          limit.z                 m/s^2       = 3.0
+          span.lo.x               m/s^2       = 1.0
+          span.lo.y               m/s^2       = 2.0
+          span.lo.z               m/s^2       = 3.0
+          span.hi.x               m/s^2       = 4.0
+          span.hi.y               m/s^2       = 5.0
+          span.hi.z               m/s^2       = 6.0
+          cue.gain.x              -           = 1.0   <- gain.x
+          cue.gain.y              -           = 0.5   <- gain.y
+          cue.gain.z              -           = 2.0   <- gain.z
+          cue.limit.x             m/s^2       = 1.0   <- limit.x
+          cue.limit.y             m/s^2       = 2.0   <- limit.y
+          cue.limit.z             m/s^2       = 1.5
+          nest.s.lo.x             m/s^2       = 1.0   <- span.lo.x
+          nest.s.lo.y             m/s^2       = 2.0   <- span.lo.y
+          nest.s.lo.z             m/s^2       = 3.0   <- span.lo.z
+          nest.s.hi.x             m/s^2       = 4.0   <- span.hi.x
+          nest.s.hi.y             m/s^2       = 5.0   <- span.hi.y
+          nest.s.hi.z             m/s^2       = 6.0   <- span.hi.z
+
+[decimation]              # derived from `rate` at configuration
+
+[types]
+se.math.Vec3                      units { U }
+se.math.Vec3.x                    U
+se.math.Vec3.y                    U
+se.math.Vec3.z                    U
+recset.RecSet#Span                units { U }
+recset.RecSet#Span.lo             se.math.Vec3
+recset.RecSet#Span.hi             se.math.Vec3
+
+[recorded]                # columns of recset.csv
+          time                    s
+          cue.vout.x              m/s^2
+          cue.vout.y              m/s^2
+          cue.vout.z              m/s^2
+          nest.y                  m/s^2

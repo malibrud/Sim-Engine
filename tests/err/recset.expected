@@ -1,0 +1,15 @@
+﻿error[SE0243]: a brace list mixes positional and named fields
+  --> tests/err/recset.se:21:29
+   |
+21 |         a: Vec3(-) = { 1.0, y = 2.0, 3.0 };   // positional, then named
+   |                             ^ named, where the list began positional
+   = note: a brace list is wholly positional or wholly named; the two spellings desugar identically but may not be combined (§6.2c)
+
+error[SE0243]: a brace list mixes positional and named fields
+  --> tests/err/recset.se:22:33
+   |
+22 |         b: Vec3(-) = { x = 1.0, 2.0 };        // named, then positional
+   |                                 ^^^ positional, where the list began named
+   = note: a brace list is wholly positional or wholly named; the two spellings desugar identically but may not be combined (§6.2c)
+
+2 errors emitted

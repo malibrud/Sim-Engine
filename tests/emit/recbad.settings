@@ -1,0 +1,4 @@
+// SE0460 — a record has no single value, so an override addresses one leaf at a
+// time. The same rule an array state follows (§13.4), and for the same reason:
+// §7 has no aggregate, and a compiled model's loader reads a number (§14.1).
+k.fine = 3.0;

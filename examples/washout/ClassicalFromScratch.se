@@ -1,0 +1,47 @@
+// Classical washout, translational channel — built from ONE vector block.
+//
+// The same channel as `Classical.se`, written the other way round, and the two
+// are meant to be read side by side. `Classical.se` predates record settings: it
+// reaches the scalar signal library through `Split3` -> three `ScaleLimit`
+// instances -> `Merge3`, because there was no way to give one block three
+// per-axis gains. This file gives them to it directly (§6.2c).
+//
+// Six nodes and eleven wires become two nodes and three wires, and the three
+// axes' parameters stop being three unrelated instances that a reader has to
+// notice are meant to move together.
+//
+// COORDINATE CONVENTION -- SAE, matching `se.math.Vec3`: X forward/north, Y
+// right/east, Z down. Specific force is what an accelerometer reads, f = a - g,
+// so at rest and level it is {0, 0, -9.81}. The compiler does not check this and
+// cannot; it is a contract with whoever drives the boundary.
+package washout;
+
+use se.math;
+use se.sig;
+
+node ClassicalFromScratch {
+    // The per-axis parameters live HERE, on the composite, so the whole cue is
+    // tuned from one place and flows down as a record. Z is scaled less and
+    // limited harder than X and Y: a platform has far less heave travel than
+    // surge or sway.
+    settings {
+        gain:  math.Vec3(-)      = { 0.6, 0.6, 0.4 };
+        limit: math.Vec3(m/s^2)  = { 5.0, 5.0, 4.0 };
+    }
+
+    inputs  { ain:  math.Vec3(m/s^2); }   // specific force, vehicle body frame
+    outputs { aout: math.Vec3(m/s^2); }   // commanded platform acceleration
+
+    structure {
+        // A whole-record flow-down: one spelling reaches all three leaves, and
+        // an override of `gain.z` at configuration still arrives here, because
+        // the copy is emitted per leaf and not folded (§6.2b).
+        node linScale : sig.ScaleLimit3 (m/s^2) {
+            gain  = param.gain;
+            limit = param.limit;
+        };
+
+        self.ain          --> linScale.vin;
+        linScale.vout     --> self.aout;
+    }
+}

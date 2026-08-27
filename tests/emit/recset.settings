@@ -1,0 +1,4 @@
+// §6.2c — an override addresses a LEAF of a record setting, never the record.
+// This one detaches `limit.z` from the flow-down (§13.3): the parent's
+// `limit.z` still says 3000 mm/s^2, and the child no longer listens.
+cue.limit.z = 1.5 (m/s^2);
