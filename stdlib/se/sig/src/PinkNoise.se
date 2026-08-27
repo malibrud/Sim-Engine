@@ -29,11 +29,11 @@ node PinkNoise {
     units { U; }
 
     settings {
-        sigma: double(U) = 1.0;      // standard deviation of the OUTPUT
-        mean: double(U) = 0.0;
+        sigma: double(U) = 1.0;  // standard deviation of the OUTPUT
+        mean:  double(U) = 0.0;
 
-        f_lo: double(Hz) = 1.0;      // below this the spectrum flattens
-        f_hi: double(Hz) = 1000.0;   // above this it flattens too
+        f_lo: double(Hz) = 1.0;     // below this the spectrum flattens
+        f_hi: double(Hz) = 1000.0;  // above this it flattens too
 
         seed: int(-) = 12345;
 
@@ -56,7 +56,7 @@ node PinkNoise {
 
     vars {
         p0: double(-);  p1: double(-);  p2: double(-);   // pole coefficients
-        g: double(-);                                     // output normalisation
+        g: double(-);  // output normalisation
     }
 
     declarations {

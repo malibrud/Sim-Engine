@@ -21,8 +21,8 @@ node Butterworth {
     units { U; }
 
     settings {
-        fc: double(Hz);                          // cutoff, required
-        order: int(-)    = 4;
+        fc:    double(Hz);  // cutoff, required
+        order: int(-) = 4;
 
         // The section count, named ONCE. The extent is a §7 expression and the
         // loop bound is C++, so the two cannot share a subexpression; writing
@@ -31,7 +31,7 @@ node Butterworth {
         // nothing checking that they agree (§6.4a). An override may also pin
         // this directly, detaching the section count from `order` exactly as
         // §13.3 describes for any derived setting.
-        nbq: int(-)    = ceil(param.order / 2);
+        nbq: int(-) = ceil(param.order / 2);
 
         fs: double(Hz) = sample_rate;
     }

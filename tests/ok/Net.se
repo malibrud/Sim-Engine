@@ -5,9 +5,9 @@ package tests;
 
 node Net {
     settings {
-        port: int(-)    = 9000;
-        rate: double(Hz) = 100.0;
-        deadband: double(-) = 1.0e-6;
+        port:     int(-)     = 9000;
+        rate:     double(Hz) = 100.0;
+        deadband: double(-)  = 1.0e-6;
     }
     inputs {
         tx: double(-);

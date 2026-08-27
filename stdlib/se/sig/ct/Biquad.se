@@ -63,13 +63,13 @@ node Biquad {
     // these names are public surface — they are the slot map in
     // `[state.continuous]` and the path an initial condition overrides.
     states {
-        continuous w: double(-) = 0.0;
+        continuous w:  double(-) = 0.0;
         continuous wd: double(-) = 0.0;
     }
 
     vars {
         n1: double(-);  n2: double(-);     // denominator, normalised by a0
-        d0: double(-);                      // direct term
+        d0: double(-);  // direct term
         cw: double(-);  cwd: double(-);    // output taps on w and wd
     }
 

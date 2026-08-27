@@ -18,23 +18,23 @@ package arrst;
 //   total(t) = 0                                  a scalar state that never moves
 node ArrSt {
     settings {
-        n: int(-)    = 3;
+        n:  int(-)      = 3;
         k0: double(1/s) = 1.0;
     }
 
     outputs {
-        sum: double(-);      // sum of the decays
-        tail: double(-);      // the oldest sample in the shift register
-        first: double(-);      // x[0], as an output rather than a state read
+        sum:   double(-);  // sum of the decays
+        tail:  double(-);  // the oldest sample in the shift register
+        first: double(-);  // x[0], as an output rather than a state read
     }
 
     states {
         // The extent is a §7 expression read at configuration, so `n` stays an
         // ordinary overridable setting and the block moves when it moves.
         continuous x [param.n]: double(-) = 1.0;
-        continuous total: double(-) = 0.0;
+        continuous total:       double(-) = 0.0;
         discrete   h [param.n]: double(-) = 0.0;
-        discrete   tick: int(-)    = 0;
+        discrete   tick:        int(-)    = 0;
     }
 
     vars {

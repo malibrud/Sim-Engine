@@ -19,11 +19,11 @@ node Square {
     units { U; }
 
     settings {
-        amplitude: double(U) = 1.0;
-        f: double(Hz) = 1.0;
-        duty: double(-) = 0.5;    // fraction of the period spent high
-        phase: double(rad) = 0.0;
-        offset: double(U) = 0.0;
+        amplitude: double(U)   = 1.0;
+        f:         double(Hz)  = 1.0;
+        duty:      double(-)   = 0.5;  // fraction of the period spent high
+        phase:     double(rad) = 0.0;
+        offset:    double(U)   = 0.0;
 
         rate: double(Hz) = sample_rate;
     }

@@ -13,8 +13,8 @@ use se.sig.ct;
 // and separately  omega (rad/s) x arm (m) -> (rad*m/s), the Cross3 assertion.
 node Vec3Chk {
     outputs {
-        speed:  math.Vec3(m/s);
-        mag: double(m/s);
+        speed:   math.Vec3(m/s);
+        mag:     double(m/s);
         tangent: math.Vec3(rad*m/s);
     }
 

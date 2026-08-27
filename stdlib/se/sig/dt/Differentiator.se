@@ -13,7 +13,7 @@ node Differentiator {
     units { U; }
 
     settings {
-        wc: double(rad/s);                      // roll-off, required
+        wc: double(rad/s);  // roll-off, required
         fs: double(Hz) = sample_rate;
     }
 

@@ -7,11 +7,11 @@ node Corner {
         wheel_inertia: double(kg*m^2) = 0.9;
     }
     inputs {
-        axle_torque: double(N*m);
+        axle_torque:  double(N*m);
         ground_speed: double(m/s);
     }
     outputs {
-        ws         : WheelState;             // republish the wheel record at the boundary
+        ws:         WheelState;  // republish the wheel record at the boundary
         torque_cut: double(N*m);
     }
 

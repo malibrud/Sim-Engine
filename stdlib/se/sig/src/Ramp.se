@@ -15,7 +15,7 @@ node Ramp {
     units { U; }
 
     settings {
-        slope: double(U/s);              // required
+        slope:   double(U/s);  // required
         initial: double(U) = 0.0;
         t_start: double(s) = 0.0;
 

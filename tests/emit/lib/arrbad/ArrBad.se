@@ -6,7 +6,7 @@ package arrbad;
 // configuration failure and not a compile error (§13.4).
 node ArrBad {
     settings {
-        n: int(-)    = 3;
+        n:   int(-)    = 3;
         len: double(m) = 4.0;
     }
 
@@ -15,11 +15,11 @@ node ArrBad {
     states {
         // SE0433 — an array state is `double`, both kinds. Both blocks an
         // extent can land in are flat `double` arrays (§15.5).
-        discrete   counts [param.n]: int(-)    = 0;
+        discrete   counts [param.n]: int(-) = 0;
         // SE0432 — an extent counts slots; it is not a quantity.
         continuous a [param.len]: double(-) = 0.0;
         // SE0432 — constant, and constant-bad is bad for good.
-        continuous b [2.5]: double(-) = 0.0;
+        continuous b [2.5]:     double(-) = 0.0;
         continuous c [param.n]: double(-) = 0.0;
     }
 

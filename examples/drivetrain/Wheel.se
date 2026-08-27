@@ -4,14 +4,14 @@ package drivetrain;
 node Wheel {
     settings {
         inertia: double(kg*m^2) = 0.9;
-        radius: double(m) = 0.31;
+        radius:  double(m)      = 0.31;
     }
     inputs {
-        drive_torque: double(N*m);   // from the driveline
-        ground_speed: double(m/s);   // vehicle longitudinal speed
+        drive_torque: double(N*m);  // from the driveline
+        ground_speed: double(m/s);  // vehicle longitudinal speed
     }
     outputs {
-        ws: WheelState;               // the whole record leaves on one wire
+        ws: WheelState;  // the whole record leaves on one wire
     }
     states {
         continuous omega: double(rad/s) = 0.0;

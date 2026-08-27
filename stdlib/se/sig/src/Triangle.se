@@ -16,10 +16,10 @@ node Triangle {
     units { U; }
 
     settings {
-        amplitude: double(U) = 1.0;
-        f: double(Hz) = 1.0;
-        phase: double(rad) = 0.0;
-        offset: double(U) = 0.0;
+        amplitude: double(U)   = 1.0;
+        f:         double(Hz)  = 1.0;
+        phase:     double(rad) = 0.0;
+        offset:    double(U)   = 0.0;
 
         rate: double(Hz) = sample_rate;
     }

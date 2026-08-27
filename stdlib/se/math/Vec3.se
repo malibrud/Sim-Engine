@@ -29,7 +29,7 @@ package se.math;
 type Vec3 {
     units { U; }
 
-    x: double(U);   // points forward for a body frame, north for a global one
-    y: double(U);   // points right for a body frame, east for a global one
-    z: double(U);   // points down, in both
+    x: double(U);  // points forward for a body frame, north for a global one
+    y: double(U);  // points right for a body frame, east for a global one
+    z: double(U);  // points down, in both
 }

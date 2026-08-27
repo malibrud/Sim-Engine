@@ -4,8 +4,8 @@ package tests;
 node Bad {
     outputs { y: double(m/s); }
     states {
-        omega: double(rad/s) = 0.0;
-        continuous ok: double(m) = 1.0;
+        omega:         double(rad/s) = 0.0;
+        continuous ok: double(m)     = 1.0;
     }
     derivative()  { der.ok = 1.0; }
     output() { out.y = state.ok; }

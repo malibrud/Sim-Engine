@@ -4,13 +4,13 @@ package tests;
 
 node Bad {
     settings {
-        a: double;                  // a scalar takes exactly one unit argument
-        b: double(m/) = 1.0;        // dangling operator
-        c: double(m^1.5) = 1.0;     // non-integer exponent
-        d: dobule(m) = 1.0;         // typo in the scalar type
-        e: double(2*m) = 1.0;       // only `1` may appear as a literal
-        f: Telemetry;               // settings are scalars
-        g: bool(-) = 1;             // `bool` takes no unit argument
+        a: double;               // a scalar takes exactly one unit argument
+        b: double(m/)    = 1.0;  // dangling operator
+        c: double(m^1.5) = 1.0;  // non-integer exponent
+        d: dobule(m)     = 1.0;  // typo in the scalar type
+        e: double(2*m)   = 1.0;  // only `1` may appear as a literal
+        f: Telemetry;            // settings are scalars
+        g: bool(-)       = 1;    // `bool` takes no unit argument
     }
     outputs { y: double(-); }
     output() { out.y = 0.0; }

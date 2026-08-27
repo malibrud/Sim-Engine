@@ -26,7 +26,7 @@ node Prbs {
 
     settings {
         amplitude: double(U) = 1.0;
-        offset: double(U) = 0.0;
+        offset:    double(U) = 0.0;
 
         // Register width. One period is 2^order - 1 samples: at order 11 and a
         // 1 kHz rate that is 2.047 s.
@@ -48,8 +48,8 @@ node Prbs {
     states { discrete reg: int(-) = 1; }
 
     vars {
-        mask: int(-);      // (1 << order) - 1
-        taps: int(-);      // XOR feedback mask, maximal for this order
+        mask: int(-);  // (1 << order) - 1
+        taps: int(-);  // XOR feedback mask, maximal for this order
     }
 
     // Tap sets for the standard maximal-length polynomials. A `switch` rather

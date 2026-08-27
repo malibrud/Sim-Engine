@@ -21,7 +21,7 @@ node UniformNoise {
 
     settings {
         lo: double(U) = -1.0;
-        hi: double(U) =  1.0;
+        hi: double(U) = 1.0;
 
         seed: int(-) = 12345;
 

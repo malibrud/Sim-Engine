@@ -1,7 +1,7 @@
 ﻿error[SE0433]: an array-shaped state must be `double`
   --> tests/emit/lib/arrbad/ArrBad.se:18:27
    |
-18 |         discrete   counts [param.n]: int(-)    = 0;
+18 |         discrete   counts [param.n]: int(-) = 0;
    |                           ^^^^^^^^^ declared `int`
    = note: both blocks an extent can land in are flat `double` arrays (§15.5)
    = help: drop the extent, or make the element type `double`
@@ -24,7 +24,7 @@ error[SE0432]: the extent of `a` must be dimensionless
 error[SE0432]: the extent of `b` must be a non-negative integer
   --> tests/emit/lib/arrbad/ArrBad.se:22:22
    |
-22 |         continuous b [2.5]: double(-) = 0.0;
+22 |         continuous b [2.5]:     double(-) = 0.0;
    |                      ^^^^^ this is 2.5
    = note: zero is legal and yields no slots (§6.4a)
 

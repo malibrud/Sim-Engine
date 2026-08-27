@@ -14,8 +14,8 @@ node ScaleLimit {
     units { U; }
 
     settings {
-        gain: double(-) = 1.0;
-        limit: double(U);             // required: an unlimited scale is a Gain
+        gain:  double(-) = 1.0;
+        limit: double(U);  // required: an unlimited scale is a Gain
     }
 
     inputs  { x: double(U); }

@@ -25,11 +25,11 @@ node Chirp {
     units { U; }
 
     settings {
-        amplitude: double(U) = 1.0;
-        f0: double(Hz) = 0.1;
-        f1: double(Hz) = 10.0;
-        sweep: double(s) = 10.0;    // time to travel from f0 to f1
-        offset: double(U) = 0.0;
+        amplitude: double(U)  = 1.0;
+        f0:        double(Hz) = 0.1;
+        f1:        double(Hz) = 10.0;
+        sweep:     double(s)  = 10.0;  // time to travel from f0 to f1
+        offset:    double(U)  = 0.0;
 
         // Restart the sweep at `sweep` rather than running past `f1`.
         //
@@ -48,7 +48,7 @@ node Chirp {
 
     vars {
         ts: double(s);
-        kq: double(Hz);      // (f1 - f0) / (2 * sweep) -- the quadratic term
+        kq: double(Hz);  // (f1 - f0) / (2 * sweep) -- the quadratic term
     }
 
     init() {

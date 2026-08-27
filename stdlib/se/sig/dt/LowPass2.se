@@ -18,11 +18,11 @@ node LowPass2 {
     units { U; }
 
     settings {
-        wn: double(rad/s);                  // required
+        wn:   double(rad/s);  // required
         zeta: double(-) = 1.0;
 
         // s^2 + 2 zeta wn s + wn^2, prewarped below.
-        a1: double(rad/s) = 2.0 * param.zeta * param.wn;
+        a1: double(rad/s)     = 2.0 * param.zeta * param.wn;
         a2: double((rad/s)^2) = param.wn * param.wn;
 
         fs: double(Hz) = sample_rate;

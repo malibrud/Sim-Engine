@@ -7,14 +7,14 @@ package decay;
 // all, so a signal is addressed simply as `x`.
 node Decay {
     settings {
-        k: double(1/s) = 2.0;
-        x0: double(-) = 1.0;
+        k:  double(1/s) = 2.0;
+        x0: double(-)   = 1.0;
         // A derived setting, so the topological sort of §6.2 is exercised too:
         // overriding k recomputes this, overriding it directly pins it.
         half_life: double(s) = log(2.0) / param.k;
     }
     outputs {
-        value: double(-);
+        value:     double(-);
         remaining: double(s);
     }
     states {

@@ -1,7 +1,7 @@
 ﻿error[SE0205]: `double` takes one unit argument, found 0
  --> tests/err/units.se:7:12
   |
-7 |         a: double;                  // a scalar takes exactly one unit argument
+7 |         a: double;               // a scalar takes exactly one unit argument
   |            ^^^^^^ expected `double(unit)`
   = note: the unit is not optional; `(-)` spells dimensionless (§5.1)
   = help: write `setting: double(-)` if it really is dimensionless
@@ -9,21 +9,21 @@
 error[SE0206]: malformed unit expression: expected a unit symbol, found `)`
  --> tests/err/units.se:8:21
   |
-8 |         b: double(m/) = 1.0;        // dangling operator
+8 |         b: double(m/)    = 1.0;  // dangling operator
   |                     ^ expected a unit symbol
   = note: a unit is `1`, a symbol, or a parenthesised unit expression, combined with `*`, `/` and `^` (§4.1)
 
 error[SE0206]: unit exponent must be an integer
  --> tests/err/units.se:9:21
   |
-9 |         c: double(m^1.5) = 1.0;     // non-integer exponent
+9 |         c: double(m^1.5) = 1.0;  // non-integer exponent
   |                     ^^^
   = note: rational exponents are written `m^(1/2)` (§4.1)
 
 error[SE0207]: unknown scalar type `dobule`
   --> tests/err/units.se:10:12
    |
-10 |         d: dobule(m) = 1.0;         // typo in the scalar type
+10 |         d: dobule(m)     = 1.0;  // typo in the scalar type
    |            ^^^^^^
    = help: did you mean `double`?
    = note: the scalar type set is closed: `double`, `float`, `int`, `bool` (§5.1)
@@ -31,21 +31,21 @@ error[SE0207]: unknown scalar type `dobule`
 error[SE0206]: only the literal `1` may appear in a unit expression
   --> tests/err/units.se:11:19
    |
-11 |         e: double(2*m) = 1.0;       // only `1` may appear as a literal
+11 |         e: double(2*m)   = 1.0;  // only `1` may appear as a literal
    |                   ^ found `2`
    = note: `1` is the identity unit, as in `(1/(kg*m^2))` (§4.1)
 
 error[SE0231]: a setting may not be a record type
   --> tests/err/units.se:12:12
    |
-12 |         f: Telemetry;               // settings are scalars
+12 |         f: Telemetry;            // settings are scalars
    |            ^^^^^^^^^
    = note: settings are scalars: the flow-down expression language is scalar (§5.2)
 
 error[SE0205]: `bool` takes no unit argument, found 1
   --> tests/err/units.se:13:16
    |
-13 |         g: bool(-) = 1;             // `bool` takes no unit argument
+13 |         g: bool(-)       = 1;    // `bool` takes no unit argument
    |                ^ expected `bool`
    = note: `bool` takes no unit: a scaled or dimensioned truth value is meaningless (§5.1)
 

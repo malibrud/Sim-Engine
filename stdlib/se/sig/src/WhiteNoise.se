@@ -43,9 +43,9 @@ node WhiteNoise {
         // be coerced to `U^2/Hz` either. Making `sigma` and `psd` derive from
         // each other would be a cycle (`SE0421`). A third, plainly-defaulted
         // setting is what breaks it.
-        sigma0: double(U) = 1.0;
-        psd: double(U^2/Hz) = 2.0 * param.sigma0 * param.sigma0 / param.rate;
-        sigma: double(U) = sqrt(param.psd * param.rate / 2.0);
+        sigma0: double(U)      = 1.0;
+        psd:    double(U^2/Hz) = 2.0 * param.sigma0 * param.sigma0 / param.rate;
+        sigma:  double(U)      = sqrt(param.psd * param.rate / 2.0);
 
         mean: double(U) = 0.0;
         seed: int(-)    = 12345;
@@ -54,8 +54,8 @@ node WhiteNoise {
     outputs { y: double(U); }
 
     states {
-        discrete k: int(-)    = 0;      // sample index -- the only RNG state
-        discrete z: double(-) = 0.0;    // this sample's standard normal
+        discrete k: int(-)    = 0;    // sample index -- the only RNG state
+        discrete z: double(-) = 0.0;  // this sample's standard normal
     }
 
     declarations {

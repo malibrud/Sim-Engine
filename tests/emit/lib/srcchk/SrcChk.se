@@ -23,18 +23,18 @@ use se.sig.src;
 
 node SrcChk {
     outputs {
-        ct: double(m/s^2);     // constant
-        st: double(m/s^2);     // step
-        rp: double(m/s^2);     // ramp
-        sn: double(m/s^2);     // sine
-        sq: double(m/s^2);     // square
-        tr: double(m/s^2);     // triangle
-        sw: double(m/s^2);     // sawtooth
-        cp: double(m/s^2);     // chirp
-        wn: double(m/s^2);     // white noise
-        un: double(m/s^2);     // uniform noise
-        pn: double(m/s^2);     // pink noise
-        pr: double(m/s^2);     // prbs
+        ct: double(m/s^2);  // constant
+        st: double(m/s^2);  // step
+        rp: double(m/s^2);  // ramp
+        sn: double(m/s^2);  // sine
+        sq: double(m/s^2);  // square
+        tr: double(m/s^2);  // triangle
+        sw: double(m/s^2);  // sawtooth
+        cp: double(m/s^2);  // chirp
+        wn: double(m/s^2);  // white noise
+        un: double(m/s^2);  // uniform noise
+        pn: double(m/s^2);  // pink noise
+        pr: double(m/s^2);  // prbs
     }
 
     structure {

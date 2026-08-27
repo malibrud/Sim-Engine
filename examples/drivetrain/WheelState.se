@@ -3,12 +3,12 @@ package drivetrain;
 // A user-defined record. Each field carries its own unit; the whole record
 // travels a single wire and lowers to a generated C++ struct.
 //
-// A field line is identical to a scalar port line, so a port is either
-//     name (unit): ctype;   // scalar
-//     name: TypeName;       // record
-// One grammar, two shapes.
+// A field line is identical to a scalar port line, because a scalar type is
+// itself unit-parametric (§5.1): every declaration is
+//     name: Type(units);
+// and only the name of the type says whether it is a scalar or a record.
 type WheelState {
-    speed: double(rad/s);   // wheel angular velocity
-    torque: double(N*m);   // net torque applied this step
-    slip: double(-);   // longitudinal slip ratio (dimensionless)
+    speed:  double(rad/s);  // wheel angular velocity
+    torque: double(N*m);    // net torque applied this step
+    slip:   double(-);      // longitudinal slip ratio (dimensionless)
 }

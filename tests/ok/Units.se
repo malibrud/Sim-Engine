@@ -9,18 +9,18 @@ use se.mech;
 node Units {
     settings {
         // Derived settings: an expression over the same node's other settings.
-        total_mass: double(kg);
+        total_mass:  double(kg);
         corner_mass: double(kg) = param.total_mass / 4.0;
 
         // Unit shapes.
-        inertia: double(kg*m^2) = 0.9;
+        inertia:     double(kg*m^2)     = 0.9;
         inv_inertia: double(1/(kg*m^2)) = 1.0;
-        jerk: double(m/s^3) = 0.0;
-        visc: double(kg/m/s) = 1.8e-5;
-        area_rt: double(m^(1/2)) = 1.0;
-        decay: double(s^-1) = 0.5;
-        ratio: double(-) = 0.25;
-        duty: double(%) = 40.0;
+        jerk:        double(m/s^3)      = 0.0;
+        visc:        double(kg/m/s)     = 1.8e-5;
+        area_rt:     double(m^(1/2))    = 1.0;
+        decay:       double(s^-1)       = 0.5;
+        ratio:       double(-)          = 0.25;
+        duty:        double(%)          = 40.0;
         // §4.5 — radians are the only declarable angle unit; `(deg)` is legal
         // as the literal's suffix and converts here.
         heading: double(rad) = 90 (deg);
@@ -29,11 +29,11 @@ node Units {
         limit: double(m/s) = 130 (km/h);
 
         // The full expression language: precedence, builtins, constants.
-        omega: double(rad/s) = 2.0 * pi * 50.0;
-        diag: double(m) = hypot(3.0, 4.0);
-        scaled: double(m) = -2.0^2 + max(1.0, 2.0) / (3.0 - 1.0);
-        rooted: double(m) = sqrt(param.corner_mass / 4.0) * 1.0;
-        flat: double(-) = 2.0^3.0^2.0;
+        omega:  double(rad/s) = 2.0 * pi * 50.0;
+        diag:   double(m)     = hypot(3.0, 4.0);
+        scaled: double(m)     = -2.0^2 + max(1.0, 2.0) / (3.0 - 1.0);
+        rooted: double(m)     = sqrt(param.corner_mass / 4.0) * 1.0;
+        flat:   double(-)     = 2.0^3.0^2.0;
     }
     outputs {
         y: double(-);

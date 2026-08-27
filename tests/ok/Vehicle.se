@@ -6,14 +6,14 @@ package tests;
 node Vehicle {
     settings {
         total_mass: double(kg) = 1500.0;
-        ctl_rate: double(Hz) = 100.0;
+        ctl_rate:   double(Hz) = 100.0;
     }
     inputs {
         throttle: double(-);
-        road: double(m/s);
+        road:     double(m/s);
     }
     outputs {
-        speed: double(m/s);
+        speed:  double(m/s);
         report: Telemetry;
     }
 
@@ -48,7 +48,7 @@ node Mixer {
         b: double(N*m);
     }
     outputs {
-        total: double(N*m);
+        total:  double(N*m);
         report: Telemetry;
     }
 
