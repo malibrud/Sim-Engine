@@ -1076,6 +1076,13 @@ an output's from `output()`.
 - **Fan-out is allowed**; **fan-in is forbidden** (§6.9.2).
 - An unconnected input is an error at stage 4 (`SE0430`) — there is no implicit
   zero. An unconnected *output* is fine; it is simply unread.
+
+  What satisfies it need not be a producing node. §6.9.2 admits two constant
+  sources — a literal, `0.0 --> ain.y`, and a setting, `param.grav --> …` — and
+  either one *connects* the input. So the rule costs nothing at a channel a
+  model means to hold still, and the port itself never acquires a default: a
+  forgotten wire stays an error at every node, which is the property the absent
+  implicit zero exists to protect.
 - Port order matters only for readability. Nothing positional exists.
 - **A port may not carry an extent** (`SE0234`), unlike a state or a var (§6.4a).
   A port lives in the signal block, whose offsets come from `offsetof` on a
@@ -1482,13 +1489,14 @@ wires, which flatten away entirely (§15.2). They are the inputs to the flow-dow
 expressions, and overriding one at configuration is the whole point of
 addressing a path like `front.left.mass` (§13.2). They compute nothing beyond
 §6.2b step 3 — but because they are real members, one may be *read* as a wire
-source (§6.9.2), which is the cheapest constant the language offers.
+source (§6.9.2), which is the cheapest **live** constant the language offers.
 
 #### 6.9.2 Wires
 
 ```
 wire     := endpoint '-->' endpoint { '-->' endpoint } { ',' endpoint } ';'
 endpoint := ( 'self' | identifier ) { '.' identifier }
+          | [ '+' | '-' ] number [ unit ]      // a literal: a SOURCE only
 ```
 
 - `-->` is the connection token; `;` terminates.
@@ -1550,13 +1558,15 @@ endpoint := ( 'self' | identifier ) { '.' identifier }
   }
   ```
 
-  This is the cheapest constant the language has. A composite's settings already
-  exist at run time (§6.9.1), so the wire reads a member that is already there:
-  no node, no `Out` storage, and no edge in the §8.5 sort. It is also *live* —
-  the reference is emitted, not folded, so overriding `grav.z` at configuration
-  reaches the wire in a compiled binary, exactly as a flow-down binding does
-  (§6.2b step 3). `se.sig.src.Constant` remains the right answer when the
-  constant wants a `rate`, a name in the schedule, or a recordable signal path.
+  This is the cheapest **live** constant the language has. A composite's
+  settings already exist at run time (§6.9.1), so the wire reads a member that
+  is already there: no node, no `Out` storage, and no edge in the §8.5 sort. It
+  is *live* — the reference is emitted, not folded, so overriding `grav.z` at
+  configuration reaches the wire in a compiled binary, exactly as a flow-down
+  binding does (§6.2b step 3). That is the whole of what it buys over a literal
+  (below), which is cheaper still and folds. `se.sig.src.Constant` remains the
+  right answer when the constant wants a `rate`, a name in the schedule, or a
+  recordable signal path.
 
   `param` is available as an endpoint head because it can never be anything
   else: §6.11 already forbids it as a member name, instance names included, so
@@ -1585,6 +1595,62 @@ endpoint := ( 'self' | identifier ) { '.' identifier }
   converted per §5.2, scalar and record alike, and fan-out is free — a setting is
   read-only, which makes it a legitimate single writer for any number of
   destinations.
+- **A literal may be a wire source**, spelled `[+|-] number [unit]` — a constant
+  driving an input directly:
+
+  ```
+  structure {
+      node surge : sig.src.Step (m/s^2);
+      node ain   : math.Merge3 (m/s^2);
+
+      surge --> ain.x;
+      0.0   --> ain.y, ain.z;
+  }
+  ```
+
+  This is the answer to the question `SE0430` raises. An input held at a
+  constant is still **connected** — connected to a constant rather than to a
+  producer — so §6.3 needs no exception and no port ever acquires a default.
+  The alternative spellings are one `se.sig.src.Constant` per channel, or a
+  setting declared solely to be zero.
+
+  It shares the setting source's shape exactly: no node, no `Out` storage, and
+  no edge in the §8.5 sort. **It differs in exactly one way, and the difference
+  is the point:** a literal is *folded* at elaboration, where a setting is
+  *emitted as a reference*. A setting has to stay live because §6.2b can
+  override it in a compiled binary; a literal has nothing to override. That
+  asymmetry is what keeps ports out of the configuration schema (§15.6) — a
+  literal appears in no `[settings]` row, so there is no way for a wire and an
+  override to disagree about one input.
+
+  **Units are §7.2's rule, unchanged.** A bare literal takes the unit of the
+  site it initialises, and the site is the *destination*: `0.0 --> ain.y` is
+  `(m/s^2)` because `ain.y` is. This is applied per destination, so a fan-out
+  onto ports declaring different units gives each the value in its own unit. A
+  suffix converts instead, exactly as a setting source's does — `9810 (mm/s^2)`
+  into an `(m/s^2)` port folds to `9.81` — and every hop of a chain folds into
+  the same single number.
+
+  Three rules. The first is settled at **stage 2**, unlike the `param` rules
+  above, because a literal is a number and the parser can see what it is looking
+  at without resolving anything:
+
+  - **Source only.** A wire may not drive a literal (`SE0215`), in a destination
+    or at an interior position of a chain. There is nothing to write to.
+
+  The rest are the ordinary stage-4 questions any endpoint answers:
+
+  - **Scalar only.** A literal is a scalar, so a literal into a record port is
+    the usual `SE0410`. A constant *record* is `param.<setting>`, which is the
+    better spelling regardless: it is named, overridable, and in the manifest.
+    A brace list as a wire source is a pure extension; see Appendix C.
+  - **The suffix is checked like any other source's unit** (`SE0410`).
+
+  There is deliberately **no arithmetic**: the endpoint is a constant, not an
+  expression. `2.0 * param.k --> x` is not a wire. A *computed* constant is a
+  setting with a §7 default wired as `param.<name>`, which is again the better
+  answer, being named and overridable. Fan-out is free, and a literal cannot
+  create fan-in because it can never be a destination.
 - **Fan-in is forbidden.** Two sources into one input is an error (`SE0442`);
   insert an explicit `Sum` node. This is what makes the single-writer wire
   lowering sound (§15.3). A setting source cannot create fan-in, because it can
@@ -3180,6 +3246,7 @@ of thing wearing the same name.
 | `SE0212` | 2 | Malformed wire endpoint |
 | `SE0213` | 2 | Expected `-->` |
 | `SE0214` | 2 | An interior endpoint of a wire chain is not a bare instance name |
+| `SE0215` | 2 | A literal wire endpoint is a destination |
 | `SE0220` | 2 | Duplicate section in a node |
 | `SE0221` | 2 | Unknown section name |
 | `SE0230` | 2 | State kind (`continuous`/`discrete`) omitted |
@@ -3347,12 +3414,19 @@ setting_binding = IDENT "=" expression ";" ;
    syntax error rather than an ambiguity (§6.9.2). *)
 wire_stmt       = endpoint "-->" endpoint { "-->" endpoint }
                                           { "," endpoint } ";" ;
-endpoint        = endpoint_head { "." IDENT } ;
+endpoint        = endpoint_head { "." IDENT }
+                | literal_endpoint ;
 (* `param` is an ordinary IDENT here and is separated at stage 3: it names the
    enclosing composite's setting rather than a child instance, and cannot be a
    destination (§6.9.2). No token is reserved for it, because §6.11 already
    forbids `param` as a member name. *)
 endpoint_head   = "self" | IDENT ;
+(* A literal is a SOURCE only, and unlike `param` that is settled at stage 2:
+   nothing else in a `structure` block begins with a number or a sign, so the
+   parser tells the two apart with no lookahead and rejects a literal
+   destination outright (SE0215). It is a constant, not an expression — there is
+   no arithmetic on a wire (§6.9.2). *)
+literal_endpoint= [ "+" | "-" ] NUMBER [ unit ] ;
 
 (* ─── methods ────────────────────────────────────────────────────────── *)
 
@@ -3582,6 +3656,17 @@ Recorded so that their absence is visibly deliberate.
 15. **Downsample aliasing warning** — a fast→slow connection inserts no
     anti-alias filter; the engine could warn.
 16. **First-order hold** on upsample instead of ZOH. Rare in this domain.
+
+8c. **A brace list as a wire source** (§6.9.2). A literal endpoint is a scalar,
+   so `{0, 0, 0} --> ain` does not exist and a scalar into a record port is
+   `SE0410`. Nothing forbids it: §7.2 already destructures an aggregate against
+   a declared field tree, and a wire destination has one, so the obstacle is
+   scope rather than semantics. It is not taken because `param.<setting>`
+   already spells a constant record and spells it *better* — named, overridable
+   at configuration, and visible in the manifest — which leaves anonymity as the
+   only thing the brace form would buy. Revisit if a model appears that wants a
+   throwaway constant record often enough for the setting to feel like
+   ceremony.
 
 16a. **Array ports** (§6.3). A runtime-sized member in the signal block would
    destroy the `offsetof` property §15.5 depends on, so a bundle of N signals

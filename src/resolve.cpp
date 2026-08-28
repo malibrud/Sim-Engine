@@ -887,6 +887,14 @@ void Resolver::check_structure(const NodeInfo& info) {
         // polarity rule `collect_wires` applies: seen from the inside, `self`
         // is inverted, so `self` as a source offers this node's INPUTS.
         auto check = [&](const ast::Endpoint& e, bool as_source) {
+            // §6.9.2 — a literal source. There is nothing here for stage 3 to
+            // resolve: it names no instance and no port, and its unit is a
+            // stage-4 question. Unlike `param` (SE0315 below) its shape needed
+            // no rule here either, because a literal is recognisable without
+            // resolving anything and the parser rejected a literal destination
+            // outright (`SE0215`).
+            if (e.is_literal) return;
+
             if (!e.is_self && e.segs.empty()) return;   // the parser cannot produce this
 
             // §6.9.2 — a setting of this composite as a wire SOURCE. `param` can

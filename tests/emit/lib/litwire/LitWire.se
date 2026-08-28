@@ -1,0 +1,98 @@
+// A literal on a wire (§6.9.2). Five spellings, one arithmetic answer.
+//
+// A literal as a wire SOURCE is the cheapest tie-off the language has, and the
+// motivating case is the one `SE0430` raises: `Merge3.x` driven by a source
+// leaves `y` and `z` undriven, and the alternatives are two
+// `se.sig.src.Constant` instances (four nodes for two zeroes) or a setting
+// declared solely to be zero.
+//
+// It shares `param.<setting>`'s shape -- no leaf, no `Out` storage, no edge in
+// the §8.5 sort -- and differs in exactly one way: it is FOLDED at elaboration
+// rather than emitted as a reference. A setting must stay live because it can
+// be overridden at configuration; a literal has nothing to override. That is
+// why no row for one appears in this model's manifest.
+//
+// Everything suffixed here is declared in `(mm/s^2)` and read in `(m/s^2)`, so
+// the fold is load-bearing: drop it and the answer is off by a factor of a
+// thousand, not by a rounding error.
+//
+//   bare literals, taking the unit of the site (§7.2):   5 + 7   = 12
+//   a suffixed literal, converted:                          + 3  = 15
+//   a negative literal:                                     - 4  = 11
+//   one literal fanned out to two destinations:             + 2  = 13
+//                                                           + 2  = 15
+//   a suffixed literal down a two-hop chain into `inner`:    + 1  = 16
+package litwire;
+
+use se.math;
+
+node LitWire {
+    // `g` is driven straight by a literal and by nothing else, so it has no
+    // producing leaf. It is still a root output the host may read, so it earns
+    // its `[boundary.out]` row -- with no signal-block member to name, because
+    // there is no signal.
+    outputs { y: double(m/s^2);  g: double(mm/s^2); }
+
+    structure {
+        node s1 : math.Sum (m/s^2);
+        node s2 : math.Sum (m/s^2);
+        node s3 : math.Sum (m/s^2);
+        node s4 : math.Sum (m/s^2);
+        node s5 : math.Sum (m/s^2);
+        node s6 : math.Sum (m/s^2);
+        node inner : Inner;
+
+        // Bare literals. §7.2's rule is unchanged here: a bare literal takes
+        // the unit of the site it initialises, and the site is the DESTINATION
+        // port, so these are `(m/s^2)` because `s1.a` and `s1.b` are.
+        5.0 --> s1.a;
+        7.0 --> s1.b;
+
+        // A unit suffix converts, exactly as a setting source does. 3000 mm/s^2
+        // is 3 m/s^2, folded to a constant at elaboration.
+        s1              --> s2.a;
+        3000.0 (mm/s^2) --> s2.b;
+
+        // A negative literal. The sign belongs to the endpoint, not to an
+        // expression: `-4.0` is a constant, and there is no arithmetic here.
+        s2   --> s3.a;
+        -4.0 --> s3.b;
+
+        // Fan-out from a literal, which is free for the same reason it is free
+        // from a setting: the source is read-only, so it is a legitimate single
+        // writer for any number of destinations. It can never be a destination
+        // (`SE0215`), so it cannot create fan-in either.
+        s3  --> s4.a;
+        s4  --> s5.a;
+        2.0 --> s4.b, s5.b;
+
+        // A two-hop chain: the literal converts at the boundary of `inner`, and
+        // `inner` converts again on the way to its leaf. Both hops fold into
+        // ONE number, which is what `Kind::Const` buys over a live reference.
+        s5              --> s6.a;
+        1000.0 (mm/s^2) --> inner;
+        inner           --> s6.b;
+
+        s6 --> self.y;
+
+        // A literal straight out through the boundary. Bare, so it takes `g`'s
+        // `(mm/s^2)`.
+        1.5 --> self.g;
+    }
+}
+
+// The far end of the chain above. Its port is declared in `(mm/s^2)` and its
+// leaf reads `(m/s^2)`, so the literal crosses TWO hops: identity into `u`,
+// then a factor of a thousand on the way to `z.a`. Both fold into one number.
+node Inner {
+    inputs  { u: double(mm/s^2); }
+    outputs { y: double(m/s^2); }
+
+    structure {
+        node z : math.Sum (m/s^2);
+
+        self --> z.a;
+        0.0  --> z.b;
+        z    --> self;
+    }
+}

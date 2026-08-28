@@ -1,0 +1,5 @@
+sim LitBad {
+    root:     litbad.LitBad;
+    step:     1 (ms);
+    duration: 1 (s);
+}

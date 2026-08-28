@@ -227,6 +227,13 @@ private:
     std::map<std::string, Hop> producers_;              // dest path -> hop
     std::map<std::string, std::pair<std::size_t, std::string>> leaf_outputs_;
     std::map<std::string, ParamSource> setting_sources_;   // §6.9.2
+    // §6.9.2 — a literal wired as a source, keyed by
+    // `<composite path>.#lit@<byte offset>`. The offset is what makes two
+    // `0.0 -->` wires in one composite distinct keys, and `#` cannot occur in
+    // an identifier, so no port path can collide with one. The value is held in
+    // the SOURCE's unit; a bare literal has none of its own (§7.2 gives it the
+    // site's), so for one the source and destination units coincide.
+    std::map<std::string, double> literal_sources_;
     std::map<std::string, std::size_t> leaf_by_path_;
     // Every instantiated node, composites included, so that an override that
     // landed on nothing can be told what it nearly hit.

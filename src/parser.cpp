@@ -4,6 +4,8 @@
 #include <cstdlib>
 #include <cstring>
 
+#include "dump.hpp"   // `unit_to_string`, for a literal endpoint's spelling (§6.9.2)
+
 namespace se {
 
 namespace {
@@ -1434,7 +1436,10 @@ bool Parser::parse_structure(ast::Structure& out) {
             ast::Instance inst;
             if (parse_instance(inst)) out.instances.push_back(std::move(inst));
             else recover_in_list(Tok::RBrace);
-        } else if (at(Tok::KwSelf) || at(Tok::Ident)) {
+        } else if (at(Tok::KwSelf) || at(Tok::Ident) || at(Tok::Number) || at(Tok::Plus) ||
+                   at(Tok::Minus)) {
+            // A number, `+` or `-` starts a literal source (§6.9.2). Nothing
+            // else in a `structure` block can, so no lookahead is needed.
             // One statement may be a chain, and so may yield several wires.
             std::vector<ast::Wire> ws;
             if (parse_wire_stmt(ws))
@@ -1508,6 +1513,39 @@ bool Parser::parse_instance(ast::Instance& out) {
 bool Parser::parse_endpoint(ast::Endpoint& out) {
     out.loc = tok_.loc;
 
+    // §6.9.2 — a literal, which is a wire SOURCE and nothing else. That it may
+    // not be a destination is settled here rather than at stage 3 (as the
+    // `param` rule is, SE0315): a literal is recognisable without resolving
+    // anything, so `parse_wire_stmt` can see the violation on its own.
+    if (at(Tok::Number) || at(Tok::Plus) || at(Tok::Minus)) {
+        bool negate = at(Tok::Minus);
+        if (!at(Tok::Number)) {
+            out.text = tok_.text;
+            advance();
+            if (!at(Tok::Number)) {
+                err("SE0212", tok_.loc,
+                    std::string("expected a number after `") + out.text + "`, found " +
+                        describe(tok_.kind),
+                    "expected a number");
+                return false;
+            }
+        }
+        out.is_literal = true;
+        out.text += tok_.text;
+        out.value = negate ? -std::strtod(tok_.text.c_str(), nullptr)
+                           : std::strtod(tok_.text.c_str(), nullptr);
+        advance();
+        // The same rule `parse_primary` states: there is no implicit
+        // multiplication, so a `(` after a literal is always a unit.
+        if (at(Tok::LParen)) {
+            ast::UnitPtr u = parse_unit();
+            if (!u) return false;
+            out.text += " (" + unit_to_string(u.get()) + ")";
+            out.unit = std::shared_ptr<ast::UnitExpr>(u.release());
+        }
+        return true;
+    }
+
     if (at(Tok::KwSelf)) {
         out.is_self = true;
         advance();
@@ -1517,9 +1555,9 @@ bool Parser::parse_endpoint(ast::Endpoint& out) {
     } else {
         err("SE0212", tok_.loc,
             std::string("expected a wire endpoint, found ") + describe(tok_.kind),
-            "expected `self` or an instance name",
+            "expected `self`, an instance name, or a literal",
             {note("an endpoint is `self` or an instance name, optionally followed by "
-                  "`.<port>` (\xc2\xa7""6.9.2)")});
+                  "`.<port>`, or a literal source (\xc2\xa7""6.9.2)")});
         return false;
     }
 
@@ -1599,6 +1637,25 @@ bool Parser::parse_wire_stmt(std::vector<ast::Wire>& out) {
     // closing brace and would silently stop checking the rest of the block.
     // The wires are dropped instead, so nothing malformed enters the AST.
     bool ok = true;
+
+    // §6.9.2 — a literal is a source and nothing else. Checked BEFORE the
+    // interior rule below, which would otherwise claim an interior literal
+    // "names a port": a literal has no segments, so it fails that test for a
+    // reason that has nothing to do with why it is wrong here.
+    auto no_literal = [&](const ast::Endpoint& e) {
+        if (!e.is_literal) return;
+        err("SE0215", e.loc, "a wire may not drive a literal",
+            "`" + e.str() + "` is a destination",
+            {note("a literal is a wire SOURCE only: it is a constant, and nothing "
+                  "can be written to it (\xc2\xa7""6.9.2)"),
+             help("to hold an input at a constant, put the literal on the left of "
+                  "the arrow")});
+        ok = false;
+    };
+    for (std::size_t i = 1; i < chain.size(); ++i) no_literal(chain[i]);
+    for (const ast::Endpoint& e : extra) no_literal(e);
+    if (!ok) return true;
+
     for (std::size_t i = 1; i + 1 < chain.size(); ++i) {
         const ast::Endpoint& e = chain[i];
         if (!e.is_self && e.segs.size() == 1) continue;

@@ -1,0 +1,44 @@
+﻿error[SE0215]: a wire may not drive a literal
+  --> tests/emit/lib/litbad/LitBad.se:24:15
+   |
+24 |         g --> 0.0;
+   |               ^^^ `0.0` is a destination
+   = note: a literal is a wire SOURCE only: it is a constant, and nothing can be written to it (§6.9.2)
+   = help: to hold an input at a constant, put the literal on the left of the arrow
+
+error[SE0215]: a wire may not drive a literal
+  --> tests/emit/lib/litbad/LitBad.se:30:15
+   |
+30 |         g --> 1.0 --> g2;
+   |               ^^^ `1.0` is a destination
+   = note: a literal is a wire SOURCE only: it is a constant, and nothing can be written to it (§6.9.2)
+   = help: to hold an input at a constant, put the literal on the left of the arrow
+
+error[SE0212]: expected a number after `-`, found `-->`
+  --> tests/emit/lib/litbad/LitBad.se:43:11
+   |
+43 |         - --> g2.x;
+   |           ^^^ expected a number
+
+error[SE0410]: a record and a scalar cannot be wired together
+  --> tests/emit/lib/litbad/LitBad.se:35:17
+   |
+35 |         0.0 --> v.u;
+   |                 ^^^ scalar -> record
+
+error[SE0410]: incompatible units across a wire
+  --> tests/emit/lib/litbad/LitBad.se:38:22
+   |
+38 |         1.0 (kg) --> g.x;
+   |                      ^^^ `(kg)` -> `(-)`
+   = note: source is kg
+   = note: destination is -
+
+error[SE0430]: input `g2.x` is not connected
+  --> tests/emit/lib/litbad/LitBad.se:50:15
+   |
+50 |     inputs  { x: double(-); }
+   |               ^ declared here
+   = note: an unconnected input is an error: there is no implicit zero (§6.3)
+
+6 errors emitted

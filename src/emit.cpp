@@ -607,10 +607,13 @@ std::string Emitter::input_expr(const Leaf& leaf, const std::string& port) const
     const InputSource& s = it->second;
     // §6.9.2 — a setting source is read where the value is read: the setting is
     // a live member (§6.2b), so an override at configuration reaches the wire
-    // without anything being folded, and no `Out` storage is invented.
+    // without anything being folded, and no `Out` storage is invented. A
+    // literal source is the opposite half of that sentence: nothing can
+    // override it, so it is folded at elaboration and arrives here as a number.
     std::string expr = s.kind == InputSource::Kind::Boundary ? s.boundary
-                       : s.kind == InputSource::Kind::Param
-                           ? render_expr(s.expr)
+                       : s.kind == InputSource::Kind::Param  ? render_expr(s.expr)
+                       : s.kind == InputSource::Kind::Const
+                           ? dbl(s.value)
                            : "sig." + m_.leaves[s.producer].ident + "." + s.port;
     if (!s.converts()) return expr;
 
@@ -2222,6 +2225,7 @@ std::string Emitter::topology() const {
 
     // ---- wires -------------------------------------------------------------
     t << "\n";
+    std::size_t konst = 0;   // §6.9.2 — numbers the constant-source terminals
     for (std::size_t i = 0; i < m_.leaves.size(); ++i) {
         const Leaf& leaf = m_.leaves[i];
         const ast::Method* out = leaf.node->method(ast::Method::Which::Output);
@@ -2240,6 +2244,18 @@ std::string Emitter::topology() const {
             std::string from, label;
             if (src.kind == InputSource::Kind::Boundary) {
                 from = "se_in_" + src.boundary.substr(std::strlen("sig.in."));
+                label = port.name;
+            } else if (src.kind == InputSource::Kind::Param ||
+                       src.kind == InputSource::Kind::Const) {
+                // §6.9.2 — a constant source has no producing leaf, so there is
+                // no node in the graph to draw the edge from. It gets a
+                // terminal of its own, declared inline the way Mermaid allows,
+                // rather than being attributed to whichever leaf happens to sit
+                // at `producer`'s default index.
+                from = "se_k" + std::to_string(konst++) + "([" +
+                       lab(src.kind == InputSource::Kind::Const ? dbl(src.value)
+                                                                : render_expr(src.expr)) +
+                       "])";
                 label = port.name;
             } else {
                 from = id(m_.leaves[src.producer].ident);

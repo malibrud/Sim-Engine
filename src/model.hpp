@@ -305,12 +305,22 @@ struct InputSource {
     // this input. It materialises no storage and no schedule edge: the setting
     // is already a live C++ member (§6.2b), so the reference is rendered inline
     // into the `In` view exactly as a producer's `Out` member would be.
-    enum class Kind { Leaf, Boundary, Param };
+    //
+    // §6.9.2 — `Const` is a literal wired straight to this input. It shares
+    // `Param`'s shape — no storage, no schedule edge — and differs in exactly
+    // one way: it is FOLDED at elaboration rather than emitted as a reference.
+    // A setting can be overridden at configuration and so must stay live; a
+    // literal has nothing to override, which is what keeps ports out of the
+    // configuration schema (§15.6).
+    enum class Kind { Leaf, Boundary, Param, Const };
     Kind kind = Kind::Leaf;
     std::size_t producer = 0;          // index into Model::leaves
     std::string port;                  // producer's output port
     std::string boundary;              // Kind::Boundary — the Sim member name
     ExprCode expr;                     // Kind::Param — rendered by stage 6
+    // Kind::Const — already in the destination's unit, every hop's conversion
+    // folded in, so `scale`/`offset` below are the identity for this kind.
+    double value = 0.0;
     double scale = 1.0;                // scalar: consumer_value = scale * x + offset
     double offset = 0.0;
     // Record ports only; empty for a scalar. Same flattening order the emitter

@@ -1,0 +1,13 @@
+// §6.9.2 — literals as wire sources. See lib/litwire/LitWire.se for the five
+// spellings under test and why the recorded column is 16 exactly.
+sim LitWire {
+    root: litwire.LitWire {};
+
+    step:     1 (ms);
+    duration: 10 (ms);
+
+    record: {
+        file: "litwire.csv";
+        signals { s6.y; }
+    }
+}

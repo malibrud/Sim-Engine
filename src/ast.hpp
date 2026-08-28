@@ -202,12 +202,25 @@ struct Instance {             // node whl : Wheel { … };
     Loc loc;
 };
 
-struct Endpoint {             // self.port | instance.port | instance.rec.field
+struct Endpoint {             // self.port | instance.port | instance.rec.field | 0.0 (m)
     bool is_self = false;
     std::vector<std::string> segs;   // excludes the `self` head
     Loc loc;
 
+    // §6.9.2 — a literal as a wire SOURCE. `segs` is empty and `is_self` false,
+    // which no other endpoint the parser produces can be.
+    //
+    // The unit is a `shared_ptr` and not a `UnitPtr` because an `Endpoint` must
+    // stay copyable: `parse_wire_stmt` desugars a chain by copying each interior
+    // endpoint into two wires. Nothing mutates a unit after parsing, so sharing
+    // one is sound.
+    bool is_literal = false;
+    double value = 0.0;
+    std::string text;                       // the source spelling, for diagnostics
+    std::shared_ptr<UnitExpr> unit;         // null when the literal is bare (§7.2)
+
     std::string str() const {
+        if (is_literal) return text;
         std::string s = is_self ? "self" : "";
         for (std::size_t i = 0; i < segs.size(); ++i) {
             if (i || is_self) s += '.';

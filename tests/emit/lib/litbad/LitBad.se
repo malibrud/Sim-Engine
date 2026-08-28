@@ -1,0 +1,59 @@
+// Every way a literal wire endpoint (§6.9.2) can be wrong.
+//
+// The split of stages is the opposite of `ParBad`'s, and deliberately so. A
+// `param` endpoint's SHAPE is a stage-3 rule because `param` is an ordinary
+// identifier and the parser cannot tell it from an instance name. A literal is
+// a number: the parser knows what it is looking at, so "a literal is a source
+// and nothing else" is settled at stage 2 (`SE0215`) and never reaches
+// resolution. What is left for stage 4 is what is left for any endpoint —
+// whether the two ends' units and shapes agree.
+package litbad;
+
+use se.math;
+
+node LitBad {
+    outputs { y: double(-); }
+
+    structure {
+        node g  : Gain {};
+        node g2 : Gain {};
+        node v  : Vec {};
+
+        // A wire may not drive a literal. There is nothing to write to: a
+        // literal is a constant, not a member.
+        g --> 0.0;
+
+        // The same rule at an interior position of a chain, where an endpoint
+        // is a destination and a source at once. Reported as a literal
+        // destination rather than as `SE0214`, which is about a port name
+        // appearing where only a bare instance may.
+        g --> 1.0 --> g2;
+
+        // Stage 4: a literal is a scalar, and a scalar and a record cannot be
+        // wired together. A constant RECORD is `param.<setting>`, which is the
+        // better spelling anyway -- named, overridable, and in the manifest.
+        0.0 --> v.u;
+
+        // Stage 4: the suffix is checked exactly as any other source's unit is.
+        1.0 (kg) --> g.x;
+
+        // A sign with no number after it. The endpoint form is
+        // `[+|-] number [unit]`, not an expression: there is no arithmetic here
+        // and nothing else a `-` could begin.
+        - --> g2.x;
+
+        g --> self;
+    }
+}
+
+node Gain {
+    inputs  { x: double(-); }
+    outputs { y: double(-); }
+    output(x) { out.y = 2.0 * in.x; }
+}
+
+node Vec {
+    inputs  { u: math.Vec3(-); }
+    outputs { y: double(-); }
+    output(u) { out.y = in.u.x; }
+}

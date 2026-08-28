@@ -1733,6 +1733,29 @@ void Elaborator::collect_wires(const NodeInfo* def, const std::string& path, Mod
     auto endpoint = [&](const ast::Endpoint& e, bool as_source, Field& out_field,
                         std::string& key) -> bool {
         const Field* field = nullptr;
+
+        // §6.9.2 — a literal, the cheapest tie-off there is. It resolves to no
+        // instance and no port, so it is settled entirely here: a value, a unit,
+        // and a key that no port path can collide with.
+        if (e.is_literal) {
+            if (!as_source) return false;   // the parser rejected it (`SE0215`)
+            out_field = Field{};
+            out_field.name = e.text;
+            out_field.loc = e.loc;
+            out_field.type.is_record = false;
+            // A bare literal has no unit of its own. §7.2 gives it the unit of
+            // the site it initialises, which the caller applies per DESTINATION
+            // — the source is resolved once but a fan-out may land on ports
+            // that declare different units.
+            if (e.unit) {
+                UnitEval ue(src, diag_);
+                if (!ue.eval(e.unit.get(), out_field.type.unit)) return false;
+            }
+            key = sub(path, "#lit@" + std::to_string(e.loc.offset));
+            literal_sources_[key] = e.value;
+            return true;
+        }
+
         if (e.is_self) {
             if (e.segs.empty()) {
                 // Bare `self`, so the sole port on the side the arrow needs.
@@ -1885,11 +1908,24 @@ void Elaborator::collect_wires(const NodeInfo* def, const std::string& path, Mod
                 failed_ = true;
                 continue;
             }
+            // §7.2 — a bare literal takes the unit of the site it initialises,
+            // and the site is the DESTINATION, not the wire: `1.0 --> a.x, b.y`
+            // means one metre at an `(m)` port and one millimetre at a `(mm)`
+            // one. Adopting the unit here makes the hop an identity conversion,
+            // which is exactly what "takes the unit of the site" means.
+            //
+            // Not adopted when the destination is a record: a scalar literal
+            // driving a record port is a real mistake, and leaving the type
+            // alone lets `port_conversion` report it (`SE0410`).
+            Field eff = sf;
+            if (w.source.is_literal && !w.source.unit && !df.type.is_record)
+                eff.type = df.type;
+
             Hop hop;
             hop.source = skey;
             hop.loc = d.loc;
             hop.src = &src;
-            if (!port_conversion(sf, df, src, d.loc, hop.scale, hop.offset, hop.field_convs))
+            if (!port_conversion(eff, df, src, d.loc, hop.scale, hop.offset, hop.field_convs))
                 failed_ = true;
 
             auto existing = producers_.find(dkey);
@@ -1931,6 +1967,7 @@ void Elaborator::resolve_inputs(Model& m) {
             InputSource in;
             auto out_it = leaf_outputs_.find(k);
             auto par_it = setting_sources_.find(k);
+            auto lit_it = literal_sources_.find(k);
             if (out_it != leaf_outputs_.end()) {
                 in.kind = InputSource::Kind::Leaf;
                 in.producer = out_it->second.first;
@@ -1941,6 +1978,14 @@ void Elaborator::resolve_inputs(Model& m) {
                 // reference is rendered where the value is read.
                 in.kind = InputSource::Kind::Param;
                 in.expr = ec_param(par_it->second.owner, par_it->second.name);
+            } else if (lit_it != literal_sources_.end()) {
+                // §6.9.2 — the chain terminates on a literal. Same shape as a
+                // setting source, and folded rather than referenced: there is
+                // nothing to override, so the value is finished here. The
+                // affine fold below is applied to it directly, which is why
+                // `converts()` is false by the time the emitter sees it.
+                in.kind = InputSource::Kind::Const;
+                in.value = lit_it->second;
             } else if (chain.empty() ? root_inputs.count(key) != 0
                                      : root_inputs.count(k) != 0) {
                 in.kind = InputSource::Kind::Boundary;
@@ -1963,6 +2008,15 @@ void Elaborator::resolve_inputs(Model& m) {
             for (std::size_t j = chain.size(); j-- > 0;) {
                 s = chain[j]->scale * s;
                 o = chain[j]->scale * o + chain[j]->offset;
+            }
+            if (in.kind == InputSource::Kind::Const) {
+                // §6.9.2 — folded, not referenced. Applying the composed chain
+                // to the value here rather than at stage 6 is what makes
+                // `0.0 (mm/s^2) --> a --> b` emit one number instead of a
+                // product of hop constants.
+                in.value = s * in.value + o;
+                s = 1.0;
+                o = 0.0;
             }
             in.scale = s;
             in.offset = o;
@@ -2024,10 +2078,11 @@ void Elaborator::resolve_boundary(const NodeInfo* root, Model& m) {
                            expr.empty() ? expr : expr + "." + sf.name, field_type(t, sf));
             };
 
-        // §6.9.2 — a root output driven straight by a setting has no producing
-        // leaf and so names no signal-block member, but it is every bit as real
-        // to the host reading the manifest. The row goes in without an `expr`.
-        if (setting_sources_.count(k)) {
+        // §6.9.2 — a root output driven straight by a setting or a literal has
+        // no producing leaf and so names no signal-block member, but it is
+        // every bit as real to the host reading the manifest. The row goes in
+        // without an `expr`.
+        if (setting_sources_.count(k) || literal_sources_.count(k)) {
             expand(f.name, "", f.type);
             continue;
         }

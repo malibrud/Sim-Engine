@@ -491,6 +491,40 @@ if (-not $cl) {
         }
     }
 
+    # SPECIFICATION 6.9.2 -- a literal as a wire source. LitWire drives all five
+    # spellings (bare literals taking the site's unit, a suffixed literal, a
+    # negative one, one fanned out to two destinations, and one folded down a
+    # two-hop chain into a child composite), so the recorded column is 16
+    # exactly. The suffixed values are declared in `(mm/s^2)` and read in
+    # `(m/s^2)`: lose the fold and the answer moves by a factor of a thousand,
+    # not by a rounding error.
+    if ($emitDirs.ContainsKey('LitWire')) {
+        $lwDir = $emitDirs['LitWire']
+        Push-Location $lwDir
+        & '.\build\LitWire.exe' 2>&1 | Out-Null
+        $ran = ($LASTEXITCODE -eq 0)
+        Pop-Location
+        $worst = [double]::PositiveInfinity
+        $csv = Join-Path $lwDir 'litwire.csv'
+        if ($ran -and (Test-Path $csv)) {
+            $worst = 0.0
+            foreach ($line in (Get-Content $csv | Select-Object -Skip 1)) {
+                if (-not $line) { continue }
+                $err = [Math]::Abs([double]($line -split ',')[1] - 16.0)
+                if ($err -gt $worst) { $worst = $err }
+            }
+        }
+        if ($worst -lt 1e-12) {
+            Write-Host ("ok   build/emit/LitWire : literals on wires fold, convert " +
+                        "and fan out") -ForegroundColor Green
+            $script:pass++
+        } else {
+            Write-Host ("FAIL build/emit/LitWire : expected 16 m/s^2, off by " + $worst) `
+                -ForegroundColor Red
+            $script:fail++
+        }
+    }
+
     # RecSet is the record-settings model (SPEC 6.2c). Three axes are driven by
     # three DIFFERENT ramps through three DIFFERENT gains into three DIFFERENT
     # limits, so no two columns are interchangeable and each has its own closed
