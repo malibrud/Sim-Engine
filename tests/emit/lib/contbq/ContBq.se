@@ -34,11 +34,11 @@ node ContBq {
             b0 = 1.0;  b1 = 0.0;  b2 = 0.0;
         };
 
-        src.u --> lp.x;
-        src.u --> hp.x;
+        src --> lp;
+        src --> hp;
 
-        lp.y --> self.lp_y;
-        hp.y --> self.hp_y;
+        lp --> self.lp_y;
+        hp --> self.hp_y;
     }
 }
 

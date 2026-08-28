@@ -28,9 +28,11 @@ node Corner {
         self.ground_speed --> whl.ground_speed;
 
         // the WheelState record travels one wire, fanned out to the controller
-        // and re-exposed at the composite boundary
-        whl.ws --> tc.ws, self.ws;
+        // and re-exposed at the composite boundary. `whl` and `tc` are bare
+        // because each has a single port on the side the arrow needs; the
+        // boundary is named because `Corner` has two ports on each side.
+        whl --> tc, self.ws;
 
-        tc.torque_cut --> self.torque_cut;
+        tc --> self.torque_cut;
     }
 }

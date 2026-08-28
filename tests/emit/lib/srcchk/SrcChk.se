@@ -60,17 +60,20 @@ node SrcChk {
         node n_pn : src.PinkNoise    (m/s^2) { sigma = 1.0; f_lo = 2.0; f_hi = 200.0; };
         node n_pr : src.Prbs         (m/s^2) { amplitude = 1.0; order = 9; };
 
-        n_ct.y --> self.ct;
-        n_st.y --> self.st;
-        n_rp.y --> self.rp;
-        n_sn.y --> self.sn;
-        n_sq.y --> self.sq;
-        n_tr.y --> self.tr;
-        n_sw.y --> self.sw;
-        n_cp.y --> self.cp;
-        n_wn.y --> self.wn;
-        n_un.y --> self.un;
-        n_pn.y --> self.pn;
-        n_pr.y --> self.pr;
+        // Every source has one output, so naming it would say `.y` twelve
+        // times; the destination is named because it is the only half that
+        // differs from line to line (§6.9.2, the rule is per endpoint).
+        n_ct --> self.ct;
+        n_st --> self.st;
+        n_rp --> self.rp;
+        n_sn --> self.sn;
+        n_sq --> self.sq;
+        n_tr --> self.tr;
+        n_sw --> self.sw;
+        n_cp --> self.cp;
+        n_wn --> self.wn;
+        n_un --> self.un;
+        n_pn --> self.pn;
+        n_pr --> self.pr;
     }
 }

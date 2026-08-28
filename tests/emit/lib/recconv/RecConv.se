@@ -27,12 +27,12 @@ node RecConv {
         node s1 : math.Sum (m) {};
         node s2 : math.Sum (m) {};
 
-        src.v --> sp.v;
-        sp.x  --> s1.a;
-        sp.y  --> s1.b;
-        s1.y  --> s2.a;
-        sp.z  --> s2.b;
-        s2.y  --> self.y;
+        src --> sp;
+        sp.x --> s1.a;
+        sp.y --> s1.b;
+        s1 --> s2.a;
+        sp.z --> s2.b;
+        s2 --> self;
     }
 }
 

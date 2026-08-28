@@ -69,9 +69,8 @@ node RecSet {
 
         node nest : NestChk (m/s^2) { s = param.span; };
 
-        src.a    --> cue.vin;
-        cue.vout --> self.y;
-        nest.y   --> self.n;
+        src --> cue --> self.y;
+        nest --> self.n;
     }
 }
 

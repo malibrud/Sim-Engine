@@ -41,7 +41,6 @@ node ClassicalFromScratch {
             limit = param.limit;
         };
 
-        self.ain          --> linScale.vin;
-        linScale.vout     --> self.aout;
+        self --> linScale --> self;
     }
 }

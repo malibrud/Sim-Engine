@@ -39,20 +39,16 @@ node Vec3Chk {
         node arm : Arm {};
         node cr : math.Cross3 (rad/s, m) {};
 
-        src.a  --> sc.v;
-        sc.y   --> sp.v;
-        sp.x   --> lx.x;
-        sp.y   --> ly.x;
-        sp.z   --> lz.x;
-        lx.y   --> mg.x;
-        ly.y   --> mg.y;
-        lz.y   --> mg.z;
-        mg.v   --> nm.v, self.speed;
-        nm.y   --> self.mag;
+        src --> sc --> sp;
+        sp.x --> lx --> mg.x;
+        sp.y --> ly --> mg.y;
+        sp.z --> lz --> mg.z;
+        mg --> nm, self.speed;
+        nm --> self.mag;
 
-        om.w   --> cr.a;
-        arm.r  --> cr.b;
-        cr.y   --> self.tangent;
+        om  --> cr.a;
+        arm --> cr.b;
+        cr  --> self.tangent;
     }
 }
 

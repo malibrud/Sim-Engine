@@ -17,10 +17,8 @@ node UParam {
         // its `sample_rate` is 200 Hz while `flt`'s is the 1 kHz base step.
         node dec : Decimated (m/s^2)   {};
 
-        src.y --> dec.x;
-        src.y --> flt.x;
-        flt.y --> acc.x;
-        acc.y --> self.y;
+        src --> flt --> acc --> self;
+        src --> dec;
     }
 }
 

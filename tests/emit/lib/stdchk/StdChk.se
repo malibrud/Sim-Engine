@@ -34,13 +34,8 @@ node StdChk {
         // Table 5.3 block B3, by the field's native wn/zeta parameterisation.
         node lp  : dt.LowPass2       (m/s^2) { wn = 3.1; zeta = 1.4; };
 
-        ramp.y --> lim.x;
-        lim.y --> lp.x;
-        lim.y --> hp.x;
-        hp.y  --> acc.x;
-        acc.y --> dif.x;
-        dif.y --> add.a;
-        lim.y --> add.b;
-        add.y --> self.y;
+        ramp --> lim --> hp --> acc --> dif --> add.a;
+        lim --> lp, add.b;
+        add --> self;
     }
 }
