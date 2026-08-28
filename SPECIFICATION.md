@@ -2354,6 +2354,16 @@ external build tool:
 - **Generate-code and build-it are separable steps.** The compiler's contract is
   *generate code*; building it into a running simulation is an optional second
   stage.
+- **One script per shell, all equivalent.** `build.bat` for a Developer Command
+  Prompt, `build.ps1` for PowerShell, `build.sh` for a POSIX shell. They differ
+  only in quoting and in how an exit code is read; the compiler arguments they
+  pass are the same list.
+- **The compiler output and the C++ compiler's output stay apart.** Each script
+  compiles into a `build/` subdirectory of the output directory, and creates it
+  if it is not there. The generated sources can then be re-emitted, diffed or
+  deleted without object files and executables mixed in among them. The output
+  directory itself is likewise created by `sec`, so `--emit -o <dir>` does not
+  require the caller to have made `<dir>` first.
 - **The model is a header; the driver is its own translation unit.** The script
   compiles `<name>.main.cpp`, which contains nothing but `main()` and an
   `#include` of `<name>.generated.hpp`. A host program that wants to drive the

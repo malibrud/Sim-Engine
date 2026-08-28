@@ -367,12 +367,39 @@ if (-not $cl) {
         }
     }
 
+    # build.ps1 is the third emitted script, and an emitted script nobody runs
+    # is an emitted script that does not work. build.bat has just built every
+    # case above, so this proves the PowerShell spelling on ONE of them rather
+    # than paying for a second full compile everywhere: the two scripts differ
+    # only in how the SAME argument list is quoted and how the exit code is
+    # read, so one case exercises the whole difference. build.sh cannot be run
+    # here at all, which is exactly why the two that can be, are.
+    if ($emitDirs.ContainsKey('Decay')) {
+        $psDir = $emitDirs['Decay']
+        Push-Location $psDir
+        # Removed first, so a build.ps1 that silently does nothing cannot pass
+        # on the executable build.bat left behind.
+        if (Test-Path 'build') { Remove-Item -Recurse -Force 'build' }
+        $out = (& powershell -NoProfile -File '.\build.ps1' 2>&1 | Out-String)
+        $code = $LASTEXITCODE
+        $made = Test-Path '.\build\Decay.exe'
+        Pop-Location
+        if ($code -eq 0 -and $made -and $out -notmatch 'warning') {
+            Write-Host "ok   build/emit/Decay : build.ps1 compiles clean" -ForegroundColor Green
+            $script:pass++
+        } else {
+            Write-Host "FAIL build/emit/Decay : build.ps1 did not compile clean" -ForegroundColor Red
+            Write-Host $out
+            $script:fail++
+        }
+    }
+
     # Decay is x(t) = exp(-k t) with k = 2, so the recorded column is checkable
     # against the closed form rather than against a golden file.
     if ($emitDirs.ContainsKey('Decay')) {
         $decayDir = $emitDirs['Decay']
         Push-Location $decayDir
-        & '.\Decay.exe' 2>&1 | Out-Null
+        & '.\build\Decay.exe' 2>&1 | Out-Null
         $ran = ($LASTEXITCODE -eq 0)
         Pop-Location
         $worst = 0.0
@@ -407,7 +434,7 @@ if (-not $cl) {
     if ($emitDirs.ContainsKey('RecConv')) {
         $rcDir = $emitDirs['RecConv']
         Push-Location $rcDir
-        & '.\RecConv.exe' 2>&1 | Out-Null
+        & '.\build\RecConv.exe' 2>&1 | Out-Null
         $ran = ($LASTEXITCODE -eq 0)
         Pop-Location
         $worst = [double]::PositiveInfinity
@@ -440,7 +467,7 @@ if (-not $cl) {
     if ($emitDirs.ContainsKey('ParWire')) {
         $pwDir = $emitDirs['ParWire']
         Push-Location $pwDir
-        & '.\ParWire.exe' 2>&1 | Out-Null
+        & '.\build\ParWire.exe' 2>&1 | Out-Null
         $ran = ($LASTEXITCODE -eq 0)
         Pop-Location
         $worst = [double]::PositiveInfinity
@@ -490,7 +517,7 @@ if (-not $cl) {
     if ($emitDirs.ContainsKey('RecSet')) {
         $rsDir = $emitDirs['RecSet']
         Push-Location $rsDir
-        & '.\RecSet.exe' 2>&1 | Out-Null
+        & '.\build\RecSet.exe' 2>&1 | Out-Null
         $ran = ($LASTEXITCODE -eq 0)
         Pop-Location
         $worst = [double]::PositiveInfinity
@@ -552,7 +579,7 @@ if (-not $cl) {
     if ($emitDirs.ContainsKey('ChainChk')) {
         $ccDir = $emitDirs['ChainChk']
         Push-Location $ccDir
-        & '.\ChainChk.exe' 2>&1 | Out-Null
+        & '.\build\ChainChk.exe' 2>&1 | Out-Null
         $ran = ($LASTEXITCODE -eq 0)
         Pop-Location
         $worst = [double]::PositiveInfinity
@@ -605,7 +632,7 @@ if (-not $cl) {
     if ($emitDirs.ContainsKey('ArrSt')) {
         $asDir = $emitDirs['ArrSt']
         Push-Location $asDir
-        & '.\ArrSt.exe' 2>&1 | Out-Null
+        & '.\build\ArrSt.exe' 2>&1 | Out-Null
         $ran = ($LASTEXITCODE -eq 0)
         Pop-Location
         $worst = 0.0
@@ -670,7 +697,7 @@ if (-not $cl) {
     if ($emitDirs.ContainsKey('BwChk')) {
         $bwDir = $emitDirs['BwChk']
         Push-Location $bwDir
-        & '.\BwChk.exe' 2>&1 | Out-Null
+        & '.\build\BwChk.exe' 2>&1 | Out-Null
         $ran = ($LASTEXITCODE -eq 0)
         Pop-Location
         $worst = 0.0
@@ -740,7 +767,7 @@ if (-not $cl) {
     if ($emitDirs.ContainsKey('ContBq')) {
         $cbDir = $emitDirs['ContBq']
         Push-Location $cbDir
-        & '.\ContBq.exe' 2>&1 | Out-Null
+        & '.\build\ContBq.exe' 2>&1 | Out-Null
         $ran = ($LASTEXITCODE -eq 0)
         Pop-Location
         $worst = 0.0
@@ -791,7 +818,7 @@ if (-not $cl) {
     if ($emitDirs.ContainsKey('SrcChk')) {
         $scDir = $emitDirs['SrcChk']
         Push-Location $scDir
-        & '.\SrcChk.exe' 2>&1 | Out-Null
+        & '.\build\SrcChk.exe' 2>&1 | Out-Null
         $ran = ($LASTEXITCODE -eq 0)
         Pop-Location
         $csv = Join-Path $scDir 'srcchk.csv'

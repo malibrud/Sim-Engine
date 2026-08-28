@@ -31,7 +31,7 @@ build\sec.exe --dump-tokens Wheel.se       # print the token stream
 
 rem  the whole pipeline
 build\sec.exe --emit -I examples -o out examples\drivetrain\Drivetrain.sim
-cd out && build.bat && Drivetrain.exe      # -> drivetrain.csv, drivetrain.log
+cd out && build.bat && build\Drivetrain.exe   # -> drivetrain.csv, drivetrain.log
 
 powershell -File tests\run.ps1             # run the test suite
 ```
@@ -43,7 +43,7 @@ directory path. So `-I examples` makes `drivetrain.Corner` mean
 and no search default beyond `.`, so a build is reproducible from its command
 line.
 
-`--emit` writes into the output directory:
+`--emit` writes into the output directory, creating it if it is not there:
 
 | File | |
 |---|---|
@@ -51,7 +51,7 @@ line.
 | `Sim.main.cpp` | The batch driver, and nothing else. `--no-main` suppresses it |
 | `Sim.units.txt` | The unit manifest (§15.6) — the contract for an external solver or host, not documentation |
 | `state_ref.hpp`, `se_runtime.hpp` | Fixed engine runtime headers; identical for every model |
-| `build.bat`, `build.sh` | The direct reference build (§12.4): a full unity compile, no external build tool |
+| `build.bat`, `build.ps1`, `build.sh` | The direct reference build (§12.4), one per shell: a full unity compile into a `build/` subdirectory each creates, no external build tool |
 
 The output has no third-party dependencies and no include path outside itself.
 

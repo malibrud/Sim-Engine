@@ -8,10 +8,12 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <functional>
 #include <map>
 #include <set>
 #include <string>
+#include <system_error>
 #include <vector>
 
 namespace se {
@@ -188,6 +190,9 @@ void split_native(const std::string& text, std::string& type, std::string& init)
 //  The emitter
 // ═════════════════════════════════════════════════════════════════════════════
 
+// Which shell a reference build script is written for (§12.4).
+enum class Script { Bat, Ps1, Sh };
+
 class Emitter {
 public:
     Emitter(const Model& m, const std::string& gen_name) : m_(m), gen_(gen_name) {}
@@ -196,7 +201,7 @@ public:
     std::string main_cpp(const std::string& header_name);
     std::string manifest();
     std::string topology() const;
-    std::string build_script(bool windows, const std::string& header_name);
+    std::string build_script(Script kind, const std::string& header_name);
 
 private:
     // Verbatim regions (§11), with `#line` on both sides.
@@ -2416,57 +2421,145 @@ std::string Emitter::manifest() {
 }
 
 // ─── The reference build (§12.4) ─────────────────────────────────────────────
+//
+//  Three scripts, one build. `build.bat` is for a Developer Command Prompt,
+//  `build.ps1` for the PowerShell this project is otherwise driven from, and
+//  `build.sh` for a POSIX shell. They are not translations of one text: cmd,
+//  PowerShell and sh disagree about quoting, about how an exit code is read
+//  and about what a comment looks like, so each is written out on its own.
+//
+//  All three compile into a `build/` subdirectory of the output directory and
+//  create it first. The generated sources are the compiler's output and the
+//  binaries are the C++ compiler's; keeping them apart means the emit
+//  directory can be re-emitted, diffed or deleted without object files and
+//  executables mixed in among the files `sec` actually wrote.
 
-std::string Emitter::build_script(bool windows, const std::string& main_name) {
-    const char* platform = windows ? "windows" : "linux";
+std::string Emitter::build_script(Script kind, const std::string& main_name) {
+    const char* platform = kind == Script::Sh ? "linux" : "windows";
+    const bool windows = kind != Script::Sh;
     Out t;
-    if (windows) {
-        t << "@echo off\r\n";
-        t << "rem " << std::string(74, '-') << "\r\n";
-        t << "rem  GENERATED reference build for " << gen_ << ".\r\n";
-        t << "rem\r\n";
-        t << "rem  A FULL build only: it never tracks changes and never builds\r\n";
-        t << "rem  incrementally. That is not an omission. The unity build is the\r\n";
-        t << "rem  intended model, so there are no object files and \"incremental\" is a\r\n";
-        t << "rem  category that does not exist rather than a feature skipped.\r\n";
-        t << "rem " << std::string(74, '-') << "\r\n";
-        t << "setlocal\r\n";
-    } else {
-        t << "#!/bin/sh\n";
-        t << "# " << std::string(74, '-') << "\n";
-        t << "#  GENERATED reference build for " << gen_ << ".\n";
-        t << "#  A full build only — the unity build is the intended model (§12.4).\n";
-        t << "# " << std::string(74, '-') << "\n";
-        t << "set -e\n";
-    }
 
-    std::string includes, defines, cflags, links;
+    if (kind == Script::Bat) t << "@echo off\r\n";
+    if (kind == Script::Sh) t << "#!/bin/sh\n";
+    // cmd mis-splits an LF-only batch file, so `build.bat` alone is CRLF.
+    const char* nl = kind == Script::Bat ? "\r\n" : "\n";
+    const char* rem = kind == Script::Bat ? "rem " : "# ";
+    t << rem << std::string(74, '-') << nl;
+    t << rem << " GENERATED reference build for " << gen_ << "." << nl;
+    t << (kind == Script::Bat ? "rem" : "#") << nl;
+    t << rem << " A FULL build only: it never tracks changes and never builds" << nl;
+    t << rem << " incrementally. That is not an omission. The unity build is the" << nl;
+    t << rem << " intended model, so there are no object files and \"incremental\" is a"
+      << nl;
+    t << rem << " category that does not exist rather than a feature skipped." << nl;
+    t << rem << std::string(74, '-') << nl;
+
+    // One argument per element, UNQUOTED. Each shell has its own idea of what
+    // needs quoting, and an `include_dir` with a space in it is the case that
+    // separates them, so the quoting is applied where the text is laid out and
+    // never carried around pre-applied in a joined string.
+    std::vector<std::string> args, links;
+    if (windows) {
+        args = {"/nologo", "/std:c++17", "/EHsc",  "/W4",
+                "/permissive-", "/utf-8", "/O2",   "/MD",
+                "/D_CRT_SECURE_NO_WARNINGS"};
+    } else {
+        args = {"-std=c++17", "-O2", "-Wall", "-Wextra"};
+    }
     for (const ast::BuildStmt& b : m_.program->build) {
         if (!b.when.empty() && b.when != platform) continue;
         if (b.primitive == "include_dir")
-            includes += windows ? " /I\"" + b.argument + "\"" : " -I'" + b.argument + "'";
+            args.push_back((windows ? "/I" : "-I") + b.argument);
         else if (b.primitive == "define")
-            defines += windows ? " /D" + b.argument : " -D" + b.argument;
+            args.push_back((windows ? "/D" : "-D") + b.argument);
         else if (b.primitive == "cflag")
-            cflags += " " + b.argument;
+            args.push_back(b.argument);
         else if (b.primitive == "link")
-            links += windows ? " " + b.argument + ".lib" : " -l" + b.argument;
+            links.push_back(windows ? b.argument + ".lib" : "-l" + b.argument);
     }
 
     const std::string exe = m_.name.empty() ? "sim" : m_.name;
     if (windows) {
-        t << "\r\ncl /nologo /std:c++17 /EHsc /W4 /permissive- /utf-8 /O2 /MD"
-             " /D_CRT_SECURE_NO_WARNINGS"
-          << cflags << defines
-          << includes << " /Fe:" << exe << ".exe " << main_name;
-        if (!links.empty()) t << " /link" << links;
-        t << "\r\nif errorlevel 1 exit /b 1\r\n";
-        t << "echo build: " << exe << ".exe\r\n";
-        t << "endlocal\r\n";
+        args.push_back("/Fobuild\\");
+        args.push_back("/Fe:build\\" + exe + ".exe");
     } else {
-        t << "\n${CXX:-c++} -std=c++17 -O2 -Wall -Wextra" << cflags << defines << includes
-          << " -o " << exe << " " << gen_ << links << "\n";
-        t << "echo \"build: " << exe << "\"\n";
+        args.push_back("-o");
+        args.push_back("build/" + exe);
+    }
+    args.push_back(main_name);
+
+    switch (kind) {
+        case Script::Bat: {
+            t << "setlocal\r\n";
+            t << "\r\nif not exist build mkdir build\r\n\r\ncl";
+            // cmd's own splitting is on whitespace, so only an argument that
+            // contains some needs the quotes.
+            auto cmd_arg = [](const std::string& a) {
+                return a.find(' ') == std::string::npos ? a : "\"" + a + "\"";
+            };
+            for (const std::string& a : args) t << " " << cmd_arg(a);
+            if (!links.empty()) {
+                t << " /link";
+                for (const std::string& l : links) t << " " << cmd_arg(l);
+            }
+            t << "\r\nif errorlevel 1 exit /b 1\r\n";
+            t << "echo build: build\\" << exe << ".exe\r\n";
+            t << "endlocal\r\n";
+            break;
+        }
+
+        case Script::Ps1: {
+            // Splatted as an array rather than pasted into one string:
+            // PowerShell would re-split a joined string on whitespace, and an
+            // `include_dir` with a space in it would reach `cl` in pieces. A
+            // single-quoted element is literal, which is what a path full of
+            // backslashes needs.
+            auto ps_arg = [&](const std::string& a) {
+                std::string q = "'";
+                for (char c : a) {
+                    q += c;
+                    if (c == '\'') q += '\'';
+                }
+                return q + "'";
+            };
+            t << "\n$flags = @(\n";
+            for (const std::string& a : args) t << "    " << ps_arg(a) << "\n";
+            if (!links.empty()) {
+                t << "    '/link'\n";
+                for (const std::string& l : links) t << "    " << ps_arg(l) << "\n";
+            }
+            t << ")\n";
+            t << "\nNew-Item -ItemType Directory -Force build | Out-Null\n";
+            t << "& cl @flags\n";
+            t << "if ($LASTEXITCODE -ne 0) { exit 1 }\n";
+            t << "Write-Host \"build: build\\" << exe << ".exe\"\n";
+            break;
+        }
+
+        case Script::Sh: {
+            auto sh_arg = [](const std::string& a) {
+                std::string q = "'";
+                for (char c : a) {
+                    if (c == '\'') q += "'\''";
+                    else q += c;
+                }
+                return q + "'";
+            };
+            auto bare = [&](const std::string& a) {
+                // Quote only what needs it, so the common script reads like a
+                // command line someone typed.
+                return a.find_first_of(" \t'\"$`\\*?") == std::string::npos ? a
+                                                                            : sh_arg(a);
+            };
+            t << "set -e\n";
+            t << "\nmkdir -p build\n";
+            t << "${CXX:-c++}";
+            for (const std::string& a : args) t << " " << bare(a);
+            for (const std::string& l : links) t << " " << bare(l);
+            t << "\n";
+            t << "echo \"build: build/" << exe << "\"\n";
+            break;
+        }
     }
     return t.str();
 }
@@ -2494,6 +2587,22 @@ bool emit(Diagnostics& diag, const Model& m, const EmitOptions& opt) {
     const std::string header_name = opt.stem + ".generated.hpp";
     const std::string main_name = opt.stem + ".main.cpp";
     const std::string dir = opt.out_dir.empty() ? "." : opt.out_dir;
+
+    // Creating the output directory is the compiler's job, not the caller's:
+    // `sec --emit -o build/washout` should write there, not fail because
+    // nothing has made `build/washout` yet. create_directories is a no-op on a
+    // directory that already exists, and reports through `ec` rather than
+    // throwing, so an unwritable path becomes a diagnostic and not a crash.
+    {
+        std::error_code ec;
+        std::filesystem::create_directories(dir, ec);
+        if (ec && !std::filesystem::is_directory(dir)) {
+            std::fprintf(stderr, "sec: cannot create output directory `%s`: %s\n",
+                         dir.c_str(), ec.message().c_str());
+            return false;
+        }
+    }
+
     auto path = [&](const std::string& name) {
         return dir == "." ? name : dir + "/" + name;
     };
@@ -2511,8 +2620,12 @@ bool emit(Diagnostics& diag, const Model& m, const EmitOptions& opt) {
         ok = write_file(diag, path("se_runtime.hpp"), se_runtime_hpp(), opt.quiet) && ok;
     }
     if (opt.write_build && opt.write_main) {
-        ok = write_file(diag, path("build.bat"), e.build_script(true, main_name), opt.quiet) && ok;
-        ok = write_file(diag, path("build.sh"), e.build_script(false, main_name), opt.quiet) && ok;
+        ok = write_file(diag, path("build.bat"),
+                        e.build_script(Script::Bat, main_name), opt.quiet) && ok;
+        ok = write_file(diag, path("build.ps1"),
+                        e.build_script(Script::Ps1, main_name), opt.quiet) && ok;
+        ok = write_file(diag, path("build.sh"),
+                        e.build_script(Script::Sh, main_name), opt.quiet) && ok;
     }
     return ok;
 }

@@ -14,11 +14,12 @@
 //      --dump-ast         print the parsed AST
 //      --dump-tokens      print the token stream (does not parse)
 //      -I <dir>           add a root directory (§2.1); repeatable
-//      -o <dir>           output directory for --emit (default `.`)
+//      -o <dir>           output directory for --emit (default `.`), created
+//                         if it does not exist
 //      --stem=<name>      output base name for --emit (default `Sim`)
 //      --no-main          do not write <stem>.main.cpp (embed in your own host)
 //      --no-runtime       do not write state_ref.hpp / se_runtime.hpp
-//      --no-build         do not write build.bat / build.sh
+//      --no-build         do not write build.bat / build.ps1 / build.sh
 //      --no-topology      do not write <stem>.topology.mmd
 //      --kind=<k>         force model | sim | settings, ignoring the extension
 //      --max-errors=<n>   diagnostic cap (default 20; 0 means no cap)
@@ -71,11 +72,12 @@ void usage(std::ostream& o) {
          "  --dump-ast         print the parsed AST\n"
          "  --dump-tokens      print the token stream (does not parse)\n"
          "  -I <dir>           add a root directory; repeatable\n"
-         "  -o <dir>           output directory for --emit (default `.`)\n"
+         "  -o <dir>           output directory for --emit (default `.`),\n"
+         "                     created if it does not exist\n"
          "  --stem=<name>      output base name for --emit (default `Sim`)\n"
          "  --no-main          do not write <stem>.main.cpp\n"
          "  --no-runtime       do not write state_ref.hpp / se_runtime.hpp\n"
-         "  --no-build         do not write build.bat / build.sh\n"
+         "  --no-build         do not write build.bat / .ps1 / .sh\n"
          "  --no-topology      do not write <stem>.topology.mmd\n"
          "  --kind=<k>         force model | sim | settings\n"
          "  --max-errors=<n>   diagnostic cap (default 20, 0 = no cap)\n"

@@ -1,7 +1,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 //  Stage 6 — emission.  SPECIFICATION.md §11, §12.4, §15.
 //
-//  Writes, into one output directory:
+//  Writes, into one output directory, which it creates if it is not there:
 //
 //      <name>.generated.hpp   the model, the schedule, the host API
 //      <name>.main.cpp        the batch driver, and nothing else
@@ -9,7 +9,9 @@
 //      <name>.topology.mmd    the signal-flow graph, as a Mermaid diagram
 //      state_ref.hpp          fixed engine runtime header (§15.5)
 //      se_runtime.hpp         fixed engine runtime header
-//      build.bat / build.sh   the direct reference build (§12.4)
+//      build.bat / .ps1 / .sh the direct reference build (§12.4), one per
+//                             shell; each compiles into a `build/` subdir
+//                             it creates
 //
 //  The model is a header so that a host program can include it and drive the
 //  root boundary itself; the driver is a separate translation unit so it can
