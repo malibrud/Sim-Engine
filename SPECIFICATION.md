@@ -1480,8 +1480,9 @@ without the user writing an ordering anywhere.
 **A composite's settings therefore exist at run time**, unlike its ports and
 wires, which flatten away entirely (§15.2). They are the inputs to the flow-down
 expressions, and overriding one at configuration is the whole point of
-addressing a path like `front.left.mass` (§13.2). They hold no signal and take
-part in no computation beyond §6.2b step 3.
+addressing a path like `front.left.mass` (§13.2). They compute nothing beyond
+§6.2b step 3 — but because they are real members, one may be *read* as a wire
+source (§6.9.2), which is the cheapest constant the language offers.
 
 #### 6.9.2 Wires
 
@@ -1538,9 +1539,56 @@ endpoint := ( 'self' | identifier ) { '.' identifier }
   precedence rule to remember but the only thing the grammar admits — once a
   comma is seen no further `-->` may follow, and `a --> b, c --> d` is a syntax
   error.
+- **A setting may be a wire source**, spelled `param.<setting>` — the enclosing
+  composite's own setting, driving an input directly:
+
+  ```
+  settings { grav: math.Vec3(m/s^2) = { 0.0, 0.0, -9.80665 }; }
+  structure {
+      self --> linScale --> sfSum.a;
+      param.grav        --> sfSum.b;
+  }
+  ```
+
+  This is the cheapest constant the language has. A composite's settings already
+  exist at run time (§6.9.1), so the wire reads a member that is already there:
+  no node, no `Out` storage, and no edge in the §8.5 sort. It is also *live* —
+  the reference is emitted, not folded, so overriding `grav.z` at configuration
+  reaches the wire in a compiled binary, exactly as a flow-down binding does
+  (§6.2b step 3). `se.sig.src.Constant` remains the right answer when the
+  constant wants a `rate`, a name in the schedule, or a recordable signal path.
+
+  `param` is available as an endpoint head because it can never be anything
+  else: §6.11 already forbids it as a member name, instance names included, so
+  the spelling is unambiguous without reserving a word.
+
+  Four rules, and they divide by stage. **Shape** is settled at stage 3, before
+  any setting is looked up, because it is a property of the wire:
+
+  - **Source only.** A wire may not drive a setting (`SE0315`). A setting is
+    configuration, not signal; it moves at §6.2b and nowhere else.
+  - **No bare form.** `param` alone is an error (`SE0315`). Bare defaulting is
+    an arity rule over *ports*, and a node's settings present no side for the
+    arrow to pick from.
+
+  **Which setting** is stage 4, where the settings exist:
+
+  - **A record leaf may be named**: `param.grav.z` wires that scalar, and
+    `param.grav` wires the whole `Vec3`. §6.2c holds that only the leaves of a
+    record setting are real, so naming one here is naming a scalar — not taking
+    a field of a wire, which is the separate and still-unsupported thing
+    `SE0311` rejects. Unknown setting, or unknown field, is `SE0304`.
+  - **`rate` is excluded** (`SE0316`). It selects a decimation (§9.2) and gets
+    no parameter member at all, so there is nothing to read.
+
+  Everything else about the endpoint is unchanged: units are checked and
+  converted per §5.2, scalar and record alike, and fan-out is free — a setting is
+  read-only, which makes it a legitimate single writer for any number of
+  destinations.
 - **Fan-in is forbidden.** Two sources into one input is an error (`SE0442`);
   insert an explicit `Sum` node. This is what makes the single-writer wire
-  lowering sound (§15.3).
+  lowering sound (§15.3). A setting source cannot create fan-in, because it can
+  never be the destination end.
 - **Wires are untyped in the syntax.** There is no type annotation on a
   connection; the type is a property of the ports and is checked, with unit
   conversion inserted, at stage 4.
@@ -2673,6 +2721,14 @@ port holds a `WheelState`, a scalar port a `double`. The view is not wire
 storage — the wire is still the producer's `Out` member, and fan-out still costs
 nothing — it is the parameter block one call reads through.
 
+Which is why a **setting source** (§6.9.2) needs no lowering of its own. There
+are three things an input can name — a producer's `Out`, a root input in
+`sig.in`, and a setting's member — and materialising by value makes the third
+indistinguishable from the other two at the call site:
+`sfSum.output({sig.linScale.vout, se_cfg_root.grav}, sig.sfSum)`. No `Out` is
+invented, no schedule edge appears, and because the member is read rather than
+folded, a configuration-time override reaches the wire.
+
 By value for both is what lets **both convert**. A conversion folds to a constant
 and lands in the view's initialiser: a scalar as `sig.src.y * 0.001`, a record as
 a brace initialiser applying each field's own factor,
@@ -3143,6 +3199,8 @@ of thing wearing the same name.
 | `SE0312` | 4 | Recursive instantiation: a node transitively contains itself |
 | `SE0313` | 3 | Wrong number of unit arguments on a type reference |
 | `SE0314` | 3 | A bare wire endpoint needs exactly one port on that side |
+| `SE0315` | 3 | A `param` wire endpoint is a destination, or names no setting |
+| `SE0316` | 4 | The reserved setting `rate` cannot be a wire source |
 | `SE0320` | 3 | Node has both code and a `structure` block |
 | `SE0330` | 3 | Duplicate member name in a node |
 | `SE0331` | 3 | Member name shadows a generated accessor |
@@ -3280,6 +3338,10 @@ setting_binding = IDENT "=" expression ";" ;
 wire_stmt       = endpoint "-->" endpoint { "-->" endpoint }
                                           { "," endpoint } ";" ;
 endpoint        = endpoint_head { "." IDENT } ;
+(* `param` is an ordinary IDENT here and is separated at stage 3: it names the
+   enclosing composite's setting rather than a child instance, and cannot be a
+   destination (§6.9.2). No token is reserved for it, because §6.11 already
+   forbids `param` as a member name. *)
 endpoint_head   = "self" | IDENT ;
 
 (* ─── methods ────────────────────────────────────────────────────────── *)
@@ -3444,6 +3506,12 @@ Recorded so that their absence is visibly deliberate.
 3. **Field-level wires** (§5.3) — `whl.ws.speed --> tc.u`. The grammar admits it;
    the semantics currently reject it. `se.math.Split3`/`Merge3` cover the need
    meanwhile, at the cost of two nodes per bundle.
+
+   Note the deliberate asymmetry with `param.grav.z`, which §6.9.2 *does* admit.
+   A record setting is a tree of scalar leaves and only the leaves are real
+   (§6.2c), so naming one addresses a member that exists on its own. A record
+   port is one value in one place, and taking a field of it is the harder
+   question this item is about.
 4. **Coordinate bases for record types.** A `Vec3(m/s)` in a body frame and one
    in an inertial frame are the same type today, and adding them is a modelling
    error nothing catches. A *checked* tag is the only shape available: unlike a

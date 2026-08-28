@@ -431,6 +431,39 @@ if (-not $cl) {
         }
     }
 
+    # SPECIFICATION 6.9.2 -- a setting as a wire source. ParWire drives all
+    # three spellings (a whole record, a scalar fanned out to two destinations,
+    # and a leaf of a record) from `(mm/s^2)` settings into `(m/s^2)` ports, so
+    # the recorded column is 17 exactly. Both conversion paths are in the sum:
+    # lose the per-field walk or the scalar fold and the answer moves by a
+    # factor of a thousand, not by a rounding error.
+    if ($emitDirs.ContainsKey('ParWire')) {
+        $pwDir = $emitDirs['ParWire']
+        Push-Location $pwDir
+        & '.\ParWire.exe' 2>&1 | Out-Null
+        $ran = ($LASTEXITCODE -eq 0)
+        Pop-Location
+        $worst = [double]::PositiveInfinity
+        $csv = Join-Path $pwDir 'parwire.csv'
+        if ($ran -and (Test-Path $csv)) {
+            $worst = 0.0
+            foreach ($line in (Get-Content $csv | Select-Object -Skip 1)) {
+                if (-not $line) { continue }
+                $err = [Math]::Abs([double]($line -split ',')[1] - 17.0)
+                if ($err -gt $worst) { $worst = $err }
+            }
+        }
+        if ($worst -lt 1e-12) {
+            Write-Host ("ok   build/emit/ParWire : settings on wires convert and " +
+                        "fan out") -ForegroundColor Green
+            $script:pass++
+        } else {
+            Write-Host ("FAIL build/emit/ParWire : expected 17 m/s^2, off by " + $worst) `
+                -ForegroundColor Red
+            $script:fail++
+        }
+    }
+
     # RecSet is the record-settings model (SPEC 6.2c). Three axes are driven by
     # three DIFFERENT ramps through three DIFFERENT gains into three DIFFERENT
     # limits, so no two columns are interchangeable and each has its own closed

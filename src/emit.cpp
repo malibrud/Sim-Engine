@@ -600,8 +600,12 @@ std::string Emitter::input_expr(const Leaf& leaf, const std::string& port) const
     auto it = leaf.inputs.find(port);
     if (it == leaf.inputs.end()) return "{}";
     const InputSource& s = it->second;
-    std::string expr = s.kind == InputSource::Kind::Boundary
-                           ? s.boundary
+    // §6.9.2 — a setting source is read where the value is read: the setting is
+    // a live member (§6.2b), so an override at configuration reaches the wire
+    // without anything being folded, and no `Out` storage is invented.
+    std::string expr = s.kind == InputSource::Kind::Boundary ? s.boundary
+                       : s.kind == InputSource::Kind::Param
+                           ? render_expr(s.expr)
                            : "sig." + m_.leaves[s.producer].ident + "." + s.port;
     if (!s.converts()) return expr;
 

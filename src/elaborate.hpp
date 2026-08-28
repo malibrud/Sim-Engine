@@ -196,6 +196,13 @@ private:
         Loc loc;
         const Source* src = nullptr;
     };
+    // §6.9.2 — a setting wired as a source. Keyed in `setting_sources_` by
+    // `<composite path>.param.<dotted setting>`, which cannot collide with any
+    // port path because no member may be named `param` (§6.11).
+    struct ParamSource {
+        std::string owner;         // model path of the composite holding it
+        std::string name;          // the leaf, dotted: "grav" | "grav.z"
+    };
     // `child_binding` maps a child instance name to its §6.2a unit arguments.
     // Passed in rather than recomputed so arity errors are reported once.
     void collect_wires(const NodeInfo* def, const std::string& path, Model& m,
@@ -219,6 +226,7 @@ private:
 
     std::map<std::string, Hop> producers_;              // dest path -> hop
     std::map<std::string, std::pair<std::size_t, std::string>> leaf_outputs_;
+    std::map<std::string, ParamSource> setting_sources_;   // §6.9.2
     std::map<std::string, std::size_t> leaf_by_path_;
     // Every instantiated node, composites included, so that an override that
     // landed on nothing can be told what it nearly hit.

@@ -41,7 +41,10 @@ bool schedule(Diagnostics& diag, Model& m) {
         for (const std::string& p : out->params) {
             auto it = leaf.inputs.find(p);
             if (it == leaf.inputs.end()) continue;
-            if (it->second.kind != InputSource::Kind::Leaf) continue;   // host-driven
+            // Anything but a producing leaf is already there when the tick
+            // starts: a root input the host wrote, or a setting resolved at
+            // configuration (§6.9.2). Neither constrains the order.
+            if (it->second.kind != InputSource::Kind::Leaf) continue;
             const std::size_t from = it->second.producer;
             if (from == i) {
                 // A node feeding its own feedthrough input is a one-node loop;

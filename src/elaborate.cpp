@@ -1771,6 +1771,60 @@ void Elaborator::collect_wires(const NodeInfo* def, const std::string& path, Mod
             return true;
         }
         if (e.segs.empty()) return false;
+
+        // §6.9.2 — a setting of this composite, wired as a source. `check_structure`
+        // has already settled the shape: destination and bare `param` are SE0315,
+        // so anything reaching here is a source with at least one name after it.
+        if (e.segs[0] == "param") {
+            if (!as_source || e.segs.size() < 2) return false;
+            const NodeInfo::SettingInfo* si = def->setting(e.segs[1]);
+            if (!si) {
+                diag_.error("SE0304", src, e.loc,
+                            "`" + def->def->name + "` has no setting `" + e.segs[1] + "`",
+                            "unresolved setting");
+                return false;
+            }
+            if (e.segs[1] == "rate") {
+                // §9.2 — `rate` drives the schedule's decimation and gets no
+                // param member at all (§15.5), so there is nothing to read.
+                diag_.error("SE0316", src, e.loc,
+                            "the reserved setting `rate` cannot be a wire source",
+                            "`" + e.str() + "`",
+                            {note("`rate` selects a decimation and holds no signal (§9.2)")});
+                return false;
+            }
+
+            // §6.2c — a dotted tail addresses a leaf of a record setting. The
+            // leaves are the only real thing, so this is naming a scalar, not
+            // taking a field of a wire (which is SE0311 and about ports).
+            Type t = si->type;
+            std::string name = e.segs[1];
+            for (std::size_t k = 2; k < e.segs.size(); ++k) {
+                const Field* f = nullptr;
+                if (t.is_record && t.record)
+                    for (const Field& rf : t.record->fields)
+                        if (rf.name == e.segs[k]) { f = &rf; break; }
+                if (!f) {
+                    diag_.error("SE0304", src, e.loc,
+                                t.is_record ? "`" + t.record->fq + "` has no field `" +
+                                                  e.segs[k] + "`"
+                                            : "setting `" + name + "` is not a record",
+                                "unresolved setting");
+                    return false;
+                }
+                t = field_type(t, *f);
+                name += "." + e.segs[k];
+            }
+
+            out_field = Field{};
+            out_field.name = name;
+            out_field.type = t;
+            out_field.loc = si->loc;
+            key = sub(sub(path, "param"), name);
+            setting_sources_[key] = ParamSource{path, name};
+            return true;
+        }
+
         const std::string& inst = e.segs[0];
         auto it = def->children.find(inst);
         if (it == def->children.end()) {
@@ -1876,10 +1930,17 @@ void Elaborator::resolve_inputs(Model& m) {
 
             InputSource in;
             auto out_it = leaf_outputs_.find(k);
+            auto par_it = setting_sources_.find(k);
             if (out_it != leaf_outputs_.end()) {
                 in.kind = InputSource::Kind::Leaf;
                 in.producer = out_it->second.first;
                 in.port = out_it->second.second;
+            } else if (par_it != setting_sources_.end()) {
+                // §6.9.2 — the chain terminates on a setting. No producer, so
+                // this adds no edge to the §8.5 sort and no storage: the
+                // reference is rendered where the value is read.
+                in.kind = InputSource::Kind::Param;
+                in.expr = ec_param(par_it->second.owner, par_it->second.name);
             } else if (chain.empty() ? root_inputs.count(key) != 0
                                      : root_inputs.count(k) != 0) {
                 in.kind = InputSource::Kind::Boundary;
@@ -1946,16 +2007,6 @@ void Elaborator::resolve_boundary(const NodeInfo* root, Model& m) {
             if (it == producers_.end()) break;
             k = it->second.source;
         }
-        auto out_it = leaf_outputs_.find(k);
-        if (out_it == leaf_outputs_.end()) continue;   // undriven; simply unread
-        const Leaf& leaf = m.leaves[out_it->second.first];
-        // §6.2a — the substituted port, so the manifest reports the unit the
-        // host actually receives rather than the definition's `(U)`.
-        const Field* port = nullptr;
-        for (const Field& lf : leaf.ports_out)
-            if (lf.name == out_it->second.second) { port = &lf; break; }
-        if (!port) continue;
-
         // Records are listed field by field: the manifest is read by a human
         // wiring up a host, and `ws` alone would not tell them anything.
         std::function<void(const std::string&, const std::string&, const Type&)> expand =
@@ -1969,8 +2020,28 @@ void Elaborator::resolve_boundary(const NodeInfo* root, Model& m) {
                     return;
                 }
                 for (const Field& sf : t.record->fields)
-                    expand(path + "." + sf.name, expr + "." + sf.name, field_type(t, sf));
+                    expand(path + "." + sf.name,
+                           expr.empty() ? expr : expr + "." + sf.name, field_type(t, sf));
             };
+
+        // §6.9.2 — a root output driven straight by a setting has no producing
+        // leaf and so names no signal-block member, but it is every bit as real
+        // to the host reading the manifest. The row goes in without an `expr`.
+        if (setting_sources_.count(k)) {
+            expand(f.name, "", f.type);
+            continue;
+        }
+
+        auto out_it = leaf_outputs_.find(k);
+        if (out_it == leaf_outputs_.end()) continue;   // undriven; simply unread
+        const Leaf& leaf = m.leaves[out_it->second.first];
+        // §6.2a — the substituted port, so the manifest reports the unit the
+        // host actually receives rather than the definition's `(U)`.
+        const Field* port = nullptr;
+        for (const Field& lf : leaf.ports_out)
+            if (lf.name == out_it->second.second) { port = &lf; break; }
+        if (!port) continue;
+
         expand(sub(leaf.path, port->name), "sig." + leaf.ident + "." + port->name,
                port->type);
     }

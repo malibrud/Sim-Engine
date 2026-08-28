@@ -1,0 +1,57 @@
+// Every way a `param` wire endpoint (§6.9.2) can be wrong.
+//
+// Two stages are represented and they are not interchangeable. The SHAPE of the
+// endpoint -- which side of the arrow it is on, and whether it names anything
+// at all -- is settled at stage 3, before any setting is looked up, because it
+// is a property of the wire and not of the node's settings. WHICH setting it
+// names is stage 4, where the settings actually exist.
+//
+// `param` can never name a child instance (`SE0331`), so none of this is
+// ambiguous with the ordinary instance endpoint it looks like.
+package parbad;
+
+use se.math;
+
+node ParBad {
+    settings {
+        k:    double(-)     = 1.0;
+        v:    math.Vec3(-)  = { 1.0, 2.0, 3.0 };
+        rate: double(Hz)    = 100.0;
+    }
+
+    outputs { y: double(-); }
+
+    structure {
+        node g : Gain {};
+
+        // A wire may not drive a setting: settings are configuration, and they
+        // move at §6.2b and nowhere else.
+        g --> param.k;
+
+        // No sole-setting rule. Bare defaulting is a property of PORTS, and a
+        // node's settings have no side for the arrow to pick from.
+        param --> g.x;
+
+        // Stage 4: no such setting.
+        param.nope --> g.x;
+
+        // Stage 4: `rate` selects a decimation (§9.2) and gets no param member
+        // at all, so there is nothing on the other end of this arrow.
+        param.rate --> g.x;
+
+        // Stage 4: a dotted tail addresses into a RECORD (§6.2c). `k` is a
+        // scalar, so there is no leaf to reach...
+        param.k.z --> g.x;
+
+        // ... and `v` is a record, but has no field spelled this way.
+        param.v.w --> g.x;
+
+        g --> self;
+    }
+}
+
+node Gain {
+    inputs  { x: double(-); }
+    outputs { y: double(-); }
+    output(x) { out.y = 2.0 * in.x; }
+}

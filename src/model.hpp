@@ -198,10 +198,11 @@ struct SettingValue {
 // behind a collision-dedup pass. So a reference stays symbolic — owner path plus
 // setting name — and stage 6 renders it once identifiers exist.
 //
-// Two kinds suffice because §6.2 and §6.9.1 between them guarantee that a
-// reference is only ever to a setting of the node being elaborated or of its
-// parent: `param.*` reaches the same node, and a flow-down binding is evaluated
-// in the parent's scope. There is no third case to represent.
+// Two kinds suffice because §6.2, §6.9.1 and §6.9.2 between them guarantee that
+// a reference is only ever to a setting of the node being elaborated or of its
+// parent: `param.*` reaches the same node, a flow-down binding is evaluated in
+// the parent's scope, and a `param` wire endpoint names the enclosing
+// composite's own setting. There is no third case to represent.
 struct ExprTok {
     enum class Kind { Text, Param };
     Kind kind = Kind::Text;
@@ -300,11 +301,16 @@ struct FieldConv {
 };
 
 struct InputSource {
-    enum class Kind { Leaf, Boundary };
+    // §6.9.2 — `Param` is a setting of an enclosing composite wired straight to
+    // this input. It materialises no storage and no schedule edge: the setting
+    // is already a live C++ member (§6.2b), so the reference is rendered inline
+    // into the `In` view exactly as a producer's `Out` member would be.
+    enum class Kind { Leaf, Boundary, Param };
     Kind kind = Kind::Leaf;
     std::size_t producer = 0;          // index into Model::leaves
     std::string port;                  // producer's output port
     std::string boundary;              // Kind::Boundary — the Sim member name
+    ExprCode expr;                     // Kind::Param — rendered by stage 6
     double scale = 1.0;                // scalar: consumer_value = scale * x + offset
     double offset = 0.0;
     // Record ports only; empty for a scalar. Same flattening order the emitter
@@ -351,6 +357,9 @@ struct BoundaryIn {
 
 struct BoundaryOut {
     std::string path;                  // "fl.whl.ws"
+    // §6.9.2 — empty when the output is driven straight by a setting: there is
+    // no producing leaf, so there is no signal-block member to name. The row
+    // still belongs in the manifest, which is what the host reads.
     std::string expr;                  // "fl_whl_out.ws"
     Type type;
 };

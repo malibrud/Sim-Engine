@@ -10,6 +10,11 @@
 // axes' parameters stop being three unrelated instances that a reader has to
 // notice are meant to move together.
 //
+// The gravity term is the same argument once more, one section along: `grav` is
+// wired straight off the settings block (§6.9.2). The alternative is three
+// `se.sig.src.Constant` instances -- it is scalar-only -- and a `Merge3`, which
+// is four nodes and four wires to say a number this file already writes down.
+//
 // COORDINATE CONVENTION -- SAE, matching `se.math.Vec3`: X forward/north, Y
 // right/east, Z down. Specific force is what an accelerometer reads, f = a - g,
 // so at rest and level it is {0, 0, -9.81}. The compiler does not check this and
@@ -27,6 +32,10 @@ node ClassicalFromScratch {
     settings {
         gain:  math.Vec3(-)      = { 0.6, 0.6, 0.4 };
         limit: math.Vec3(m/s^2)  = { 5.0, 5.0, 4.0 };
+        // Wired, not flowed down: see the `-->` below. Still an ordinary
+        // setting, so a host may override it -- a lunar platform is one line of
+        // a settings file away, with nothing recompiled.
+        grav:  math.Vec3(m/s^2)  = { 0.0, 0.0, -9.80665 };
     }
 
     inputs  { ain:  math.Vec3(m/s^2); }   // specific force, vehicle body frame
@@ -40,7 +49,13 @@ node ClassicalFromScratch {
             gain  = param.gain;
             limit = param.limit;
         };
+        node sfSum: math.Sum3 (m/s^2);
 
-        self --> linScale --> self;
+        // A setting as a wire SOURCE (§6.9.2). It costs no node and no storage:
+        // `grav` is already a member, so this reads it where the value is read,
+        // which is also why an override still reaches the wire.
+        self --> linScale --> sfSum.a;
+        param.grav        --> sfSum.b;
+        sfSum --> self;
     }
 }

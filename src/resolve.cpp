@@ -889,6 +889,30 @@ void Resolver::check_structure(const NodeInfo& info) {
         auto check = [&](const ast::Endpoint& e, bool as_source) {
             if (!e.is_self && e.segs.empty()) return;   // the parser cannot produce this
 
+            // §6.9.2 — a setting of this composite as a wire SOURCE. `param` can
+            // never name a child instance (`SE0331`), so the head is
+            // unambiguous, and the shape rules are settled here; which setting
+            // it names, and whether that setting exists, is stage 4.
+            if (!e.is_self && e.segs[0] == "param") {
+                if (!as_source) {
+                    diag_.error("SE0315", src, e.loc, "a wire may not drive a setting",
+                                "`" + e.str() + "` is a destination",
+                                {note("a setting is configuration, not signal: it moves "
+                                      "at configuration and nowhere else (§6.2b)"),
+                                 help("to compute a value, wire it to an input instead")});
+                    return;
+                }
+                if (e.segs.size() == 1)
+                    diag_.error("SE0315", src, e.loc, "`param` names no setting",
+                                "needs a setting name",
+                                {note("there is no sole-setting rule: a bare endpoint "
+                                      "defaults only over PORTS (§6.9.2)"),
+                                 help("name the setting, as in `param.gain`")});
+                // A dotted tail addresses into a record setting (§6.2c), which
+                // is legal; the SE0311 field-level rule below is about ports.
+                return;
+            }
+
             // §6.9.2 — a bare endpoint names no port, and takes the sole port
             // on the side the arrow needs. This is where the arity is known:
             // the definition is resolved and its children are bound (above),

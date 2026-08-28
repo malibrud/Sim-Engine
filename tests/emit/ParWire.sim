@@ -1,0 +1,13 @@
+// §6.9.2 — settings as wire sources. See lib/parwire/ParWire.se for the three
+// spellings under test and why the recorded column is 17 exactly.
+sim ParWire {
+    root: parwire.ParWire {};
+
+    step:     1 (ms);
+    duration: 10 (ms);
+
+    record: {
+        file: "parwire.csv";
+        signals { s5.y; }
+    }
+}

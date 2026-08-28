@@ -1,0 +1,69 @@
+// A setting on a wire (§6.9.2). Three spellings, one arithmetic answer.
+//
+// `param.<setting>` as a wire SOURCE is the cheapest constant a model can have:
+// the setting is already a live C++ member (§6.2b), so it costs no leaf, no
+// `Out` storage and no edge in the §8.5 sort, and it stays overridable at
+// configuration through the ordinary §13.2 path. The alternative -- one
+// `se.sig.src.Constant` per axis plus a `Merge3` -- is four nodes for one
+// number that is already written down.
+//
+// Everything here is declared in `(mm/s^2)` and read in `(m/s^2)`, so the
+// conversion machinery is exercised on both paths: the scalar affine fold and
+// the per-field record walk. Drop either and the answer is off by a factor of
+// a thousand, not by a rounding error.
+//
+//   sp        = param.v converted:  1 + 2 + 3   =  6
+//   param.k   converted, twice:     4 + 4       =  8   (fan-out from a setting)
+//   param.v.z converted:            3           =  3   (a record LEAF, §6.2c)
+//                                               = 17
+package parwire;
+
+use se.math;
+
+node ParWire {
+    settings {
+        k: double(mm/s^2)       = 4000.0;
+        v: math.Vec3(mm/s^2)    = { 1000.0, 2000.0, 3000.0 };
+    }
+
+    // `g` is driven straight by a setting and by nothing else, so it has no
+    // producing leaf. It is still a root output the host may read, so it earns
+    // its `[boundary.out]` rows in the manifest -- with no signal-block member
+    // to name, because there is no signal.
+    outputs { y: double(m/s^2);  g: math.Vec3(mm/s^2); }
+
+    structure {
+        node sp : math.Split3 (m/s^2);
+        node s1 : math.Sum (m/s^2);
+        node s2 : math.Sum (m/s^2);
+        node s3 : math.Sum (m/s^2);
+        node s4 : math.Sum (m/s^2);
+        node s5 : math.Sum (m/s^2);
+
+        // A whole record setting onto a record port, converted field by field,
+        // and out through the boundary unconverted in the same statement.
+        param.v --> sp, self.g;
+
+        sp.x --> s1.a;
+        sp.y --> s1.b;
+        s1   --> s2.a;
+        sp.z --> s2.b;
+
+        // A scalar setting, fanned out to two destinations. Fan-OUT is free
+        // here for the same reason it is free anywhere: the wire coincides with
+        // the source's storage, and a setting is read-only, so it is a
+        // legitimate single writer for any number of consumers.
+        s2      --> s3.a;
+        param.k --> s3.b, s4.b;
+
+        s3 --> s4.a;
+
+        // A LEAF of a record setting. §6.2c holds that only the leaves are
+        // real, so naming one here is naming a scalar -- not taking a field of
+        // a wire, which is `SE0311` and is about ports.
+        s4        --> s5.a;
+        param.v.z --> s5.b;
+
+        s5 --> self.y;
+    }
+}

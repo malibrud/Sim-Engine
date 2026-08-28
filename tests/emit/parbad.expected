@@ -1,0 +1,49 @@
+﻿error[SE0315]: a wire may not drive a setting
+  --> tests/emit/lib/parbad/ParBad.se:29:15
+   |
+29 |         g --> param.k;
+   |               ^^^^^^^ `param.k` is a destination
+   = note: a setting is configuration, not signal: it moves at configuration and nowhere else (§6.2b)
+   = help: to compute a value, wire it to an input instead
+
+error[SE0315]: `param` names no setting
+  --> tests/emit/lib/parbad/ParBad.se:33:9
+   |
+33 |         param --> g.x;
+   |         ^^^^^ needs a setting name
+   = note: there is no sole-setting rule: a bare endpoint defaults only over PORTS (§6.9.2)
+   = help: name the setting, as in `param.gain`
+
+error[SE0304]: `ParBad` has no setting `nope`
+  --> tests/emit/lib/parbad/ParBad.se:36:9
+   |
+36 |         param.nope --> g.x;
+   |         ^^^^^^^^^^ unresolved setting
+
+error[SE0316]: the reserved setting `rate` cannot be a wire source
+  --> tests/emit/lib/parbad/ParBad.se:40:9
+   |
+40 |         param.rate --> g.x;
+   |         ^^^^^^^^^^ `param.rate`
+   = note: `rate` selects a decimation and holds no signal (§9.2)
+
+error[SE0304]: setting `k` is not a record
+  --> tests/emit/lib/parbad/ParBad.se:44:9
+   |
+44 |         param.k.z --> g.x;
+   |         ^^^^^^^^^ unresolved setting
+
+error[SE0304]: `se.math.Vec3` has no field `w`
+  --> tests/emit/lib/parbad/ParBad.se:47:9
+   |
+47 |         param.v.w --> g.x;
+   |         ^^^^^^^^^ unresolved setting
+
+error[SE0430]: input `g.x` is not connected
+  --> tests/emit/lib/parbad/ParBad.se:54:15
+   |
+54 |     inputs  { x: double(-); }
+   |               ^ declared here
+   = note: an unconnected input is an error: there is no implicit zero (§6.3)
+
+7 errors emitted

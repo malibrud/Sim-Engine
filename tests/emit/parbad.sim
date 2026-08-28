@@ -1,0 +1,5 @@
+sim ParBad {
+    root:     parbad.ParBad;
+    step:     1 (ms);
+    duration: 1 (s);
+}
