@@ -54,10 +54,15 @@ node Classical {
 
         node mg : math.Merge3 (m/s^2) {};
 
-        self.f --> sp.v;
-        sp.x --> sx.x;   sp.y --> sy.x;   sp.z --> sz.x;
-        sx.y --> hx.x;   sy.y --> hy.x;   sz.y --> hz.x;
-        hx.y --> mg.x;   hy.y --> mg.y;   hz.y --> mg.z;
-        mg.v --> self.a;
+        // One statement per axis, read left to right as the signal path
+        // (§6.9.2). `sx` and `hx` are bare because each has a single input and
+        // a single output, so naming them would say nothing; the ends stay
+        // named because `Split3` and `Merge3` have three ports on that side and
+        // WHICH axis is exactly the thing worth reading here.
+        self --> sp;
+        sp.x --> sx --> hx --> mg.x;
+        sp.y --> sy --> hy --> mg.y;
+        sp.z --> sz --> hz --> mg.z;
+        mg --> self;
     }
 }

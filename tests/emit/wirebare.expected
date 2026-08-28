@@ -1,0 +1,54 @@
+﻿error[SE0314]: `self` has 2 inputs, so a bare endpoint cannot pick one
+  --> tests/emit/lib/wirebare/WireBare.se:27:9
+   |
+27 |         self --> g;
+   |         ^^^^ needs a port name
+   = help: it declares `a`, `b`
+   = note: a bare endpoint names the sole port on the side the arrow needs (§6.9.2)
+   = note: seen from the inside the boundary's polarity is inverted: bare `self` as a source means this node's sole input (§6.9.2)
+
+error[SE0314]: `f` has 2 outputs, so a bare endpoint cannot pick one
+  --> tests/emit/lib/wirebare/WireBare.se:30:9
+   |
+30 |         f --> g.x;
+   |         ^ needs a port name
+   = help: it declares `lo`, `hi`
+   = note: a bare endpoint names the sole port on the side the arrow needs (§6.9.2)
+
+error[SE0314]: `s` has 2 inputs, so a bare endpoint cannot pick one
+  --> tests/emit/lib/wirebare/WireBare.se:34:17
+   |
+34 |         p.v --> s;
+   |                 ^ needs a port name
+   = help: it declares `u`, `w`
+   = note: a bare endpoint names the sole port on the side the arrow needs (§6.9.2)
+
+error[SE0314]: `ramp` has no inputs, so it cannot be a wire destination
+  --> tests/emit/lib/wirebare/WireBare.se:38:17
+   |
+38 |         p.v --> ramp;
+   |                 ^^^^ nothing to connect
+   = note: a bare endpoint names the sole port on the side the arrow needs (§6.9.2)
+
+error[SE0430]: input `g.x` is not connected
+  --> tests/emit/lib/wirebare/WireBare.se:58:15
+   |
+58 |     inputs  { x: double(-); }
+   |               ^ declared here
+   = note: an unconnected input is an error: there is no implicit zero (§6.3)
+
+error[SE0430]: input `s.u` is not connected
+  --> tests/emit/lib/wirebare/WireBare.se:64:15
+   |
+64 |     inputs  { u: double(-);  w: double(-); }
+   |               ^ declared here
+   = note: an unconnected input is an error: there is no implicit zero (§6.3)
+
+error[SE0430]: input `s.w` is not connected
+  --> tests/emit/lib/wirebare/WireBare.se:64:30
+   |
+64 |     inputs  { u: double(-);  w: double(-); }
+   |                              ^ declared here
+   = note: an unconnected input is an error: there is no implicit zero (§6.3)
+
+7 errors emitted

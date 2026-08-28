@@ -1,0 +1,80 @@
+// §6.9.2 — the wire sugar, asserted by arithmetic rather than by a golden diff.
+//
+// A golden file would happily accept a chain wired in the wrong order, so the
+// three stages apply operations that do not commute, and the fan-out on the
+// last hop is read through a node of its own rather than at its source. That
+// second point matters: recording `off.y` would have proved nothing, because
+// `off.y` is what it is however the comma was attached.
+//
+//   src.y  = t                       a ramp, one per second
+//   sq.y   = t^2                     square
+//   off.y  = t^2 + 10                add ten
+//   dbl.y  = 2*(t^2 + 10)            double
+//   mark.y = (t^2 + 10) + 1000       whatever the comma delivered, +1000
+//
+// The two recorded columns are `dbl.y` and `mark.y`, and every way of getting
+// the statement wrong moves one of them by far more than rounding:
+//
+//   chain misordered (`off` before `sq`)   dbl.y = 2*(t+10)^2, 288 not 28 at t=2
+//   comma attached one arrow earlier       mark.y = t^2 + 1000, low by 10
+//   comma attached after `dbl`             mark.y = 2t^2 + 1020, high by t^2+10
+//
+// The +1000 is what makes the last two distinguishable from each other rather
+// than merely from the truth.
+package chain;
+
+node ChainChk {
+    outputs {
+        chain: double(-);
+        tap:   double(-);
+    }
+
+    structure {
+        node src  : Ramp   {};
+        node sq   : Square {};
+        node off  : Offset {};
+        node dbl  : Double {};
+        node mark : Mark   {};
+
+        // The feature under test, in one statement: a four-node chain with
+        // bare interiors, ending in a comma fan-out on the last hop. Every
+        // endpoint is bare except the one that names a port on purpose.
+        src --> sq --> off --> dbl, mark.x;
+
+        dbl  --> self.chain;
+        mark --> self.tap;
+    }
+}
+
+node Ramp {
+    outputs { y: double(-); }
+    states  { continuous t: double(s) = 0.0; }
+    derivative() { der.t = 1.0; }
+    output() { out.y = state.t; }
+}
+
+node Square {
+    inputs  { x: double(-); }
+    outputs { y: double(-); }
+    output(x) { out.y = in.x * in.x; }
+}
+
+node Offset {
+    inputs  { x: double(-); }
+    outputs { y: double(-); }
+    output(x) { out.y = in.x + 10.0; }
+}
+
+node Double {
+    inputs  { x: double(-); }
+    outputs { y: double(-); }
+    output(x) { out.y = 2.0 * in.x; }
+}
+
+// A tag rather than an operation: it makes the fan-out's arrival visible in a
+// column of its own, and the offset says WHICH arrow delivered it.
+node Mark {
+    inputs  { x: double(-); }
+    outputs { y: double(-); }
+    output(x) { out.y = in.x + 1000.0; }
+}

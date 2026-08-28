@@ -1,0 +1,15 @@
+// §6.9.2 — wire chains and the fan-out on the last hop. See
+// lib/chain/ChainChk.se for the closed form of each column and for what a
+// wrongly-ordered chain, or a comma attached to the wrong arrow, does to it.
+sim ChainChk {
+    root: chain.ChainChk {};
+
+    step:     1 (ms);
+    solver:   rk4;
+    duration: 2 (s);
+
+    record: {
+        file: "chain.csv";
+        signals { dbl.y; mark.y; }
+    }
+}

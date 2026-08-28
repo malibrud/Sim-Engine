@@ -1,30 +1,40 @@
 ﻿error[SE0211]: child instance outside a `structure` block
- --> tests/err/structure.se:9:5
-  |
-9 |     node inner : Gain { k = 2.0; };
-  |     ^^^^ `node` here declares a child instance
-  = note: a composite's children and wires live in `structure { ... }` (§6.9)
-  = help: wrap the instances and wires in `structure { ... }`
+  --> tests/err/structure.se:15:5
+   |
+15 |     node inner : Gain { k = 2.0; };
+   |     ^^^^ `node` here declares a child instance
+   = note: a composite's children and wires live in `structure { ... }` (§6.9)
+   = help: wrap the instances and wires in `structure { ... }`
 
 error[SE0208]: expected `;` after the instance declaration
-  --> tests/err/structure.se:19:5
+  --> tests/err/structure.se:25:5
    |
-19 |     }
+25 |     }
    |     ^ expected `;`
    = note: the `;` after the closing brace is required: it terminates the statement, as a port declaration's does (§6.9.1)
 
-error[SE0212]: wire endpoint `g` does not name a port
-  --> tests/err/structure.se:28:20
+error[SE0214]: an interior endpoint of a wire chain must be a bare instance name
+  --> tests/err/structure.se:39:20
    |
-28 |         self.u --> g;
-   |                    ^ expected `.<port>` here
-   = note: an endpoint is `self.<port>` or `<instance>.<port>`; a composite wires its own ports with `self.` because bare names would collide with child instance names (§6.9.2)
+39 |         self.u --> g.y --> h --> self.y;
+   |                    ^^^ names a port
+   = note: `a --> b --> c` means `a --> b; b --> c;`, so `b` is a destination and a source at once and a port name here would have to name two different ports (§6.9.2)
+   = help: split the chain into separate wires
 
-error[SE0212]: wire endpoint `self` does not name a port
-  --> tests/err/structure.se:29:17
+error[SE0214]: an interior endpoint of a wire chain must be a bare instance name
+  --> tests/err/structure.se:44:15
    |
-29 |         g.y --> self;
-   |                 ^^^^ expected `.<port>` here
-   = note: an endpoint is `self.<port>` or `<instance>.<port>`; a composite wires its own ports with `self.` because bare names would collide with child instance names (§6.9.2)
+44 |         g --> self --> self --> h;
+   |               ^^^^ `self` here
+   = note: `a --> b --> c` means `a --> b; b --> c;`, so `b` is a destination and a source at once and a port name here would have to name two different ports (§6.9.2)
+   = help: split the chain into separate wires
 
-4 errors emitted
+error[SE0214]: an interior endpoint of a wire chain must be a bare instance name
+  --> tests/err/structure.se:44:24
+   |
+44 |         g --> self --> self --> h;
+   |                        ^^^^ `self` here
+   = note: `a --> b --> c` means `a --> b; b --> c;`, so `b` is a destination and a source at once and a port name here would have to name two different ports (§6.9.2)
+   = help: split the chain into separate wires
+
+5 errors emitted

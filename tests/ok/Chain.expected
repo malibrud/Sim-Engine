@@ -1,0 +1,32 @@
+﻿=== tests/ok/Chain.se ===
+model-file
+  package tests
+  node Chain  [line 7]  kind=composite
+    inputs
+      u: double(-)
+    outputs
+      y: double(-)
+    structure
+      node a : Gain
+      node b : Gain
+      node c : Gain
+      node sp : Split3
+      node mg : Merge3
+      self.u --> a.x
+      self.u --> a
+      self --> a.x
+      self --> a
+      a.y --> b
+      b --> c.x
+      a --> b
+      b --> c
+      self --> a
+      a --> b
+      b --> c
+      c --> self
+      a --> b
+      b --> c.x, mg.x
+      sp.x --> a
+      b --> mg.y
+      a.y --> b.x, c.x, mg.z
+      mg --> self

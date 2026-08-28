@@ -666,6 +666,11 @@ whl.ws.speed --> tc.u;     // reserved, not currently legal
 path so that the eventual decision is not a grammar change; stage 3 currently
 rejects any endpoint with more than one segment after the instance (`SE0311`).
 
+The endpoint grammar is loose in the other direction too, and for the same
+reason: it accepts *fewer* segments than a wire needs, because §6.9.2's bare
+endpoint is resolved by the named node's port arity and that is a question stage
+3 answers (`SE0314`), not one the parser can.
+
 ---
 
 ## 6. Node definitions
@@ -1481,16 +1486,58 @@ part in no computation beyond §6.2b step 3.
 #### 6.9.2 Wires
 
 ```
-wire     := endpoint '-->' endpoint { ',' endpoint } ';'
-endpoint := ( 'self' | identifier ) '.' identifier { '.' identifier }
+wire     := endpoint '-->' endpoint { '-->' endpoint } { ',' endpoint } ';'
+endpoint := ( 'self' | identifier ) { '.' identifier }
 ```
 
 - `-->` is the connection token; `;` terminates.
 - **A composite wires its own ports with `self.`** — `self.throttle --> eng.throttle`
   and `drv.speed --> self.speed`. Bare names would collide with child instance
-  names.
+  names. `self` alone is still the keyword and never an identifier, so the same
+  argument holds for the bare form below.
 - **Fan-out** has two equivalent spellings — repeated lines, or a comma list on
   one line. They desugar identically.
+- **An endpoint may name no port**, in which case it means the sole port on the
+  side the arrow needs: `gain --> filter` is `gain.y --> filter.x` when `gain`
+  has one output and `filter` has one input. If that side does not have exactly
+  one port the wire is an error (`SE0314`) — there is no defaulting rule, no
+  declaration order to remember, and nothing to mark on the definition.
+  Whether a bare endpoint is legal is a property of the node it names, so the
+  same node reads the same way at every call site.
+
+  The rule applies **per endpoint, not per wire**. `sp.x --> gain` names the
+  source because `sp` has three outputs and *which axis* is the thing worth
+  reading, while the destination stays bare because naming it would say
+  nothing. An all-or-nothing form would force the noise back on.
+
+  `self` obeys the same inversion as everywhere else in this section: bare
+  `self` as a **source** means this node's sole *input*, and as a
+  **destination** its sole *output*.
+- **Wires chain.** `a --> b --> c` is exactly `a --> b; b --> c;`, and desugars
+  in the parser, so a chain is not a distinct kind of thing that later stages
+  can see. Any length is allowed.
+
+  **An interior endpoint must be bare** (`SE0214`). It is a destination and a
+  source at once, so a port name there would have to mean `b`'s input `y` and
+  `b`'s output `y` — two different ports that merely share a spelling — and an
+  interior `self` would have to mean this node's output and its input in one
+  place. The ends are unrestricted, which is what makes the form useful: the
+  interesting names stay, and only the ones that carry no information go.
+
+  A chain reads as a signal path, which repeated lines do not. Where the
+  alternative is a grid of per-axis wires that the reader has to transpose, this
+  is the difference the feature exists for:
+
+  ```
+  sp.x --> sx --> hx --> mg.x;
+  sp.y --> sy --> hy --> mg.y;
+  sp.z --> sz --> hz --> mg.z;
+  ```
+- **A comma list terminates the statement**, so a fan-out attaches to the last
+  hop: `a --> b --> c, d;` is `a --> b; b --> c; b --> d;`. This is not a
+  precedence rule to remember but the only thing the grammar admits — once a
+  comma is seen no further `-->` may follow, and `a --> b, c --> d` is a syntax
+  error.
 - **Fan-in is forbidden.** Two sources into one input is an error (`SE0442`);
   insert an explicit `Sum` node. This is what makes the single-writer wire
   lowering sound (§15.3).
@@ -3064,8 +3111,9 @@ of thing wearing the same name.
 | `SE0209` | 2 | Unbalanced braces at end of file |
 | `SE0210` | 2 | Wildcard import is not supported |
 | `SE0211` | 2 | Expected a wire, an instance, or `}` in `structure` |
-| `SE0212` | 2 | Wire endpoint must be `self.<port>` or `<instance>.<port>` |
+| `SE0212` | 2 | Malformed wire endpoint |
 | `SE0213` | 2 | Expected `-->` |
+| `SE0214` | 2 | An interior endpoint of a wire chain is not a bare instance name |
 | `SE0220` | 2 | Duplicate section in a node |
 | `SE0221` | 2 | Unknown section name |
 | `SE0230` | 2 | State kind (`continuous`/`discrete`) omitted |
@@ -3094,6 +3142,7 @@ of thing wearing the same name.
 | `SE0311` | 3 | Field-level wire endpoints are not supported |
 | `SE0312` | 4 | Recursive instantiation: a node transitively contains itself |
 | `SE0313` | 3 | Wrong number of unit arguments on a type reference |
+| `SE0314` | 3 | A bare wire endpoint needs exactly one port on that side |
 | `SE0320` | 3 | Node has both code and a `structure` block |
 | `SE0330` | 3 | Duplicate member name in a node |
 | `SE0331` | 3 | Member name shadows a generated accessor |
@@ -3225,8 +3274,12 @@ instance_decl   = "node" IDENT ":" qualified_name
 unit_args       = "(" unit_expr { "," unit_expr } ")" ;
 setting_binding = IDENT "=" expression ";" ;
 
-wire_stmt       = endpoint "-->" endpoint { "," endpoint } ";" ;
-endpoint        = endpoint_head "." IDENT { "." IDENT } ;
+(* A chain desugars to one wire per hop; the comma list can only TERMINATE the
+   statement, so a fan-out attaches to the last hop and `a --> b, c --> d` is a
+   syntax error rather than an ambiguity (§6.9.2). *)
+wire_stmt       = endpoint "-->" endpoint { "-->" endpoint }
+                                          { "," endpoint } ";" ;
+endpoint        = endpoint_head { "." IDENT } ;
 endpoint_head   = "self" | IDENT ;
 
 (* ─── methods ────────────────────────────────────────────────────────── *)
@@ -3306,6 +3359,10 @@ Two places where the grammar is deliberately looser than the semantics, so that 
 future decision is not a grammar change: `endpoint` accepts a multi-segment path
 (§5.3), and `scalar_entry` accepts any key, so an unknown sim-file key becomes a
 good semantic diagnostic rather than a parse failure.
+
+`endpoint` is also looser in the other direction, though not for that reason:
+it accepts no segments at all because §6.9.2's bare endpoint resolves against
+the named node's port arity, which the parser cannot know (`SE0314`).
 
 ---
 

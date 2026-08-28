@@ -1720,6 +1720,13 @@ void Elaborator::collect_wires(const NodeInfo* def, const std::string& path, Mod
     (void)m;
     const Source& src = *def->file->src;
 
+    // §6.9.2 — the port a bare endpoint means. Null unless there is exactly
+    // one, in which case `check_structure` has already said so (SE0314) and
+    // this bails silently rather than reporting the same thing per instance.
+    auto sole = [](const std::vector<Field>& ports) -> const Field* {
+        return ports.size() == 1 ? &ports[0] : nullptr;
+    };
+
     // Resolves one endpoint to its port and its addressable path. `as_source`
     // flips the polarity of a `self` endpoint, which is the whole content of
     // §6.9.2's rule about the boundary being inverted from the inside.
@@ -1727,7 +1734,15 @@ void Elaborator::collect_wires(const NodeInfo* def, const std::string& path, Mod
                         std::string& key) -> bool {
         const Field* field = nullptr;
         if (e.is_self) {
-            if (e.segs.empty()) return false;
+            if (e.segs.empty()) {
+                // Bare `self`, so the sole port on the side the arrow needs.
+                const Field* only = sole(as_source ? def->inputs : def->outputs);
+                if (!only) return false;
+                out_field = *only;
+                out_field.type.unit = bound(only->type.unit);
+                key = sub(path, only->name);
+                return true;
+            }
             const std::string& n = e.segs[0];
             field = as_source ? def->input(n) : def->output(n);
             if (!field) {
@@ -1755,9 +1770,8 @@ void Elaborator::collect_wires(const NodeInfo* def, const std::string& path, Mod
             key = sub(path, n);
             return true;
         }
-        if (e.segs.size() < 2) return false;
+        if (e.segs.empty()) return false;
         const std::string& inst = e.segs[0];
-        const std::string& port = e.segs[1];
         auto it = def->children.find(inst);
         if (it == def->children.end()) {
             diag_.error("SE0304", src, e.loc,
@@ -1766,6 +1780,18 @@ void Elaborator::collect_wires(const NodeInfo* def, const std::string& path, Mod
             return false;
         }
         const NodeInfo* child = it->second;
+
+        // The instance has to be resolved before the port can be, because a
+        // bare endpoint's port name IS the child's arity.
+        std::string port;
+        if (e.segs.size() == 1) {
+            const Field* only = sole(as_source ? child->outputs : child->inputs);
+            if (!only) return false;
+            port = only->name;
+        } else {
+            port = e.segs[1];
+        }
+
         field = as_source ? child->output(port) : child->input(port);
         if (!field) {
             const Field* other = as_source ? child->input(port) : child->output(port);

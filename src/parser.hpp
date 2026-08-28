@@ -97,7 +97,7 @@ private:
     bool parse_build_list(std::vector<ast::BuildStmt>& out);
     bool parse_structure(ast::Structure& out);
     bool parse_instance(ast::Instance& out);
-    bool parse_wire(ast::Wire& out);
+    bool parse_wire_stmt(std::vector<ast::Wire>& out);
     bool parse_endpoint(ast::Endpoint& out);
     bool parse_method(ast::NodeDef& node);
     bool parse_helper(ast::NodeDef& node);

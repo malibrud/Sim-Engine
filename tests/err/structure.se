@@ -1,5 +1,11 @@
 // SE0211 children and wires outside `structure`, SE0208 the required `;` after
-// an instance, SE0212 an endpoint that names no port. §6.9
+// an instance, SE0214 a wire chain whose interior endpoint is not bare. §6.9
+//
+// SE0212 used to be here too, on `self.u --> g;` and `g.y --> self;`. Both are
+// now LEGAL: §6.9.2 lets a bare endpoint take the sole port on the side the
+// arrow needs, and whether there is exactly one is a question stage 3 answers
+// (SE0314, in tests/emit/wirebare). The parser no longer has an opinion, so
+// there is nothing left to test here.
 package tests;
 
 node Loose {
@@ -19,13 +25,22 @@ node MissingSemi {
     }
 }
 
-node BadEndpoint {
+node BadChain {
     inputs  { u: double(-); }
     outputs { y: double(-); }
 
     structure {
         node g : Gain { k = 2.0; };
-        self.u --> g;
-        g.y --> self;
+        node h : Gain { k = 3.0; };
+
+        // SE0214 — an interior endpoint is a destination and a source at once,
+        // so `g.y` there would have to mean `g`'s input `y` and `g`'s output
+        // `y`, which are different ports that merely share a spelling.
+        self.u --> g.y --> h --> self.y;
+
+        // SE0214 — and `self` is inverted at the boundary, so an interior
+        // `self` would mean this node's output and its input in one place.
+        // Reported per offender: two on this line, not one.
+        g --> self --> self --> h;
     }
 }

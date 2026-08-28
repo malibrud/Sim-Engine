@@ -1,0 +1,5 @@
+sim WireBare {
+    root:     wirebare.WireBare;
+    step:     1 (ms);
+    duration: 1 (s);
+}

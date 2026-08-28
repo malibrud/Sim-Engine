@@ -1435,8 +1435,10 @@ bool Parser::parse_structure(ast::Structure& out) {
             if (parse_instance(inst)) out.instances.push_back(std::move(inst));
             else recover_in_list(Tok::RBrace);
         } else if (at(Tok::KwSelf) || at(Tok::Ident)) {
-            ast::Wire w;
-            if (parse_wire(w)) out.wires.push_back(std::move(w));
+            // One statement may be a chain, and so may yield several wires.
+            std::vector<ast::Wire> ws;
+            if (parse_wire_stmt(ws))
+                for (ast::Wire& w : ws) out.wires.push_back(std::move(w));
             else recover_in_list(Tok::RBrace);
         } else {
             err("SE0211", tok_.loc,
@@ -1516,7 +1518,8 @@ bool Parser::parse_endpoint(ast::Endpoint& out) {
         err("SE0212", tok_.loc,
             std::string("expected a wire endpoint, found ") + describe(tok_.kind),
             "expected `self` or an instance name",
-            {note("an endpoint is `self.<port>` or `<instance>.<port>` (\xc2\xa7""6.9.2)")});
+            {note("an endpoint is `self` or an instance name, optionally followed by "
+                  "`.<port>` (\xc2\xa7""6.9.2)")});
         return false;
     }
 
@@ -1533,21 +1536,32 @@ bool Parser::parse_endpoint(ast::Endpoint& out) {
         advance();
     }
 
-    const std::size_t needed = out.is_self ? 1u : 2u;
-    if (out.segs.size() < needed) {
-        err("SE0212", out.loc, "wire endpoint `" + out.str() + "` does not name a port",
-            "expected `.<port>` here",
-            {note("an endpoint is `self.<port>` or `<instance>.<port>`; a composite wires "
-                  "its own ports with `self.` because bare names would collide with child "
-                  "instance names (\xc2\xa7""6.9.2)")});
-        return false;
-    }
+    // §6.9.2 — an endpoint may name no port at all. A bare endpoint takes the
+    // sole port on the side the arrow needs, which is a question about arity
+    // and so cannot be answered here: the parser has not resolved the
+    // instance, or even loaded the file its definition is in. Stage 3 decides
+    // it (`SE0314`), the way it already decides that a port name resolves.
     return true;
 }
 
-bool Parser::parse_wire(ast::Wire& out) {
-    out.loc = tok_.loc;
-    if (!parse_endpoint(out.source)) return false;
+// §6.9.2 — one statement, one or more wires. A chain `a --> b --> c` is sugar
+// for `a --> b; b --> c;`, desugared here so that `ast::Wire` never learns what
+// a chain is and no later stage has to.
+//
+// The comma list can only TERMINATE the statement: once a comma is seen only
+// more comma-separated endpoints may follow, so `a --> b, c --> d` is a plain
+// syntax error and the fan-out attaches to the last hop by construction rather
+// than by a precedence rule anyone has to remember.
+bool Parser::parse_wire_stmt(std::vector<ast::Wire>& out) {
+    const Loc start = tok_.loc;
+
+    // Every arrow-separated endpoint, in order. At least two after the loop.
+    std::vector<ast::Endpoint> chain;
+    {
+        ast::Endpoint e;
+        if (!parse_endpoint(e)) return false;
+        chain.push_back(std::move(e));
+    }
 
     if (!at(Tok::Arrow)) {
         if (swallow_invalid()) return false;
@@ -1558,15 +1572,56 @@ bool Parser::parse_wire(ast::Wire& out) {
             "expected `-->`", std::move(att));
         return false;
     }
-    advance();
 
-    for (;;) {
+    while (accept(Tok::Arrow)) {
         ast::Endpoint e;
         if (!parse_endpoint(e)) return false;
-        out.dests.push_back(std::move(e));
-        if (!accept(Tok::Comma)) break;
+        chain.push_back(std::move(e));
     }
-    return expect(Tok::Semi, "SE0208", "after the wire");
+
+    // The fan-out on the final hop.
+    std::vector<ast::Endpoint> extra;
+    while (accept(Tok::Comma)) {
+        ast::Endpoint e;
+        if (!parse_endpoint(e)) return false;
+        extra.push_back(std::move(e));
+    }
+
+    if (!expect(Tok::Semi, "SE0208", "after the wire")) return false;
+
+    // An interior endpoint is a destination and a source at once, so a port
+    // name there would have to mean two different ports. Reported per offender
+    // rather than at the first.
+    //
+    // Reported, but not FAILED: the `;` is already consumed, so the statement
+    // is syntactically whole and the next one parses normally. Returning false
+    // here would send the caller into `recover_in_list`, which skips to the
+    // closing brace and would silently stop checking the rest of the block.
+    // The wires are dropped instead, so nothing malformed enters the AST.
+    bool ok = true;
+    for (std::size_t i = 1; i + 1 < chain.size(); ++i) {
+        const ast::Endpoint& e = chain[i];
+        if (!e.is_self && e.segs.size() == 1) continue;
+        err("SE0214", e.loc, "an interior endpoint of a wire chain must be a bare instance name",
+            e.is_self ? "`self` here" : "names a port",
+            {note("`a --> b --> c` means `a --> b; b --> c;`, so `b` is a destination and a "
+                  "source at once and a port name here would have to name two different "
+                  "ports (\xc2\xa7""6.9.2)"),
+             help("split the chain into separate wires")});
+        ok = false;
+    }
+    if (!ok) return true;
+
+    for (std::size_t i = 0; i + 1 < chain.size(); ++i) {
+        ast::Wire w;
+        w.loc = start;
+        w.source = chain[i];
+        w.dests.push_back(chain[i + 1]);   // a copy: an interior is used twice
+        if (i + 2 == chain.size())
+            for (ast::Endpoint& e : extra) w.dests.push_back(std::move(e));
+        out.push_back(std::move(w));
+    }
+    return true;
 }
 
 // ─── Methods and helpers (§8.1, §11.4) ───────────────────────────────────────

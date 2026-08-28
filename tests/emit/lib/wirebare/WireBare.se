@@ -1,0 +1,67 @@
+package wirebare;
+
+// SE0314 — a bare wire endpoint (§6.9.2) takes the sole port on the side the
+// arrow needs, and this is every way there can fail to be exactly one: too many
+// inputs, too many outputs, and none at all.
+//
+// Kept apart from `wiring`, which records the stage-4 wiring diagnostics: these
+// are stage 3, so mixing them would let the earlier stage short-circuit the
+// later one and quietly stop testing half of that file.
+//
+// The trailing SE0430s are the CONSEQUENCE, not the subject: a bare endpoint
+// that could not be resolved leaves its input undriven, and §6.3 has no
+// implicit zero. They are recorded so that the cascade stays visible and small.
+node WireBare {
+    inputs  { a: double(-);  b: double(-); }
+    outputs { y: double(-); }
+
+    structure {
+        node p    : Source {};
+        node f    : Fork   {};
+        node g    : Gain   {};
+        node s    : Sink   {};
+        node ramp : Source {};
+
+        // Bare `self` as a SOURCE offers this node's inputs — the boundary's
+        // polarity is inverted from the inside — and there are two of them.
+        self --> g;
+
+        // Two outputs on the source side.
+        f --> g.x;
+
+        // Named source, bare destination: the rule is per ENDPOINT, so this
+        // reports once, on `s`, and says nothing about `p.v`.
+        p.v --> s;
+
+        // No inputs at all, so it can never be a destination however it is
+        // spelled: a different message, not just a different count.
+        p.v --> ramp;
+
+        // Legal, and here to prove the check is not simply refusing bare
+        // endpoints: `g` has one port of each kind, and bare `self` as a
+        // DESTINATION means this node's sole output `y`.
+        g --> self;
+    }
+}
+
+node Source {
+    outputs { v: double(-); }
+    output() { out.v = 1.0; }
+}
+
+node Fork {
+    outputs { lo: double(-);  hi: double(-); }
+    output() { out.lo = 1.0;  out.hi = 2.0; }
+}
+
+node Gain {
+    inputs  { x: double(-); }
+    outputs { y: double(-); }
+    output(x) { out.y = 2.0 * in.x; }
+}
+
+node Sink {
+    inputs  { u: double(-);  w: double(-); }
+    outputs { total: double(-); }
+    output(u, w) { out.total = in.u + in.w; }
+}

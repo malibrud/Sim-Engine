@@ -1,0 +1,47 @@
+// §6.9.2 wire sugar, every legal shape. Parse-only, so what the recorded AST
+// shows is the DESUGARING: a chain becomes ordinary wires, and a bare endpoint
+// stays bare because which port it means is stage 3's question, not the
+// parser's.
+package tests;
+
+node Chain {
+    inputs  { u: double(-); }
+    outputs { y: double(-); }
+
+    structure {
+        node a : Gain {};
+        node b : Gain {};
+        node c : Gain {};
+        node sp : Split3 {};
+        node mg : Merge3 {};
+
+        // The four ways a single hop can be spelled. All still legal, and the
+        // old form is one of them.
+        self.u --> a.x;
+        self.u --> a;
+        self --> a.x;
+        self --> a;
+
+        // A chain. Interior endpoints must be bare; the ends need not be.
+        a.y --> b --> c.x;
+        a --> b --> c;
+
+        // Longer than three, and bare at both ends.
+        self --> a --> b --> c --> self;
+
+        // Fan-out, which attaches to the last hop. The comma list can only
+        // TERMINATE the statement, so there is no second reading to rule out:
+        // `a --> b, c --> self` is a syntax error, not an ambiguity.
+        a --> b --> c.x, mg.x;
+
+        // Mixed ends: the rule is per endpoint, so a three-output source can
+        // be named while the destination stays bare.
+        sp.x --> a;
+        b --> mg.y;
+
+        // Fan-out with no chain at all, unchanged from before.
+        a.y --> b.x, c.x, mg.z;
+
+        mg --> self;
+    }
+}

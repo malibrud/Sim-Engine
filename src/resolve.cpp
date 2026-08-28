@@ -883,7 +883,66 @@ void Resolver::check_structure(const NodeInfo& info) {
     if (!info.composite) return;
     const Source& src = *info.file->src;
     for (const ast::Wire& w : info.def->structure.wires) {
-        auto check = [&](const ast::Endpoint& e) {
+        // `as_source` is needed for the bare case only, but it is the same
+        // polarity rule `collect_wires` applies: seen from the inside, `self`
+        // is inverted, so `self` as a source offers this node's INPUTS.
+        auto check = [&](const ast::Endpoint& e, bool as_source) {
+            if (!e.is_self && e.segs.empty()) return;   // the parser cannot produce this
+
+            // §6.9.2 — a bare endpoint names no port, and takes the sole port
+            // on the side the arrow needs. This is where the arity is known:
+            // the definition is resolved and its children are bound (above),
+            // and this runs once per definition rather than once per
+            // instantiation, so a 4x-instantiated composite reports once.
+            if (e.is_self ? e.segs.empty() : e.segs.size() == 1) {
+                const NodeInfo* target = &info;
+                if (!e.is_self) {
+                    auto it = info.children.find(e.segs[0]);
+                    // An unresolved instance is `SE0304` at stage 4; saying
+                    // nothing here leaves that one error rather than two.
+                    if (it == info.children.end() || !it->second) return;
+                    target = it->second;
+                }
+                // A node reached recursively is memoised before its members
+                // are resolved, so its ports are momentarily empty. That is
+                // `SE0312`, and it should not also draw an arity error.
+                if (target->inputs.empty() && target->outputs.empty()) return;
+
+                const bool want_out = e.is_self ? !as_source : as_source;
+                const std::vector<Field>& ports = want_out ? target->outputs : target->inputs;
+                if (ports.size() == 1) return;
+
+                const char* side = want_out ? "output" : "input";
+                std::string msg = "`" + e.str() + "` has ";
+                if (ports.empty())
+                    msg += std::string("no ") + side + "s, so it cannot be a wire " +
+                           (as_source ? "source" : "destination");
+                else
+                    msg += std::to_string(ports.size()) + " " + side +
+                           "s, so a bare endpoint cannot pick one";
+
+                std::vector<Attachment> att;
+                if (!ports.empty()) {
+                    std::string have = "it declares ";
+                    for (std::size_t k = 0; k < ports.size(); ++k) {
+                        if (k) have += ", ";
+                        have += "`" + ports[k].name + "`";
+                    }
+                    att.push_back(help(have));
+                }
+                att.push_back(note("a bare endpoint names the sole port on the side the "
+                                   "arrow needs (§6.9.2)"));
+                if (e.is_self)
+                    att.push_back(note("seen from the inside the boundary's polarity is "
+                                       "inverted: bare `self` as a " +
+                                       std::string(as_source ? "source" : "destination") +
+                                       " means this node's sole " + side + " (§6.9.2)"));
+                diag_.error("SE0314", src, e.loc, msg,
+                            ports.empty() ? "nothing to connect" : "needs a port name",
+                            std::move(att));
+                return;
+            }
+
             // §5.3 — the grammar admits a field-level endpoint so the eventual
             // decision is not a grammar change; the semantics reject it today.
             const std::size_t after_instance = e.is_self ? e.segs.size() : e.segs.size() - 1;
@@ -894,8 +953,8 @@ void Resolver::check_structure(const NodeInfo& info) {
                             {note("a wire carries the whole record (§5.3)"),
                              help("wire the record and read the field in the body")});
         };
-        check(w.source);
-        for (const ast::Endpoint& d : w.dests) check(d);
+        check(w.source, /*as_source=*/true);
+        for (const ast::Endpoint& d : w.dests) check(d, /*as_source=*/false);
     }
 }
 

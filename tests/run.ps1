@@ -499,6 +499,60 @@ if (-not $cl) {
         }
     }
 
+    # ChainChk is the wire-chain model (SPEC 6.9.2). One statement,
+    #
+    #     src --> sq --> off --> dbl, self.tap;
+    #
+    # carries a four-node chain and a fan-out on the last hop, and the three
+    # stages do not commute:
+    #
+    #   src.y = t   sq.y = t^2   off.y = t^2 + 10   dbl.y = 2*off.y
+    #
+    # Column 1 is dbl.y. Column 2 is mark.y, which is whatever the comma
+    # delivered plus 1000 -- read through a node of its own, because recording
+    # off.y would have proved nothing: off.y is what it is however the comma
+    # was attached. Order the chain wrongly and column 1 reads 2*(t+10)^2, 288
+    # rather than 28 at t = 2; attach the comma one arrow earlier and column 2
+    # is low by 10; attach it after dbl and column 2 is high by t^2 + 10. None
+    # of those is a rounding difference, so this refuses a golden file that a
+    # -Update would otherwise have accepted.
+    if ($emitDirs.ContainsKey('ChainChk')) {
+        $ccDir = $emitDirs['ChainChk']
+        Push-Location $ccDir
+        & '.\ChainChk.exe' 2>&1 | Out-Null
+        $ran = ($LASTEXITCODE -eq 0)
+        Pop-Location
+        $worst = [double]::PositiveInfinity
+        $csv = Join-Path $ccDir 'chain.csv'
+        if ($ran -and (Test-Path $csv)) {
+            $worst = 0.0
+            foreach ($line in (Get-Content $csv | Select-Object -Skip 1)) {
+                if (-not $line) { continue }
+                $c = $line -split ','
+                $t = [double]$c[0]
+                $off = $t * $t + 10.0
+                $errs = @([Math]::Abs([double]$c[1] - 2.0 * $off),
+                          [Math]::Abs([double]$c[2] - ($off + 1000.0)))
+                foreach ($e in $errs) { if ($e -gt $worst) { $worst = $e } }
+            }
+        }
+        # t' = 1, which rk4 integrates exactly, so the only error is the
+        # recorder's %.9g. The mark column sits near 1014, where nine
+        # significant figures resolve about 1e-5. Every failure this guards
+        # against is 10 or larger -- a misordered chain, a comma on the wrong
+        # arrow -- so the bound is set by the file's precision and not by how
+        # tight it could be.
+        if ($worst -lt 1e-4) {
+            Write-Host ("ok   build/emit/ChainChk : the chain and its last-hop fan-out " +
+                        "match their closed forms, max error " + $worst.ToString('E2')) `
+                -ForegroundColor Green
+            $script:pass++
+        } else {
+            Write-Host ("FAIL build/emit/ChainChk : max error " + $worst) -ForegroundColor Red
+            $script:fail++
+        }
+    }
+
     # ArrSt is the array-state model (SPEC 6.4a): three independent decays in
     # ONE continuous array state, a scalar continuous state beside them in the
     # same block, a discrete array state used as a shift register, and a scalar
