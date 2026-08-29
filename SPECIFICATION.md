@@ -1936,10 +1936,18 @@ restrictions, which are really one restriction wearing three hats:
 - `var` writes → `init()`/`on_step()` only (§6.5).
 - `log.*` → `init()`/`on_step()`/`final()` only (§10.1).
 - `native` handles in scope → `init()`/`on_step()`/`final()` only (§6.7).
+- `sim.stop`/`sim.abort` → `init()`/`on_step()` only (§10.2).
 
 A `sendto()` in `output()` would put four packets on the wire per step, at values
 the model never actually took, silently. Confining mutation keeps results
 solver-independent and reproducible.
+
+**Reading is not on that list, and `sim.*` reflection is the case that shows
+why.** `sim.time()` is legal in every method (§10.5): the hazard here is a side
+effect repeated at states the trajectory never visits, and a read has no side
+effect to repeat. Evaluating y = g(t,x,u) four times is not a problem — it is
+what a Runge-Kutta stage IS, and the language already hands those methods `x`
+and `u` at exactly those trial states.
 
 ### 8.5 The sort
 
@@ -2071,7 +2079,13 @@ How discrete interacts with the §8.5 sort:
   **constant: a sort root with no edge.** So a fast consumer reading a slow signal
   never creates an inter-tick ordering constraint.
 - A held output returns the **same value across all RK4 trial substeps**, so the
-  multiple-evaluation hazard of §8.4 never touches discrete nodes at all.
+  multiple-evaluation hazard of §8.4 never touches discrete nodes at all. This is
+  guaranteed by *omission*, not by coincidence: a held node's `output()` is not
+  re-evaluated at the solver's minor steps (§9.6 step 7), so nothing that moves
+  within a step — `sim.time()` above all — can reach it. Before `sim.time()`
+  existed the guarantee came for free, because a held node's state was frozen
+  and its output was therefore a function of frozen inputs; that argument no
+  longer holds, and the schedule now carries the property explicitly.
 
 Two idioms, both expressed with the existing signature mechanism:
 
@@ -2122,8 +2136,9 @@ across one state vector was deliberately kept closed. Normative values are
 
 One base tick at index *k*, normatively:
 
-1. **Set the time** to *t*[k], and determine the active set — base-rate nodes,
-   plus nodes whose decimation divides *k*.
+1. **Set the time** to *t*[k] — which is what `sim.time()` returns for the rest
+   of this step, except where step 7 moves it — and determine the active set:
+   base-rate nodes, plus nodes whose decimation divides *k*.
 2. **Propagate outputs.** `output()` in topological order over the active set,
    at the tick's entry state. Held outputs are constants throughout.
 3. **`next()`** on every active node with discrete states, in any order. Each
@@ -2133,9 +2148,12 @@ One base tick at index *k*, normatively:
 6. **Exit** if the run has been halted (§10.2) or *k* is the last tick.
 7. **Advance both state kinds.** `dis = nxt` for the discrete block — and a
    second whole-block copy for `dis_arr` if the model has array-shaped discrete
-   states (§15.5) — then `x` by the solver's combination of stage rates, which
-   is where `output()` and `derivative()` are evaluated, once per solver stage,
-   at trial states the trajectory never visits (§9.5).
+   states (§15.5) — then `x` by the solver's combination of stage rates. Each
+   stage sets the time to that stage's instant and re-propagates outputs before
+   evaluating `derivative()`, at trial states the trajectory never visits
+   (§9.5). **Only nodes that are not zero-order held are re-propagated**: a held
+   node keeps the output it published in step 2, which is what makes the hold a
+   hold, and `sim.time()` moves for the others alone (§10.5).
 8. If `mode: realtime` and this tick closes a frame, spin to the frame boundary
    and update the metrics.
 
@@ -2198,11 +2216,22 @@ sim.abort("CAN bus timeout");                 // fault end
   gives `final()` a **single uniform source** of termination reasons with a clean
   severity axis; log level stays orthogonal metadata.
 
-Note that `sim.*` being a *recordable* namespace in the sim file (§13.6) does
-**not** make those metrics readable from node code. The broader "`sim.*` as
-ambient context" design — `sim.time` readable in `on_step()`, and so on — is
-deliberately not opened, to avoid inheriting the "which fields are live when"
-question as a side effect.
+**These two are the only members of `sim` confined to the mutating methods.**
+The rest of the namespace — `sim.time()` and the other reflection members — is
+readable from every body; §10.5 sets out the surface and the rule that admits a
+member to it. The split is carried by the type, not by a runtime check: a leaf
+holds a reflection-only handle, and `init()`/`on_step()` shadow it with a wider
+one, so `sim.stop` inside `output()` is *no such member* — a compile error at
+the `.se` line, like every other confinement in §8.4.
+
+`final()` deliberately gets the narrow handle too. It already learns the outcome
+from `ctx` (§10.3), and halting a run that is already ending is not something
+this section offers.
+
+Note that `sim.*` being a *recordable* namespace in the sim file (§13.6) still
+does **not** make those metrics readable from node code. `sim.overrun_count` and
+`sim.frame_slip` fail §10.5's admission rule, and that is the whole of the
+objection this section used to state as a blanket refusal.
 
 ### 10.3 The run context
 
@@ -2257,14 +2286,74 @@ runtime member, so it cannot be read directly.
 - **Both spellings ship** because coefficient design wants a rate while anything
   expressed as a period wants the reciprocal. Both derive from one number, so
   `sample_rate * time_step` is exactly 1 and they cannot drift apart.
-- They are **derived from the node's own `rate`**, not ambient context. This is what
-  keeps §10.2's objection from applying: there is no "which fields are live when"
-  question, because these are a function of one of the node's own settings and are
-  resolved with them at configuration (§6.2b). Overriding `rate` moves `sample_rate`
-  and `time_step` with it, and any coefficient derived from them follows — which is
+- They are **derived from the node's own `rate`**, and resolved with the rest of
+  its settings at configuration (§6.2b). Overriding `rate` moves `sample_rate` and
+  `time_step` with it, and any coefficient derived from them follows — which is
   the behaviour a filter needs and the reason they are not folded.
 - The reserved `rate` setting is resolved **before** any other setting of the same
   node, so a derived setting may read `sample_rate` freely.
+
+These are **configuration-time constants in the §7 expression language**, and
+that is what keeps them distinct from §10.5's `sim.step()`. `sample_rate` is
+this node's effective rate, fixed before the run starts and legal in a setting
+default; `sim.step()` is the model's global base step, read at run time from a
+body. Neither substitutes for the other.
+
+### 10.5 `sim.*` reflection
+
+Every body — pure and mutating alike — may read the run's current instant and
+the node's own identity:
+
+| | | |
+|---|---|---|
+| `sim.time()` | `(s)` | the instant at which this method is being evaluated |
+| `sim.tick()` | integer | base tick index *k* |
+| `sim.step()` | `(s)` | the model's global base step |
+| `sim.path()` | text | this node's model path, e.g. `whl.tc` |
+| `sim.type()` | text | this node's fully qualified type, e.g. `se.sig.src.Ramp` |
+
+**The admission rule.** A member belongs here iff its value is **well defined at
+every invocation** and is a function of the current instant or of the node
+itself — never of run history. That rule is doing real work at the boundary:
+`sim.overrun_count` and `sim.frame_slip` (§13.6) are excluded by it, because
+what they read depends on when you look, and a body that samples one is
+recording the schedule rather than the model.
+
+Time was withheld from bodies for a long time as a side effect of not opening
+this namespace. It never met that objection: §8.1 writes the equations as
+y = g(t,x,u), ẋ = f(t,x,u) and x⁺ = h(t,x,u), so the language supplied `x` and
+`u` and withheld the `t` its own formulation names, and every source in
+`se.sig.src` carried a redundant `discrete t` clock to put it back.
+
+**Which instant `sim.time()` returns.** The one this evaluation is at — nothing
+finer to state, because the *schedule* rather than the value carries the
+distinction:
+
+- A node with `discrete` states or a declared `rate` is zero-order held across
+  the step (§9.3). Its `output()` is evaluated once, at its sample instant, and
+  is **not** re-evaluated at the solver's minor steps; `sim.time()` there is
+  that sample instant, identical for the whole step, and its held output stays
+  held.
+- Every other node — continuous or purely algebraic — **is** re-evaluated at
+  each minor step, and `sim.time()` returns *t* + *c·h*, the instant the solver
+  is actually at.
+
+The second bullet is the point. Without it a **continuous source cannot exist**:
+its output would be a staircase, and a fourth-order solver integrating it would
+collapse to first order across that path no matter how good the integrator is.
+`se.sig.ct.Sine` is the first block to depend on this, and `se.sig.src.Sine` is
+the held twin that deliberately does not.
+
+**A body's use of `sim.*` is invisible to the compiler**, because bodies are
+verbatim and are never parsed (§11.1). The schedule therefore assumes every body
+reads time: a node with a declared `rate` is gated on **every** tick, not only
+when its `output()` takes arguments. One `k % decimation` branch per slow node
+per tick is the price, and it buys zero-order hold by construction rather than
+by an argument about what a body happens to contain.
+
+`sim.stop` and `sim.abort` are **not** part of this surface; they stay confined
+to `init()` and `on_step()` by §10.2, and the confinement is carried by the
+handle's type rather than by a rule an implementation has to remember.
 
 ---
 
@@ -2873,6 +2962,12 @@ escape hatch is not a guarantee, so the storage itself carries the constness.
   simply are not declared elsewhere. Natives are `mutable`, which gives up
   nothing: §6.7 already establishes that `const` never protected a handle,
   because a `const SOCKET` is still perfectly usable by `recv()`.
+- **A narrow member, shadowed by a wider local, is the same mechanism a second
+  time.** `log` is a trace-only member that the mutating methods shadow with the
+  full object, and `sim` is a reflection-only member (§10.5) that `init()` and
+  `on_step()` shadow with one that also carries `stop`/`abort` (§10.2). Both
+  make an illegal call *no such member* rather than a rule to enforce, and both
+  keep the pure methods free of preamble.
 
 ```cpp
 struct Wheel {
@@ -2886,8 +2981,11 @@ struct Wheel {
 
     const Param           param;          // set at construction; never writable
     const char* const     se_path_;
+    const char* const     se_type_;
+    const se_rt::RunState* const se_run_;  // the enclosing Sim's clock (§10.5)
     State                 state;
     Var                   var{};
+    const se_rt::RunView  sim{se_run_, se_path_, se_type_};   // reflection only
     const se_rt::TraceLog log{se_path_};  // log.trace only (§10.1)
 
     void init();                                              // mutating
@@ -2898,9 +2996,15 @@ struct Wheel {
 
 A consequence worth stating, because it is the property a reader of generated
 code most wants: **the three pure methods need no preamble at all.** The
-trace-only `log` is a member, and everything else they may touch is already
-const through `this`, so between their braces there is nothing but the verbatim
-body.
+trace-only `log` and the reflection-only `sim` are members, and everything else
+they may touch is already const through `this`, so between their braces there is
+nothing but the verbatim body.
+
+`se_run_` is a pointer to a member of the enclosing `Sim`, not a global. The
+engine keeps one global sim time for stamping log records, but what a body reads
+belongs to one model — so two models in one process do not share a clock, and
+the value can be moved to a solver stage's instant without disturbing anything
+else (§10.5).
 
 ### 15.5 The three blocks
 
@@ -3595,22 +3699,25 @@ Recorded so that their absence is visibly deliberate.
    interpolation map is genuinely pure and genuinely wants to be read there, but
    the `init`/`on_step`/`final` confinement excludes it. A real need with no
    mechanism yet.
-2a. **Ambient `time` in the pure methods** (§10.2). Time is withheld from bodies as
-   part of the broader "`sim.*` as ambient context" design, and §10.4 leans on that
-   withholding to justify `sample_rate`/`time_step`. But §10.2's stated objection —
-   inheriting the "which fields are live when" question — does not apply to `t`,
-   which has a well-defined value at every invocation, unlike `sim.overrun_count`
-   or `sim.frame_slip`. Nor does purity: §8.1 writes the equations as
-   `y = g(t,x,u)` and `ẋ = f(t,x,u)`, so the language supplies `x` and `u` and
-   withholds the `t` its own formulation names. Every source in `se.sig.src`
-   therefore carries a redundant clock, and — the sharp part — a **continuous**
-   node cannot get the right time at all: a `discrete` `t` is constant across the
-   four RK4 substeps, while `Sim::derivatives(double t)` already *receives* the
-   correct minor-step time and discards it. If taken up, the open sub-questions
-   are the spelling (a bare `time` reads better than `sim.time`, since
-   `sim.stop`/`sim.abort` are scoped to the mutating methods and `sim.` would then
-   mean two different scopes) and whether `output()` sees the substep time or the
-   tick time.
+2a. ~~**Ambient `time` in the pure methods**~~ — **RESOLVED.** See §10.5. Time
+   is readable from every body as `sim.time()`, and it is the first member of a
+   named reflection surface rather than a one-off: the namespace is admitted by
+   a stated rule — well defined at every invocation, a function of the current
+   instant or of the node itself, never of run history — which lets `time`,
+   `tick`, `step`, `path` and `type` in and still keeps `sim.overrun_count` out.
+
+   `sim.stop`/`sim.abort` did not move. They stay confined to the mutating
+   methods, and the confinement is now carried by the handle's TYPE — a leaf
+   holds a reflection-only view, the mutating methods shadow it with a wider one
+   — so nothing that was illegal became legal.
+
+   The sharp half of the original item is closed too: a continuous node now sees
+   the solver's minor-step time, because the minor-step output pass omits
+   zero-order-held nodes rather than re-running everything. `se.sig.ct.Sine` is
+   the first block that could not have been written before, and `se.sig.src.Ramp`
+   and `se.sig.src.Step` have dropped the redundant `discrete t` clocks they
+   carried only because time was withheld.
+
 3. **Field-level wires** (§5.3) — `whl.ws.speed --> tc.u`. The grammar admits it;
    the semantics currently reject it. `se.math.Split3`/`Merge3` cover the need
    meanwhile, at the cost of two nodes per bundle.

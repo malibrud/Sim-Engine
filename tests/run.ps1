@@ -367,6 +367,50 @@ if (-not $cl) {
         }
     }
 
+    # The one case in the suite that MUST NOT COMPILE.
+    #
+    # Section 10.5 put `sim` in scope of every body. That is only safe because
+    # the surface it widens is NOT the one section 10.2 confines: a leaf holds
+    # a plain se_rt::RunView, and preamble() shadows it with an
+    # se_rt::RunControl in init() and on_step() alone. Nothing else here would
+    # notice a refactor that injected RunControl everywhere, so this asserts
+    # the negative by compiling it and requiring the failure.
+    #
+    # Kept outside tests/emit deliberately: the loop above compiles every case
+    # it finds there and expects success.
+    $cfOut = Join-Path $emitOut 'PureStop'
+    if (Test-Path $cfOut) { Remove-Item -Recurse -Force $cfOut }
+    New-Item -ItemType Directory -Force $cfOut | Out-Null
+    $cfArg = $cfOut.Replace('\', '/')
+    & $sec --no-color --quiet --emit -I 'tests/cppfail/lib' -o $cfArg 'tests/cppfail/PureStop.sim'
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "FAIL tests/cppfail/PureStop.sim : should emit cleanly, sec refused it" -ForegroundColor Red
+        $script:fail++
+    } else {
+        Push-Location $cfOut
+        $cfLog  = (& '.\build.bat' 2>&1 | Out-String)
+        $cfCode = $LASTEXITCODE
+        Pop-Location
+        # Three conditions, because "the compile failed" on its own would pass
+        # for a typo. It must fail, name `stop` on RunView, and say nothing
+        # about `time` -- sim.time() in a pure method is the other half of the
+        # claim and has to still work.
+        $named  = ($cfLog -match "'stop'") -and ($cfLog -match 'RunView')
+        $quiet  = ($cfLog -notmatch "'time'")
+        $atLine = ($cfLog -match 'PureStop\.se')
+        if ($cfCode -ne 0 -and $named -and $quiet -and $atLine) {
+            Write-Host ("ok   tests/cppfail/PureStop : sim.stop in output() is a compile " +
+                        "error at the .se line, and sim.time() is not") -ForegroundColor Green
+            $script:pass++
+        } else {
+            Write-Host "FAIL tests/cppfail/PureStop : expected C2039 on 'stop' at the .se line" -ForegroundColor Red
+            Write-Host ("     exit=" + $cfCode + " named=" + $named + " quiet=" + $quiet +
+                        " at_se_line=" + $atLine)
+            Write-Host $cfLog
+            $script:fail++
+        }
+    }
+
     # build.ps1 is the third emitted script, and an emitted script nobody runs
     # is an emitted script that does not work. build.bat has just built every
     # case above, so this proves the PowerShell spelling on ONE of them rather
@@ -453,6 +497,44 @@ if (-not $cl) {
             $script:pass++
         } else {
             Write-Host ("FAIL build/emit/RecConv : expected 6 m, off by " + $worst) `
+                -ForegroundColor Red
+            $script:fail++
+        }
+    }
+
+    # SPECIFICATION 13.5 -- a port is addressable at any level of nesting. Seven
+    # columns, one per way a producer chain can end: the root's own output, a
+    # composite output, a composite input, two fields of a record leaf input,
+    # and leaf inputs ending on a setting and on a literal. Every expected value
+    # is distinct, and every wire in the model converts, so dropping the chain
+    # walk, the conversion or the flattened field index moves a column by a
+    # factor of a thousand or onto a different field of the Vec3.
+    if ($emitDirs.ContainsKey('PortPath')) {
+        $ppDir = $emitDirs['PortPath']
+        Push-Location $ppDir
+        & '.\build\PortPath.exe' 2>&1 | Out-Null
+        $ran = ($LASTEXITCODE -eq 0)
+        Pop-Location
+        $want = @(8.0, 7.5, 0.5, 1.0, 3.0, 4.0, 0.5)
+        $worst = [double]::PositiveInfinity
+        $csv = Join-Path $ppDir 'portpath.csv'
+        if ($ran -and (Test-Path $csv)) {
+            $worst = 0.0
+            foreach ($line in (Get-Content $csv | Select-Object -Skip 1)) {
+                if (-not $line) { continue }
+                $cols = $line -split ','
+                for ($c = 0; $c -lt $want.Count; $c++) {
+                    $err = [Math]::Abs([double]$cols[$c + 1] - $want[$c])
+                    if ($err -gt $worst) { $worst = $err }
+                }
+            }
+        }
+        if ($worst -lt 1e-12) {
+            Write-Host ("ok   build/emit/PortPath : ports read through their " +
+                        "producers at every level") -ForegroundColor Green
+            $script:pass++
+        } else {
+            Write-Host ("FAIL build/emit/PortPath : a column is off by " + $worst) `
                 -ForegroundColor Red
             $script:fail++
         }
@@ -835,6 +917,69 @@ if (-not $cl) {
             $script:pass++
         } else {
             Write-Host ("FAIL build/emit/ContBq : max error " + $worst) -ForegroundColor Red
+            $script:fail++
+        }
+    }
+
+    # CtSrc integrates the SAME sine twice, once from se.sig.ct.Sine and once
+    # from se.sig.src.Sine, and both columns have the same closed form:
+    #
+    #     x' = sin(2 pi t), x(0) = 0   =>   x(t) = (1 - cos(2 pi t)) / (2 pi)
+    #
+    # The point is the gap between them, which is what proves `sim.time()`
+    # reaches the solver's minor steps (section 10.5). The ct source is in the
+    # minor-step output pass, so rk4 keeps its order; the dt source declares a
+    # `rate` and is zero-order held, so its forcing is a staircase and the
+    # error is A*h/2 = 5.0e-4 -- and that is a property of the HOLD, not of the
+    # solver, so it does not shrink with a better integrator.
+    #
+    # Both bounds matter and they fail in opposite directions. ct < 1e-7 breaks
+    # if the minor-step pass stops running continuous nodes; dt > 1e-4 breaks
+    # if a held node starts seeing minor-step time, which is ZOH quietly lost
+    # and which a one-sided accuracy check would happily call an improvement.
+    if ($emitDirs.ContainsKey('CtSrc')) {
+        $csDir = $emitDirs['CtSrc']
+        Push-Location $csDir
+        & '.\build\CtSrc.exe' 2>&1 | Out-Null
+        $ran = ($LASTEXITCODE -eq 0)
+        Pop-Location
+        $wct = 0.0
+        $wdt = 0.0
+        $csv = Join-Path $csDir 'ctsrc.csv'
+        if ($ran -and (Test-Path $csv)) {
+            $rows = Get-Content $csv | Select-Object -Skip 1
+            foreach ($line in $rows) {
+                if (-not $line) { continue }
+                $c   = $line -split ','
+                $t   = [double]$c[0]
+                $ref = (1.0 - [Math]::Cos(2.0 * [Math]::PI * $t)) / (2.0 * [Math]::PI)
+                $a = [Math]::Abs([double]$c[1] - $ref)
+                $b = [Math]::Abs([double]$c[2] - $ref)
+                if ($a -gt $wct) { $wct = $a }
+                if ($b -gt $wdt) { $wdt = $b }
+            }
+        } else {
+            $wct = [double]::PositiveInfinity
+        }
+        # 1e-7 rather than rk4's own ~1e-12 for ContBq's reason: the recorder
+        # writes %.9g, so at this magnitude the FILE resolves about 5e-10.
+        if ($wct -lt 1e-7) {
+            Write-Host ("ok   build/emit/CtSrc : the continuous source keeps rk4's order, " +
+                        "max error " + $wct.ToString('E2')) -ForegroundColor Green
+            $script:pass++
+        } else {
+            Write-Host ("FAIL build/emit/CtSrc : continuous source error " + $wct +
+                        " -- sim.time() is not reaching the minor steps") -ForegroundColor Red
+            $script:fail++
+        }
+        if ($wdt -gt 1e-4) {
+            Write-Host ("ok   build/emit/CtSrc : the held source stays held, " +
+                        "staircase error " + $wdt.ToString('E2')) -ForegroundColor Green
+            $script:pass++
+        } else {
+            Write-Host ("FAIL build/emit/CtSrc : held source error " + $wdt +
+                        " is too SMALL -- a rated node is seeing minor-step time, " +
+                        "so zero-order hold has been lost") -ForegroundColor Red
             $script:fail++
         }
     }

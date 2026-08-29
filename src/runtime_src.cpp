@@ -199,10 +199,13 @@ const char* se_runtime_hpp() {
 
 namespace se_rt {
 
-// Current sim time, owned by the engine and updated once per base tick. It is
-// a global because there is exactly one run per process, and because the
-// alternative — threading it through every generated call — would put it in
-// scope of bodies, where section 10.2 deliberately does not want it.
+// The tick time a log record is stamped with. A global because a LogSink is a
+// global: every record carries a time and no caller passes one.
+//
+// This is NOT what a body reads. `sim.time()` comes from the model's own
+// RunState (below), which advances at every minor step and belongs to one Sim
+// rather than to the process. The two agree at tick boundaries and are
+// deliberately different objects.
 inline double& sim_time() {
     static double t = 0.0;
     return t;
@@ -531,6 +534,50 @@ inline Control& control() {
     static Control c;
     return c;
 }
+
+// ─── The run view (section 10.5) ─────────────────────────────────────────────
+//
+// The engine's per-evaluation state, one instance per model. `now` is the
+// instant of the CURRENT evaluation, not of the current tick: derivatives()
+// rewrites it at every minor step, which is the whole reason a continuous
+// source can be written at all.
+struct RunState {
+    double        now  = 0.0;   // the instant this evaluation is at
+    double        step = 0.0;   // the global base step
+    std::uint64_t tick = 0;     // base tick index
+};
+
+// The `sim` object every body sees. Reflection only: every member is a
+// function of the current instant or of the node itself, never of run
+// history. That is the admission rule, and it is what lets `sim.time()` in
+// while keeping `sim.overrun_count` out (section 10.2) — the latter's value
+// depends on when you look, which is the objection that was never about time.
+//
+// Every leaf holds one of these as a member called `sim`, so a pure method
+// needs no preamble at all. The mutating methods declare a local `RunControl`
+// which shadows it, widening what is legal exactly where section 8.4 says it
+// is. Same shape as TraceLog / Log above, for the same reason.
+struct RunView {
+    const RunState* run;
+    const char*     node_path;
+    const char*     node_type;
+
+    double        time() const { return run->now; }
+    double        step() const { return run->step; }
+    std::uint64_t tick() const { return run->tick; }
+    const char*   path() const { return node_path; }
+    const char*   type() const { return node_type; }
+};
+
+// The widened form for init(), on_step() and final(): everything above plus
+// the two calls that end a run (section 10.2). `sim.stop` in output() is "no
+// member named stop" — a compile error at the .se line, not a runtime rule.
+struct RunControl : RunView {
+    RunControl(const RunState* r, const char* p, const char* t) : RunView{r, p, t} {}
+
+    void stop(const std::string& m) const { control().stop(m); }
+    void abort(const std::string& m) const { control().abort(m); }
+};
 
 // ─── Recording (section 13.5) ────────────────────────────────────────────────
 

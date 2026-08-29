@@ -1,0 +1,72 @@
+// The check that `sim.time()` actually reaches the solver's minor steps
+// (§10.5), and the only test in the suite whose point is a DIFFERENCE between
+// two columns rather than the accuracy of either one.
+//
+// Two identical integrators are driven by the same sine, one from
+// `se.sig.src.Sine` and one from `se.sig.ct.Sine`. Both integrate
+//
+//     x' = sin(2*pi*t),   x(0) = 0   =>   x(t) = (1 - cos(2*pi*t)) / (2*pi)
+//
+// so both columns have the same exact closed form and the same solver. The
+// only thing that differs is which time the SOURCE is allowed to see:
+//
+//   ct  no `rate`, no state  -> in the minor-step output pass, so `sim.time()`
+//                               returns the instant rk4 is at. Full 4th order:
+//                               rk4's own error here is nearer 1e-12, so what
+//                               the column actually shows (~5e-10) is the
+//                               recorder's %.9g and not the solver.
+//   dt  declares `rate`      -> zero-order held across the step (§9.3), so the
+//                               forcing is a staircase and rk4 collapses to
+//                               1st order across that path. The error is
+//                               A*h/2 = 5e-4 and is INDEPENDENT of frequency:
+//                               per step it is A*(w*h^2/2)*cos(w t), which
+//                               sums to A*h*sin(w t)/2 over the run.
+//
+// Both bounds are asserted, and each catches a different regression:
+//
+//   ct < 1e-7   fails if the minor-step pass stops re-running continuous
+//               nodes, or if `se_run_.now` stops being written in
+//               derivatives() -- the ct column would decay to the dt column.
+//   dt > 1e-4   fails if a HELD node starts seeing minor-step time, which
+//               would improve this column and mean ZOH had been lost. That is
+//               the failure mode a one-sided accuracy test would call success.
+package ctsrc;
+
+use se.sig.src;
+use se.sig.ct;
+
+node CtSrc {
+    outputs {
+        x_ct: double(-);
+        x_dt: double(-);
+    }
+
+    structure {
+        node s_ct : ct.Sine (-)  { amplitude = 1.0; f = 1.0 (Hz); };
+        node s_dt : src.Sine (-) { amplitude = 1.0; f = 1.0 (Hz); };
+
+        node i_ct : Integ {};
+        node i_dt : Integ {};
+
+        s_ct --> i_ct;
+        s_dt --> i_dt;
+
+        i_ct --> self.x_ct;
+        i_dt --> self.x_dt;
+    }
+}
+
+// File-private, and deliberately the plainest integrator that can be written:
+// nothing about this node should be able to explain a difference between the
+// two columns. `output()` reads no input, so it is a sort root and the two
+// chains carry no feedthrough at all.
+node Integ {
+    inputs  { u: double(-); }
+    outputs { y: double(-); }
+
+    states { continuous x: double(-) = 0.0; }
+
+    derivative(u) { der.x = in.u; }
+
+    output() { out.y = state.x; }
+}

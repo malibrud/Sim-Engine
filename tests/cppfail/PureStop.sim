@@ -1,0 +1,9 @@
+// See lib/purestop/PureStop.se. This model is expected to emit cleanly and
+// then FAIL to compile.
+sim PureStop {
+    root: purestop.PureStop {};
+
+    step:     1 (ms);
+    solver:   rk4;
+    duration: 1 (ms);
+}

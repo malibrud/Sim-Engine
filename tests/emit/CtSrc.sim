@@ -1,0 +1,18 @@
+// Numerical check for the minor-step time (§10.5). Batch mode, so the suite
+// does not spend wall-clock time spinning at frame boundaries.
+sim CtSrc {
+    root: ctsrc.CtSrc {};
+
+    step:     1 (ms);
+    solver:   rk4;
+    duration: 2 (s);
+
+    record: {
+        file:  "ctsrc.csv";
+        every: 50;           // 20 Hz in the file, off a 1 kHz base step
+        signals {
+            x_ct;
+            x_dt;
+        }
+    }
+}

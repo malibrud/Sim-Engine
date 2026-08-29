@@ -5,12 +5,19 @@
 // source that switches one sample later shifts every reference curve by a
 // step, which is a wrong answer that looks like a solver problem.
 //
-// Time is a `discrete` state, and it has to be: §10.2 withholds sim time from
-// node bodies, so a source carries its own clock. One consequence is visible
-// here and is worth knowing at the use site — the switch lands on a sample
-// instant, so a continuous consumer sees the edge quantised to this node's
-// step. Feeding an RK4 plant from any source in this package hands it a
-// staircase; that is the trade `se.sig.src` accepted by having no `ct` twin.
+// This node carried its own `discrete t` clock until `sim.time()` existed
+// (§10.5), on the grounds that §10.2 withheld sim time from bodies. It does
+// not any more. The clock was a duplicate of a number the engine already held,
+// and the one capability it offered — starting a run with the step already
+// past, by overriding the state through the IC channel — is what `t_step` is
+// for and says more plainly.
+//
+// The switch still lands on a sample instant: this node declares a `rate`, so
+// its output is zero-order held and `sim.time()` reads that instant rather
+// than the solver's minor step. A continuous consumer therefore sees the edge
+// quantised to this node's step, and feeding an RK4 plant from anything in
+// `se.sig.src` hands it a staircase. That is the trade this package makes;
+// `se.sig.ct` is where the twin that does not make it lives.
 package se.sig.src;
 
 node Step {
@@ -32,19 +39,5 @@ node Step {
 
     outputs { y: double(U); }
 
-    // Elapsed time. Public surface: the IC channel reaches it (§13.4), so a
-    // sim file can start a run with the step already past.
-    states { discrete t: double(s) = 0.0; }
-
-    // The node's own sample period. A `var` rather than a setting: `param.rate`
-    // already carries the rate, and a second `ts` setting would put a derived
-    // duplicate of it in the configuration schema (§15.6) for a reader to
-    // override out of sync.
-    vars { ts: double(s); }
-
-    init() { var.ts = 1.0 / param.rate; }
-
-    output() { out.y = state.t < param.t_step ? param.initial : param.target; }
-
-    next() { next.t = state.t + var.ts; }
+    output() { out.y = sim.time() < param.t_step ? param.initial : param.target; }
 }

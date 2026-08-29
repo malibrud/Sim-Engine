@@ -244,6 +244,7 @@ private:
     std::string input_expr(const Leaf& leaf, const std::string& port) const;
     std::string in_braces(const Leaf& leaf, const ast::Method* method) const;
     bool needs_tick_gate(const Leaf& leaf) const;
+    bool minor_step_output(const Leaf& leaf) const;
     // True when the leaf's decimation is a runtime value rather than 1.
     bool dynamic_rate(const Leaf& leaf) const;
     std::string decim_of(const Leaf& leaf) const;
@@ -300,16 +301,22 @@ void Emitter::verbatim(const Verbatim& v, const std::string& src_path) {
 // into scope where §8.4 says they are legal, and withheld where it does not.
 //
 // The three pure methods -- `output()`, `derivative()` and `next()` -- get
-// nothing at all: the leaf already holds a trace-only `log` member, so their
-// bodies are verbatim from brace to brace.
+// nothing at all: the leaf already holds a trace-only `log` member and a
+// reflection-only `sim` member (§10.5), so their bodies are verbatim from
+// brace to brace.
 void Emitter::preamble(const NodeInfo& node, ast::Method::Which which, const char* ind) {
     using W = ast::Method::Which;
     const bool mutating = which == W::Init || which == W::OnStep || which == W::Final;
     if (!mutating) return;
 
+    // Widens the leaf's reflection-only `sim` member with the two calls that
+    // end a run. `final()` is deliberately NOT here: it already reads the
+    // outcome from `ctx` (§10.3), and halting a run that is already ending is
+    // not something §10.2 offers. It keeps the plain `RunView` member, so
+    // `sim.time()` works there while `sim.stop` stays "no such member".
     if (which == W::Init || which == W::OnStep)
-        o_ << ind << "se_rt::Control& sim = se_rt::control();"
-           << "   // sim.stop / sim.abort, §10.2\n";
+        o_ << ind << "const se_rt::RunControl sim{se_run_, se_path_, se_type_};"
+           << "   // adds sim.stop / sim.abort, §10.2\n";
     // Shadows the leaf's trace-only member with the full set of levels.
     o_ << ind << "const se_rt::Log log{se_path_};" << "   // every level is legal here, §10.1\n";
 
@@ -513,6 +520,11 @@ void Emitter::leaf_class(const NodeInfo& node) {
     std::vector<Row> mem;
     mem.push_back({"Param", "param;", "// written by Sim::resolve_settings"});
     mem.push_back({"const char* const", "se_path_;", "// model path, for the log tag"});
+    // §10.5 - the reflection surface's backing. `se_run_` points at the one
+    // RunState the enclosing Sim owns, so `sim.time()` is a member read and not
+    // a global: two models in one process do not share a clock.
+    mem.push_back({"const char* const", "se_type_;", "// fq node type, §10.5"});
+    mem.push_back({"const se_rt::RunState* const", "se_run_;", "// this model's clock"});
     if (!node.states.empty()) mem.push_back({"State", "state;", "// views into x / dis"});
     if (!node.vars.empty()) mem.push_back({"Var", "var{};", ""});
     for (const ast::NativeDecl& n : node.def->natives) {
@@ -524,6 +536,8 @@ void Emitter::leaf_class(const NodeInfo& node) {
         // it always was, in whether the alias is emitted at all.
         mem.push_back({"mutable " + type, "se_nat_" + n.name + init + ";", ""});
     }
+    mem.push_back({"const se_rt::RunView", "sim{se_run_, se_path_, se_type_};",
+                   "// reflection only; §10.5"});
     mem.push_back({"const se_rt::TraceLog", "log{se_path_};",
                    "// log.trace only; §10.1"});
     {
@@ -676,14 +690,25 @@ std::string Emitter::in_braces(const Leaf& leaf, const ast::Method* method) cons
     return r + "}";
 }
 
-// A slow node whose `output()` reads nothing can be called on every tick: it
-// is a function of state alone, and state only moves at its sample instants,
-// so the value is identical and the branch is pure cost. A slow node WITH
-// feedthrough must be gated, or ZOH would be lost.
-bool Emitter::needs_tick_gate(const Leaf& leaf) const {
-    if (!dynamic_rate(leaf)) return false;
-    const ast::Method* out = leaf.node->method(ast::Method::Which::Output);
-    return out && !out->params.empty();
+// EVERY slow node is gated. This used to exempt a slow node whose `output()`
+// read nothing, on the premise that it was "a function of state alone" and so
+// gave the same answer on every tick — the branch was pure cost. §10.5 made
+// that premise false: `sim.time()` moves every tick, the generator cannot see
+// which bodies read it (§11.1 — bodies are verbatim, never parsed), and an
+// ungated node reading it would silently stop being zero-order held.
+//
+// The price is one `k % decim` branch per slow node per tick, and what it buys
+// is ZOH by construction rather than by an argument about body contents.
+bool Emitter::needs_tick_gate(const Leaf& leaf) const { return dynamic_rate(leaf); }
+
+// §10.5 — whether this leaf's `output()` is re-evaluated at the solver's minor
+// steps. A node with `discrete` states or a declared `rate` is zero-order held
+// across the step (§9.3), so re-running it there would let `sim.time()` move
+// underneath a held output. Everything else — continuous and purely algebraic
+// nodes — is re-run, which is exactly what lets a CONTINUOUS source see the
+// minor-step time and stop RK4 degrading to first order across a forcing path.
+bool Emitter::minor_step_output(const Leaf& leaf) const {
+    return !dynamic_rate(leaf) && !leaf.has_discrete();
 }
 
 // §9.2 — whether this leaf's decimation can move after the model is compiled.
@@ -888,15 +913,25 @@ void Emitter::sim_members() {
     o_ << "    void derivatives(double t);              // reads x, fills xd\n\n";
 
     o_ << "    // ---- machinery " << std::string(57, '-') << "\n";
+    // §10.5 — the reflection surface every leaf points at. Declared ahead of
+    // the leaves because their initialisers take its address, and owned by the
+    // Sim rather than by the process so two models never share a clock.
+    o_ << "    se_rt::RunState se_run_{};   // what `sim.time()` reads, §10.5\n";
     o_ << "    //  Leaf instances. Their settings are NOT baked in here: they are\n";
     o_ << "    //  assigned by resolve_settings() (§6.2b), so a settings source can\n";
     o_ << "    //  move them in a binary that has already been compiled. Any unit\n";
     o_ << "    //  CONVERSION still folded at elaboration, which is why nothing here\n";
     o_ << "    //  needs conversion machinery.\n";
+    std::size_t wp = 0, wt = 0;
+    for (const Leaf& leaf : m_.leaves) {
+        wp = std::max(wp, quote(leaf.path.empty() ? "<root>" : leaf.path).size() + 1);
+        wt = std::max(wt, quote(leaf.node->fq).size() + 1);
+    }
     for (const Leaf& leaf : m_.leaves) {
         const std::string path = quote(leaf.path.empty() ? "<root>" : leaf.path);
         o_ << "    " << pad(leaf.node->cpp_name, 28) << " " << pad(leaf.ident + "{{}, ", 18)
-           << path << "};\n";
+           << pad(path + ",", wp) << " " << pad(quote(leaf.node->fq) + ",", wt)
+           << " &se_run_};\n";
     }
 
     bool any_der = false;
@@ -1012,6 +1047,7 @@ void Emitter::sim_members() {
     o_ << "\n    void bind();\n";
     o_ << "    void apply_initial_conditions();\n";
     o_ << "    void output_pass(std::uint64_t k);\n";
+    o_ << "    void output_pass_minor();\n";
     o_ << "    void next_tick(std::uint64_t k);\n";
     o_ << "    void on_step_tick(std::uint64_t k);\n";
     o_ << "    void integrate(double t, double h);\n";
@@ -1448,20 +1484,38 @@ void Emitter::sim_output_pass() {
                                  leaf.ident + ");";
         if (needs_tick_gate(leaf))
             o_ << "    if (k % " << decim_of(leaf) << " == 0) " << call << "\n";
-        else if (dynamic_rate(leaf))
-            o_ << "    " << pad(call, 54) << " // " << leaf.decimation
-               << ":1 by default, but a function of state alone\n";
         else
             o_ << "    " << call << "\n";
     }
+    o_ << "}\n";
+
+    // The minor-step pass. Same topological order, held nodes omitted: their
+    // `sig` slice already holds the value they computed at the tick, so
+    // skipping them IS the zero-order hold, and a downstream continuous node
+    // reads that held value exactly as it did before.
+    o_ << "\n// The same order, restricted to the nodes that may move WITHIN a step\n";
+    o_ << "// (§10.5). A held node is absent, not stale: `sig` still carries the\n";
+    o_ << "// value it published at the tick.\n";
+    o_ << "inline void Sim::output_pass_minor() {\n";
+    bool any = false;
+    for (std::size_t i : m_.order) {
+        const Leaf& leaf = m_.leaves[i];
+        const ast::Method* out = leaf.node->method(ast::Method::Which::Output);
+        if (!out || !minor_step_output(leaf)) continue;
+        any = true;
+        o_ << "    " << leaf.ident << ".output(" << in_braces(leaf, out) << ", sig."
+           << leaf.ident << ");\n";
+    }
+    if (!any) o_ << "    // every node is zero-order held across the step\n";
     o_ << "}\n";
 }
 
 void Emitter::sim_derivatives() {
     o_ << "\n// The external solver's entry point: reads x, fills xd. Sim owns both,\n";
     o_ << "// so a solver with its own vector does one memcpy each way per call.\n";
-    o_ << "inline void Sim::derivatives(double t) {\n    (void)t;\n";
-    o_ << "    output_pass(se_tick_);\n";
+    o_ << "inline void Sim::derivatives(double t) {\n";
+    o_ << "    se_run_.now = t;   // the minor-step instant, §10.5\n";
+    o_ << "    output_pass_minor();\n";
     for (const Leaf& leaf : m_.leaves) {
         const ast::Method* r = leaf.node->method(ast::Method::Which::Derivative);
         if (!r || !leaf.has_continuous()) continue;
@@ -1615,8 +1669,12 @@ void Emitter::sim_record() {
     o_ << "\ninline void Sim::record_row() {\n    se_rec_.row(se_time_, {";
     for (std::size_t i = 0; i < m_.record.signals.size(); ++i) {
         if (i) o_ << ",";
-        o_ << "\n                       static_cast<double>(" << m_.record.signals[i].expr
-           << ")";
+        // §13.5 — a port path that ended on a setting could not be rendered at
+        // elaboration, because a setting reference needs an identifier this
+        // stage assigns. Everything else arrives already written.
+        const RecordedSignal& s = m_.record.signals[i];
+        o_ << "\n                       static_cast<double>("
+           << (s.code.empty() ? s.expr : render_expr(s.code)) << ")";
     }
     o_ << "});\n}\n";
 }
@@ -1646,6 +1704,7 @@ void Emitter::sim_run() {
     }
     o_ << "    apply_initial_conditions();\n";
     o_ << "    se_tick_ = 0;\n    se_time_ = 0.0;\n    se_done_ = false;\n";
+    o_ << "    se_run_ = se_rt::RunState{0.0, step_seconds, 0};   // §10.5\n";
     o_ << "    se_inited_ = 0;\n";
     if (m_.record.present) o_ << "    record_open();\n";
     o_ << "    se_rt::realtime().start();\n";
@@ -1672,6 +1731,8 @@ void Emitter::sim_run() {
     o_ << "inline void Sim::tick() {\n";
     o_ << "    se_time_ = static_cast<double>(se_tick_) * step_seconds;\n";
     o_ << "    se_rt::sim_time() = se_time_;\n";
+    o_ << "    se_run_.now = se_time_;   // §10.5 — the tick instant; derivatives()\n";
+    o_ << "    se_run_.tick = se_tick_;  // moves it again at every minor step\n";
     o_ << "    output_pass(se_tick_);\n";
     o_ << "    if (!se_rt::control().halted()) {\n";
     if (any_discrete) o_ << "        next_tick(se_tick_);\n";

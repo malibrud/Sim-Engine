@@ -7,8 +7,19 @@
 //
 // Computed from elapsed time rather than accumulated into the output, so the
 // value never drifts: an accumulator adds `slope * ts` once per step and
-// carries every rounding with it, while `slope * (t - t_start)` is one
-// multiply against a clock that is itself exact to the step count.
+// carries every rounding with it, while `slope * (t - t_start)` is one multiply
+// against `sim.time()`, which the engine derives from the tick count and is
+// therefore exact to the step (§10.5).
+//
+// This node carried its own `discrete t` clock until `sim.time()` existed. It
+// no longer needs one, and it no longer has one: the state was a duplicate of
+// a number the engine already held, and it showed up in the configuration
+// schema (§15.6) as a knob nobody wanted. `t_start` is how you shift the ramp.
+//
+// Still DISCRETE, and deliberately: it declares a `rate`, so its output is
+// zero-order held between sample instants and `sim.time()` is that instant,
+// not the solver's minor step. Feeding an RK4 plant from here hands it a
+// staircase. `se.sig.ct.Ramp` is the twin that does not.
 package se.sig.src;
 
 node Ramp {
@@ -24,16 +35,8 @@ node Ramp {
 
     outputs { y: double(U); }
 
-    states { discrete t: double(s) = 0.0; }
-
-    vars { ts: double(s); }
-
-    init() { var.ts = 1.0 / param.rate; }
-
     output() {
-        const double e = state.t - param.t_start;
+        const double e = sim.time() - param.t_start;
         out.y = e > 0.0 ? param.initial + param.slope * e : param.initial;
     }
-
-    next() { next.t = state.t + var.ts; }
 }

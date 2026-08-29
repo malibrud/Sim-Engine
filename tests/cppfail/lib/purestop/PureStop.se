@@ -1,0 +1,30 @@
+// A model that MUST NOT COMPILE. It lives outside tests/emit so the normal
+// "generated C++ compiles clean" loop does not sweep it up.
+//
+// §10.5 made `sim` readable from every body. The whole design rests on that
+// widening the surface WITHOUT widening it for `sim.stop`/`sim.abort`, which
+// §10.2 confines to the mutating methods: a leaf holds a plain `se_rt::RunView`
+// member, and `preamble()` shadows it with an `se_rt::RunControl` in `init()`
+// and `on_step()` only.
+//
+// Nothing else in the suite protects that. A refactor that injected
+// `RunControl` everywhere -- or that made `stop` a member of `RunView` --
+// would leave every other test green while quietly legalising a halt inside a
+// method that runs four times per step at trial states the trajectory never
+// visits. So this case asserts the negative directly, by compiling it and
+// requiring the failure.
+//
+// The `out.y` line is the positive half of the same assertion: `sim.time()`
+// in a pure method MUST compile. The runner therefore requires the failure to
+// name `stop` and `RunView` and to say nothing about `time` -- a compile that
+// fails for some other reason is not this test passing.
+package purestop;
+
+node PureStop {
+    outputs { y: double(-); }
+
+    output() {
+        sim.stop("halting from a pure method is not legal");   // must NOT compile
+        out.y = sim.time();                                    // must compile
+    }
+}

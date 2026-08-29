@@ -1,0 +1,67 @@
+// A sine wave evaluated in closed form at the solver's own time:
+// y = offset + amplitude * sin(2*pi*f*t + phase).
+//
+// This is the `ct` twin `se.sig.src` spent its whole life without. The
+// difference is one line — `sim.time()` instead of a state — and it is worth a
+// package of its own because of what it does to accuracy.
+//
+// `src.Sine` is DISCRETE: its output is zero-order held across a base step, so
+// a plant integrating it sees a staircase, and RK4 collapses to first order
+// across that path no matter how good the integrator is. This node declares no
+// `rate` and holds no state, so §10.5 re-evaluates its `output()` at every
+// minor step and `sim.time()` returns the instant the solver is actually at.
+// Feeding an RK4 plant from here keeps RK4's order.
+//
+// ── WHAT IT COSTS ────────────────────────────────────────────────────────────
+// `src.Sine` accumulates NORMALISED PHASE and wraps it, for reasons its own
+// header sets out: the increment carries no 2*pi, wrapping is one exact floor
+// subtraction, and precision does not decay because the accumulator never
+// holds more than one turn. `sin(2*pi*f*t)` has none of that. As `t` grows the
+// argument eats mantissa bits, so a long run drifts out of phase with its own
+// reference — at 1 kHz and an hour of sim time the argument is past 2e7 rad
+// and roughly nine significant digits of the phase survive.
+//
+// That is not a defect to be fixed here; it is the price of being continuous.
+// A wrapped accumulator can only advance at sample instants, and a value that
+// only moves at sample instants is exactly what "discrete" means. Nor can this
+// node offer `src.Sine`'s mid-cycle start through the IC channel (§13.4) — it
+// has no state to override. Shift it with `phase`.
+//
+// Reach for this one when the sine is part of the plant: a forcing function, a
+// disturbance, a shaker input. Reach for `se.sig.src.Sine` when it is part of
+// the signal processing, when the run is long, or when a sampled source is
+// what you actually mean.
+package se.sig.ct;
+
+node Sine {
+    units { U; }
+
+    settings {
+        amplitude: double(U)   = 1.0;
+        f:         double(Hz)  = 1.0;
+        phase:     double(rad) = 0.0;  // radians is the only declarable
+                                       // angle unit (§4.5)
+        offset: double(U) = 0.0;
+    }
+
+    outputs { y: double(U); }
+
+    // No `rate` and no state: that pair is what puts this node in the
+    // minor-step output pass (§10.5). Adding either would silently make it
+    // zero-order held again and undo the point of the node.
+    vars { w: double(rad/s); }
+
+    // The 2*pi lives here, on erased units, for `src.Sine`'s reason: once angle
+    // is a base dimension, `(Hz)` and `(rad/s)` are genuinely incompatible and
+    // `2*pi*f` cannot be written as a derived setting. It is honest arithmetic
+    // on erased units (§4.4), so it belongs in a body.
+    //
+    // There is no Nyquist warning to give, unlike every source in `se.sig.src`.
+    // This node has no sample rate to alias against; what limits it is the
+    // solver's step, and that is the model's business rather than the node's.
+    init() { var.w = 6.283185307179586 * param.f; }
+
+    output() {
+        out.y = param.offset + param.amplitude * std::sin(var.w * sim.time() + param.phase);
+    }
+}

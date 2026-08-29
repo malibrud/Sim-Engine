@@ -16,7 +16,6 @@
           (none)
 
 [state.discrete]          # Sim::dis; offsets from Sim::discrete_map()
-          ramp.t                  s           double
           hp.w1                   -           double
           hp.w2                   -           double
           acc.w1                  -           double

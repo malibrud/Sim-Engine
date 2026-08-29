@@ -16,8 +16,6 @@
           (none)
 
 [state.discrete]          # Sim::dis; offsets from Sim::discrete_map()
-          n_st.t                  s           double
-          n_rp.t                  s           double
           n_sn.u                  -           double
           n_sq.u                  -           double
           n_tr.u                  -           double
