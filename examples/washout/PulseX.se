@@ -1,0 +1,20 @@
+package washout;
+
+use se.math;
+use se.sig;
+
+node PulseX {
+    settings {
+    }
+
+    structure {
+        node pulse: sig.src.RectPulse (m/s^2);
+        node ain: math.Merge3(m/s^2);
+        node wash: washout.ClassicalFromScratch {
+        };
+
+        pulse --> ain.x;
+        0.0 --> ain.y, ain.z;
+        ain --> wash;
+    }
+}

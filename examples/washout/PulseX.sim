@@ -1,0 +1,25 @@
+sim Washout {
+    root: washout.PulseX {};
+
+    step:     1 (ms);
+    solver:   rk4;
+    duration: 20 (s);
+
+    record: {
+        file:  "washout.csv";
+        every: 10;           // 100 Hz in the file, off a 1 kHz base step
+
+        signals {
+            pulse.y;
+            wash.aout.x;
+            // sim.utilization;
+            // sim.overrun_pct;
+        }
+    }
+
+    log: {
+        file:  "washout.log";
+        level: info;
+        levels { tc: debug; }
+    }
+}

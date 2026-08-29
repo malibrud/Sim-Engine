@@ -1,0 +1,21 @@
+package se.sig.src;
+
+node RectPulse {
+    units { U; }
+
+    settings {
+        t_start: double(s) = 0.0;
+        amplitude: double(U) = 1.0;
+        t_duration: double(s) = 1.0;
+    }
+
+    outputs { y: double(U); }
+
+    output() { 
+        auto t = sim.time();
+        auto ts = param.t_start;
+        auto tf = ts + param.t_duration;
+        if ( t >= ts && t < tf ) out.y = param.amplitude;
+        else                     out.y = 0.0;
+    }
+}
