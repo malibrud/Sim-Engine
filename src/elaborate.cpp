@@ -1923,6 +1923,7 @@ void Elaborator::collect_wires(const NodeInfo* def, const std::string& path, Mod
 
             Hop hop;
             hop.source = skey;
+            hop.dest_type = df.type;
             hop.loc = d.loc;
             hop.src = &src;
             if (!port_conversion(eff, df, src, d.loc, hop.scale, hop.offset, hop.field_convs))
@@ -1946,55 +1947,98 @@ void Elaborator::collect_wires(const NodeInfo* def, const std::string& path, Mod
     }
 }
 
+bool Elaborator::trace_source(const std::string& key, InputSource& in,
+                              std::string& dead_end) const {
+    std::vector<const Hop*> chain;
+    std::string k = key;
+    for (std::size_t guard = 0; guard <= producers_.size(); ++guard) {
+        auto it = producers_.find(k);
+        if (it == producers_.end()) break;
+        chain.push_back(&it->second);
+        k = it->second.source;
+    }
+    dead_end = k;
+
+    auto out_it = leaf_outputs_.find(k);
+    auto par_it = setting_sources_.find(k);
+    auto lit_it = literal_sources_.find(k);
+    if (out_it != leaf_outputs_.end()) {
+        in.kind = InputSource::Kind::Leaf;
+        in.producer = out_it->second.first;
+        in.port = out_it->second.second;
+    } else if (par_it != setting_sources_.end()) {
+        // §6.9.2 — the chain terminates on a setting. No producer, so this adds
+        // no edge to the §8.5 sort and no storage: the reference is rendered
+        // where the value is read.
+        in.kind = InputSource::Kind::Param;
+        in.expr = ec_param(par_it->second.owner, par_it->second.name);
+    } else if (lit_it != literal_sources_.end()) {
+        // §6.9.2 — the chain terminates on a literal. Same shape as a setting
+        // source, and folded rather than referenced: there is nothing to
+        // override, so the value is finished here. The affine fold below is
+        // applied to it directly, which is why `converts()` is false by the
+        // time the emitter sees it.
+        in.kind = InputSource::Kind::Const;
+        in.value = lit_it->second;
+    } else if (root_inputs_.count(k) != 0) {
+        // The chain reached the root's own boundary. `k == key` when the chain
+        // is empty, so the leaf that IS the root is the same case.
+        in.kind = InputSource::Kind::Boundary;
+        in.boundary = "sig.in." + k;
+    } else {
+        return false;
+    }
+
+    double s = 1.0, o = 0.0;
+    for (std::size_t j = chain.size(); j-- > 0;) {
+        s = chain[j]->scale * s;
+        o = chain[j]->scale * o + chain[j]->offset;
+    }
+    if (in.kind == InputSource::Kind::Const) {
+        // §6.9.2 — folded, not referenced. Applying the composed chain to the
+        // value here rather than at stage 6 is what makes
+        // `0.0 (mm/s^2) --> a --> b` emit one number instead of a product of
+        // hop constants.
+        in.value = s * in.value + o;
+        s = 1.0;
+        o = 0.0;
+    }
+    in.scale = s;
+    in.offset = o;
+
+    // A record's fields compose the same way, element-wise. Every hop on one
+    // chain carries the same record type (port_conversion has already rejected
+    // any that does not), so the vectors agree in length; a hop that reported
+    // none simply leaves the identity.
+    for (std::size_t j = chain.size(); j-- > 0;) {
+        const std::vector<FieldConv>& hop = chain[j]->field_convs;
+        if (hop.empty()) continue;
+        if (in.field_convs.empty()) in.field_convs.resize(hop.size());
+        for (std::size_t f = 0; f < hop.size() && f < in.field_convs.size(); ++f) {
+            in.field_convs[f].scale = hop[f].scale * in.field_convs[f].scale;
+            in.field_convs[f].offset =
+                hop[f].scale * in.field_convs[f].offset + hop[f].offset;
+        }
+    }
+    return true;
+}
+
 void Elaborator::resolve_inputs(Model& m) {
-    std::set<std::string> root_inputs;
-    for (const Field& f : m.root->inputs) root_inputs.insert(f.name);
+    root_inputs_.clear();
+    for (const Field& f : m.root->inputs) root_inputs_.insert(f.name);
 
     for (std::size_t i = 0; i < m.leaves.size(); ++i) {
         Leaf& leaf = m.leaves[i];
         for (const Field& port : leaf.node->inputs) {
             const std::string key = sub(leaf.path, port.name);
 
-            std::vector<const Hop*> chain;
-            std::string k = key;
-            for (std::size_t guard = 0; guard <= producers_.size(); ++guard) {
-                auto it = producers_.find(k);
-                if (it == producers_.end()) break;
-                chain.push_back(&it->second);
-                k = it->second.source;
-            }
-
             InputSource in;
-            auto out_it = leaf_outputs_.find(k);
-            auto par_it = setting_sources_.find(k);
-            auto lit_it = literal_sources_.find(k);
-            if (out_it != leaf_outputs_.end()) {
-                in.kind = InputSource::Kind::Leaf;
-                in.producer = out_it->second.first;
-                in.port = out_it->second.second;
-            } else if (par_it != setting_sources_.end()) {
-                // §6.9.2 — the chain terminates on a setting. No producer, so
-                // this adds no edge to the §8.5 sort and no storage: the
-                // reference is rendered where the value is read.
-                in.kind = InputSource::Kind::Param;
-                in.expr = ec_param(par_it->second.owner, par_it->second.name);
-            } else if (lit_it != literal_sources_.end()) {
-                // §6.9.2 — the chain terminates on a literal. Same shape as a
-                // setting source, and folded rather than referenced: there is
-                // nothing to override, so the value is finished here. The
-                // affine fold below is applied to it directly, which is why
-                // `converts()` is false by the time the emitter sees it.
-                in.kind = InputSource::Kind::Const;
-                in.value = lit_it->second;
-            } else if (chain.empty() ? root_inputs.count(key) != 0
-                                     : root_inputs.count(k) != 0) {
-                in.kind = InputSource::Kind::Boundary;
-                in.boundary = "sig.in." + (chain.empty() ? key : k);
-            } else {
+            std::string dead_end;
+            if (!trace_source(key, in, dead_end)) {
                 // §6.3 — there is no implicit zero.
                 std::vector<Attachment> att;
-                if (!chain.empty())
-                    att.push_back(note("the wire reaches `" + k +
+                if (dead_end != key)
+                    att.push_back(note("the wire reaches `" + dead_end +
                                        "`, which nothing drives"));
                 att.push_back(note("an unconnected input is an error: there is no "
                                    "implicit zero (§6.3)"));
@@ -2002,38 +2046,6 @@ void Elaborator::resolve_inputs(Model& m) {
                             "input `" + key + "` is not connected", "declared here", att);
                 failed_ = true;
                 continue;
-            }
-
-            double s = 1.0, o = 0.0;
-            for (std::size_t j = chain.size(); j-- > 0;) {
-                s = chain[j]->scale * s;
-                o = chain[j]->scale * o + chain[j]->offset;
-            }
-            if (in.kind == InputSource::Kind::Const) {
-                // §6.9.2 — folded, not referenced. Applying the composed chain
-                // to the value here rather than at stage 6 is what makes
-                // `0.0 (mm/s^2) --> a --> b` emit one number instead of a
-                // product of hop constants.
-                in.value = s * in.value + o;
-                s = 1.0;
-                o = 0.0;
-            }
-            in.scale = s;
-            in.offset = o;
-
-            // A record's fields compose the same way, element-wise. Every hop
-            // on one chain carries the same record type (port_conversion has
-            // already rejected any that does not), so the vectors agree in
-            // length; a hop that reported none simply leaves the identity.
-            for (std::size_t j = chain.size(); j-- > 0;) {
-                const std::vector<FieldConv>& hop = chain[j]->field_convs;
-                if (hop.empty()) continue;
-                if (in.field_convs.empty()) in.field_convs.resize(hop.size());
-                for (std::size_t f = 0; f < hop.size() && f < in.field_convs.size(); ++f) {
-                    in.field_convs[f].scale = hop[f].scale * in.field_convs[f].scale;
-                    in.field_convs[f].offset =
-                        hop[f].scale * in.field_convs[f].offset + hop[f].offset;
-                }
             }
             leaf.inputs[port.name] = in;
         }
@@ -2106,6 +2118,49 @@ void Elaborator::resolve_boundary(const NodeInfo* root, Model& m) {
 //  Recording and logging
 // ═════════════════════════════════════════════════════════════════════════════
 
+namespace {
+
+// How many scalars a type contributes when a record is flattened — one for a
+// scalar, and the sum of its fields for a record. This is the same depth-first
+// declaration order `port_conversion` lays `FieldConv`s out in, which is what
+// lets a field path be turned into an index into them.
+std::size_t scalar_leaves(const Type& t) {
+    if (!t.is_record || !t.record) return 1;
+    std::size_t n = 0;
+    for (const Field& f : t.record->fields) n += scalar_leaves(field_type(t, f));
+    return n;
+}
+
+// §13.5 — walks `t0` down `segs`, which name fields of a record. Yields the
+// scalar arrived at, its position among the type's flattened scalars, and the
+// C++ member suffix that reaches it. False when a segment names no field, or
+// when the walk ends on a record: a record is not a column.
+bool field_walk(const Type& t0, const std::vector<std::string>& segs, Type& out,
+                std::size_t& flat, std::string& suffix) {
+    Type t = t0;
+    flat = 0;
+    suffix.clear();
+    for (const std::string& seg : segs) {
+        if (!t.is_record || !t.record) return false;
+        const Field* hit = nullptr;
+        for (const Field& f : t.record->fields) {
+            if (f.name == seg) {
+                hit = &f;
+                break;
+            }
+            flat += scalar_leaves(field_type(t, f));
+        }
+        if (!hit) return false;
+        suffix += "." + seg;
+        t = field_type(t, *hit);
+    }
+    if (t.is_record) return false;
+    out = t;
+    return true;
+}
+
+}  // namespace
+
 void Elaborator::resolve_record(const ast::RecordBlock& block, const Source& src,
                                 Model& m) {
     m.record.present = true;
@@ -2131,6 +2186,149 @@ void Elaborator::resolve_record(const ast::RecordBlock& block, const Source& src
                             {note("`sim.utilization` and `sim.overrun_pct` (§13.6)")});
                 failed_ = true;
                 continue;
+            }
+            m.record.signals.push_back(std::move(s));
+            continue;
+        }
+
+        // §13.5 — a PORT, at any level of nesting. A port is not storage once
+        // the hierarchy is flat: a composite evaporates, and a wire coincides
+        // with the producer's member (§15.3). So the path is answered by
+        // chasing the very chain a leaf's `In` view is built from, and the
+        // column carries what the node at that port actually reads — the
+        // producer's storage with every hop's conversion applied, reported in
+        // the unit the port itself declares.
+        //
+        // No precedence rule is needed against the accessor path below: §6.11
+        // puts instance names and port names in one namespace, and states
+        // are separate from OUTPUTS only, so no port path can also be a
+        // leaf-member path. The one thing this branch must not claim is a
+        // leaf's own output, which is real storage the accessor path reads
+        // directly.
+        std::string port_owner;
+        std::string port_name;
+        std::size_t port_at = 0;
+        const Field* port_field = nullptr;
+        // An index may sit on the port segment itself (`k.v[0]`) as easily as on
+        // a field of it, and both are the same mistake. It comes off here, so
+        // the lookup below sees `v` either way and can say what is actually
+        // wrong instead of failing to find a port called `v[0]`.
+        bool port_indexed = false;
+        for (std::size_t n = p.segs.size(); n-- > 0;) {
+            std::string cand;
+            for (std::size_t i = 0; i < n; ++i) cand = sub(cand, p.segs[i]);
+            auto it = instances_.find(cand);
+            if (it == instances_.end()) continue;
+            std::string name = p.segs[n];
+            std::size_t ix = 0;
+            std::string stem;
+            const bool indexed = split_index(name, stem, ix);
+            if (indexed) name = stem;
+            const Field* f = it->second->input(name);
+            const bool is_out = f == nullptr;
+            if (!f) f = it->second->output(name);
+            if (!f) continue;
+            if (is_out && leaf_by_path_.count(cand)) break;
+            port_owner = cand;
+            port_name = name;
+            port_at = n;
+            port_field = f;
+            port_indexed = indexed;
+            break;
+        }
+
+        if (port_field) {
+            const std::string key = sub(port_owner, port_name);
+            std::vector<std::string> tail(p.segs.begin() + port_at + 1, p.segs.end());
+            std::string stem;
+            std::size_t ix = 0;
+            if (port_indexed || (!tail.empty() && split_index(tail.back(), stem, ix))) {
+                diag_.error("SE0304", src, p.loc, "`" + path + "` is not an array state",
+                            "unexpected index",
+                            {note("a port may not be array-shaped (SE0234)")});
+                failed_ = true;
+                continue;
+            }
+
+            // §6.2a — the hop carries the port's SUBSTITUTED type, which for a
+            // unit-parametric leaf is the only place the real unit exists. An
+            // undriven port has no hop, and is about to be an error anyway.
+            auto hop_it = producers_.find(key);
+            const Type& pt =
+                hop_it != producers_.end() ? hop_it->second.dest_type : port_field->type;
+
+            Type scalar;
+            std::size_t flat = 0;
+            std::string suffix;
+            if (!field_walk(pt, tail, scalar, flat, suffix)) {
+                diag_.error("SE0304", src, p.loc,
+                            "`" + path + "` does not name a scalar signal",
+                            pt.is_record && tail.empty() ? "a record cannot be a CSV column"
+                                                         : "no such field");
+                failed_ = true;
+                continue;
+            }
+
+            InputSource in;
+            std::string dead_end;
+            if (!trace_source(key, in, dead_end)) {
+                // §13.5 — unlike the §15.6 manifest, which may quietly omit a
+                // root output nothing drives, a recorded signal names a column
+                // that has to hold something.
+                std::vector<Attachment> att;
+                if (dead_end != key)
+                    att.push_back(note("the wire reaches `" + dead_end +
+                                       "`, which nothing drives"));
+                att.push_back(note("a recorded port is read through its producer, "
+                                   "so an undriven one names no value (§13.5)"));
+                diag_.error("SE0304", src, p.loc, "nothing drives `" + key + "`",
+                            "undriven port", att);
+                failed_ = true;
+                continue;
+            }
+
+            // A record's conversion is per field; a scalar's is the hop's. The
+            // two never both apply, because `port_conversion` leaves the whole-
+            // port scale at identity for a record.
+            double sc = in.scale, of = in.offset;
+            if (!in.field_convs.empty() && flat < in.field_convs.size()) {
+                sc = in.field_convs[flat].scale;
+                of = in.field_convs[flat].offset;
+            }
+
+            RecordedSignal s;
+            s.path = path;
+            s.unit = scalar.unit;
+            if (in.kind == InputSource::Kind::Param) {
+                // §6.9.2 — the chain ended on a setting, which is a live member
+                // (§6.2b): the column shows the value configuration settled on,
+                // so an override moves it. A record setting's leaves are
+                // separate scalars, so the field path spells one of them.
+                auto ps = setting_sources_.find(dead_end);
+                ExprCode c = ec_param(ps->second.owner, ps->second.name + suffix);
+                if (sc != 1.0 || of != 0.0) {
+                    ExprCode w = ec_lit("(");
+                    w.insert(w.end(), c.begin(), c.end());
+                    ExprCode t = ec_lit(") * " + cpp_number(sc) + " + " + cpp_number(of));
+                    w.insert(w.end(), t.begin(), t.end());
+                    c = std::move(w);
+                }
+                s.code = std::move(c);
+            } else {
+                std::string base;
+                if (in.kind == InputSource::Kind::Const) {
+                    // Already folded through the whole chain by `trace_source`.
+                    base = cpp_number(in.value);
+                    sc = 1.0;
+                    of = 0.0;
+                } else if (in.kind == InputSource::Kind::Boundary) {
+                    base = in.boundary + suffix;
+                } else {
+                    base = "sig." + m.leaves[in.producer].ident + "." + in.port + suffix;
+                }
+                s.expr = (sc == 1.0 && of == 0.0)
+                             ? base
+                             : "(" + base + ") * " + cpp_number(sc) + " + " + cpp_number(of);
             }
             m.record.signals.push_back(std::move(s));
             continue;

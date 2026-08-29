@@ -1,0 +1,84 @@
+// §13.5 — a PORT is addressable at any level of nesting, input or output.
+//
+// A port is not storage once the hierarchy is flat: a composite evaporates and
+// a wire coincides with the producer's member (§15.3). So every path here is
+// answered by chasing the producer chain to whatever actually holds the value
+// and applying the conversion the consuming node sees — which is the whole
+// reason a port path is worth having over the producing leaf's own name. It
+// reports the unit the port declares, and it keeps reporting the right number
+// when the wire between the two ends converts.
+//
+// Every recorded column below is a different integer or half, and every one is
+// wrong by a factor of a thousand (or names a different field of a `Vec3`) if
+// the chain-walk, the per-field conversion, or the flattened field index is
+// wrong. There is no value here a broken implementation lands on by accident.
+//
+//   y              8.0   the ROOT's own output port
+//   inner.vout     7.5   a composite output, one level down
+//   inner.ain      0.5   a composite input, driven from outside and converted
+//   inner.sp.v.x   1.0   a leaf input of record type, field 0, converted
+//   inner.sp.v.z   3.0   a leaf input of record type, field 2, converted
+//   inner.s2.b     4.0   a leaf input whose chain ends on a SETTING (§6.9.2)
+//   sum.b          0.5   a leaf input whose chain ends on a LITERAL (§6.9.2)
+package portpath;
+
+use se.math;
+
+node PortPath {
+    outputs { y: double(m); }
+
+    structure {
+        node half : Half {};
+        node inner : Inner {};
+        node sum : math.Sum (m) {};
+
+        // `(mm)` into `(m)`: the composite's input port converts, so
+        // `inner.ain` must read 0.5 and not 500.
+        half --> inner;
+
+        inner --> sum.a;
+        0.5 (m) --> sum.b;
+        sum --> self;
+    }
+}
+
+node Inner {
+    settings { bias: double(mm) = 4000.0; }
+
+    inputs  { ain:  double(m); }
+    outputs { vout: double(m); }
+
+    structure {
+        node mm : Millimetres {};
+        // Bound `(m)` while `mm.v` is bound `(mm)`, so the record wire converts
+        // per field (§5.2) and every field of `sp.v` is a thousandth of what
+        // the producer stores.
+        node sp : math.Split3 (m) {};
+        node s1 : math.Sum (m) {};
+        node s2 : math.Sum (m) {};
+        node s3 : math.Sum (m) {};
+
+        mm --> sp;
+        sp.x --> s1.a;          // 1
+        sp.y --> s1.b;          // 2      -> s1.y = 3
+        s1 --> s2.a;
+        param.bias --> s2.b;    // 4      -> s2.y = 7
+        s2 --> s3.a;
+        self --> s3.b;          // 0.5    -> s3.y = 7.5
+        s3 --> self;
+    }
+}
+
+node Millimetres {
+    outputs { v: math.Vec3(mm); }
+    output() {
+        out.v.x = 1000.0;
+        out.v.y = 2000.0;
+        out.v.z = 3000.0;
+    }
+}
+
+node Half {
+    outputs { h: double(mm); }
+    output() { out.h = 500.0; }
+}

@@ -1,0 +1,17 @@
+// §13.5 — the four ways a port path fails. See lib/portbad/PortBad.se.
+sim PortBad {
+    root: portbad.PortBad {};
+
+    step:     1 (ms);
+    duration: 1 (ms);
+
+    record: {
+        file: "portbad.csv";
+        signals {
+            k.e;        // declared, driven by nothing
+            k.v;        // a whole record is not a column
+            k.v.w;      // no such field
+            k.v[0];     // a port may not be array-shaped
+        }
+    }
+}

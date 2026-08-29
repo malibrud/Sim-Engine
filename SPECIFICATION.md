@@ -2519,6 +2519,7 @@ instance-instance-…-name form.
 ```
 front.left.mass              // a setting three levels down
 plant.out.velocity           // a qualified signal
+wash.aout.x                  // a port of a composite, and a field of it
 sim.overrun_pct              // an engine metric
 ```
 
@@ -2614,6 +2615,29 @@ record: {
   same name (§6.11).
 - Recording internals directly was chosen over outputs-only recording, which
   would force boilerplate pass-through outputs just to observe a state.
+- **A port is a signal at every level of nesting**, input or output, on a
+  composite as readily as on a leaf — `wash.aout.x` names the composite's own
+  output where `wash.sfSum.y.x` names the leaf that happens to drive it. Both
+  are legal and both are the same column; the first is the one the author of
+  `wash` wrote down, and requiring the second would make every recording depend
+  on `wash`'s internals. The bare form needs no accessor and admits no ambiguity:
+  §6.11 puts instance names and port names in **one** namespace, so a port path
+  can never also be a leaf-member path.
+- A port is **not storage**. A composite evaporates at elaboration and a wire
+  coincides with the producer's member (§15.3), so a port path is resolved by
+  chasing the producer chain — exactly the walk that builds a leaf's `in` view —
+  and the column reports **what the node at that port actually reads**: the
+  producer's storage with every hop's conversion applied, in the unit the *port*
+  declares. Recording `wash.aout.x` where the wire into it converts therefore
+  reads metres because `aout` says metres, not the producer's millimetres.
+- The chain may end somewhere other than a signal, and all of them record. A port
+  driven by a **setting** (§6.9.2) yields the setting, which is a live member: an
+  override moves the column, so the file shows the value the run actually used. A
+  port driven by a **literal** yields the folded number. A root input yields the
+  boundary the host writes.
+- An **undriven** port is `SE0304` when recorded. §15.6 may quietly omit a root
+  output nothing drives — nobody has to read a manifest row — but a column has to
+  hold something, so here silence is not available.
 - **Records at the base step by default**; the first column is `time (s)`.
   `every: N` decimates the file.
 - A signal slower than the recording rate is **held (ZOH)** — which is its actual

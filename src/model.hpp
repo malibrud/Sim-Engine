@@ -378,6 +378,12 @@ struct BoundaryOut {
 struct RecordedSignal {
     std::string path;                  // as written
     std::string expr;                  // a C++ expression in Sim scope
+    // §13.5 — a port path whose chain terminates on a setting (§6.9.2) cannot be
+    // rendered here, for the same reason `InputSource::expr` cannot: a setting
+    // reference needs the owning node's C++ identifier, and those are assigned
+    // only in stage 6. When this is non-empty it IS the column, and `expr` is
+    // unused.
+    ExprCode code;
     Unit unit;
 };
 

@@ -1,0 +1,39 @@
+// §13.5 — the ways a port path fails. Every node here is reachable and every
+// wire is legal; the mistakes are all in `portbad.sim`'s `signals` block, which
+// is where a path is written.
+package portbad;
+
+use se.math;
+
+node PortBad {
+    outputs { y: double(m); }
+
+    structure {
+        node k : Kid {};
+        k.d --> self;
+    }
+}
+
+// `e` is declared and nothing drives it, which is legal for as long as nothing
+// reads it either: §6.3's "no implicit zero" is a rule about INPUTS. Recording
+// it is the one thing that turns it into an error, because a column has to hold
+// something.
+node Kid {
+    outputs { d: double(m);  e: double(m);  v: math.Vec3(m); }
+
+    structure {
+        node src : Source {};
+        src.d --> self.d;
+        src.v --> self.v;
+    }
+}
+
+node Source {
+    outputs { d: double(m);  v: math.Vec3(m); }
+    output() {
+        out.d = 1.0;
+        out.v.x = 1.0;
+        out.v.y = 2.0;
+        out.v.z = 3.0;
+    }
+}

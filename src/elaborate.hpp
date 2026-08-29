@@ -16,6 +16,7 @@
 
 #include <map>
 #include <memory>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -193,6 +194,11 @@ private:
         // chain carries the same record type, so these compose element-wise
         // exactly as `scale`/`offset` do for a scalar.
         std::vector<FieldConv> field_convs;
+        // §13.5 — the DESTINATION port's declared type, unit already
+        // substituted. A recorded port path reports the unit of the port it
+        // names, not of the storage it lands on, and after flattening this is
+        // the only place that unit survives.
+        Type dest_type;
         Loc loc;
         const Source* src = nullptr;
     };
@@ -210,6 +216,15 @@ private:
     bool port_conversion(const Field& from, const Field& to, const Source& src, Loc loc,
                          double& scale, double& offset, std::vector<FieldConv>& field_convs);
     void resolve_inputs(Model& m);
+    // Chases the producer chain from a wire-DESTINATION key to whatever
+    // actually holds the value, composing every hop's conversion on the way.
+    // One walk serves both callers, because they ask the same question: a port
+    // is not storage after flattening — a composite evaporates and a wire
+    // coincides with the producer's member (§15.3) — so "what is at this port"
+    // is always "what does this chain end on". `dead_end` receives the last key
+    // reached, which is what a `nothing drives this` diagnostic has to name.
+    bool trace_source(const std::string& key, InputSource& out,
+                      std::string& dead_end) const;
     void resolve_boundary(const NodeInfo* root, Model& m);
 
     // ─── Recording and logging ───────────────────────────────────────────────
@@ -235,6 +250,10 @@ private:
     // site's), so for one the source and destination units coincide.
     std::map<std::string, double> literal_sources_;
     std::map<std::string, std::size_t> leaf_by_path_;
+    // The root's own inputs, by bare name — where a producer chain terminates
+    // when the host drives it (§15.6). Filled by `resolve_inputs`, which runs
+    // before `resolve_record` reads it.
+    std::set<std::string> root_inputs_;
     // Every instantiated node, composites included, so that an override that
     // landed on nothing can be told what it nearly hit.
     std::map<std::string, const NodeInfo*> instances_;

@@ -1,0 +1,22 @@
+// §13.5 — ports are addressable at any level of nesting. See
+// lib/portpath/PortPath.se for what each column has to read and why.
+sim PortPath {
+    root: portpath.PortPath {};
+
+    step:     1 (ms);
+    solver:   rk4;
+    duration: 3 (ms);
+
+    record: {
+        file: "portpath.csv";
+        signals {
+            y;
+            inner.vout;
+            inner.ain;
+            inner.sp.v.x;
+            inner.sp.v.z;
+            inner.s2.b;
+            sum.b;
+        }
+    }
+}

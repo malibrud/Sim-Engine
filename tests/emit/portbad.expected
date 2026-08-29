@@ -1,0 +1,27 @@
+﻿error[SE0304]: nothing drives `k.e`
+  --> tests/emit/portbad.sim:11:13
+   |
+11 |             k.e;        // declared, driven by nothing
+   |             ^^^ undriven port
+   = note: a recorded port is read through its producer, so an undriven one names no value (§13.5)
+
+error[SE0304]: `k.v` does not name a scalar signal
+  --> tests/emit/portbad.sim:12:13
+   |
+12 |             k.v;        // a whole record is not a column
+   |             ^^^ a record cannot be a CSV column
+
+error[SE0304]: `k.v.w` does not name a scalar signal
+  --> tests/emit/portbad.sim:13:13
+   |
+13 |             k.v.w;      // no such field
+   |             ^^^^^ no such field
+
+error[SE0304]: `k.v[0]` is not an array state
+  --> tests/emit/portbad.sim:14:13
+   |
+14 |             k.v[0];     // a port may not be array-shaped
+   |             ^^^^^^ unexpected index
+   = note: a port may not be array-shaped (SE0234)
+
+4 errors emitted
