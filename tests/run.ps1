@@ -40,6 +40,24 @@ if (-not (Test-Path $sec)) {
     exit 2
 }
 
+# sec.exe writes UTF-8: it is built with /utf-8, and its diagnostics carry
+# section signs and em-dashes. PowerShell decodes a native tool's stdout using
+# [Console]::OutputEncoding, which in a normal console is the OEM codepage, so
+# without this every non-ASCII byte is mangled on the way in -- and -Update
+# then writes the mangling back into the .expected files. This has to happen
+# before the first capture below; it is restored after the run.
+$utf8 = New-Object System.Text.UTF8Encoding $false
+$priorConsole = $null
+try {
+    $priorConsole = [Console]::OutputEncoding
+    [Console]::OutputEncoding = $utf8
+} catch {
+    $priorConsole = $null
+    Write-Host "run.ps1: could not switch the console to UTF-8; non-ASCII output may be mangled" -ForegroundColor Yellow
+}
+$priorPipe = $OutputEncoding
+$OutputEncoding = $utf8
+
 Push-Location $root
 $script:pass = 0
 $script:fail = 0
@@ -156,7 +174,7 @@ function Compare-Text($label, $expected, $actual) {
         $script:fail++
         return
     }
-    $want = (Get-Content -Raw $expected) -replace "`r`n", "`n"
+    $want = (Get-Content -Raw -Encoding UTF8 $expected) -replace "`r`n", "`n"
     if ($want -eq $actual) {
         Write-Host "ok   $label" -ForegroundColor Green
         $script:pass++
@@ -188,7 +206,7 @@ function Run-Emit($simName) {
     if (Test-Path $outDir) { Remove-Item -Recurse -Force $outDir }
     New-Item -ItemType Directory -Force $outDir | Out-Null
 
-    # `stdlib` is a root like any other (§2.1) — the standard library gets no
+    # `stdlib` is a root like any other (sec. 2.1): the standard library gets no
     # special mechanism, it is simply on the search path.
     $actual = (& $sec --no-color --quiet --max-errors=0 --emit `
                       -I stdlib -I tests/emit/lib -o ($outDir -replace '\\', '/') $rel 2>&1 | Out-String)
@@ -1135,6 +1153,11 @@ if (-not $cl) {
 }
 
 Pop-Location
+
+$OutputEncoding = $priorPipe
+if ($null -ne $priorConsole) {
+    try { [Console]::OutputEncoding = $priorConsole } catch { }
+}
 
 if ($Update) {
     Write-Host ""
