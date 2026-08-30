@@ -137,9 +137,10 @@ private:
                      int depth, Model& m, std::vector<Unit> unit_binding = {});
     // §6.2a — evaluates an instance's unit arguments against the definition's
     // `units` declaration, checking arity. Empty (and silent) for a definition
-    // with no unit parameters and no arguments.
-    std::vector<Unit> unit_args_of(const NodeInfo* child, const ast::Instance& inst,
-                                   const Source& src);
+    // with no unit parameters and no arguments. `parent` is the enclosing
+    // composite, whose own parameters an argument may name.
+    std::vector<Unit> unit_args_of(const NodeInfo* parent, const NodeInfo* child,
+                                   const ast::Instance& inst, const Source& src);
     // The unit binding of the node currently being instantiated. A member for
     // the same reason `Resolver::unit_params_` is: every declared unit inside
     // the node has to be substituted, and they are reached from settings,

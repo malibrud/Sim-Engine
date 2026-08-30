@@ -8,7 +8,7 @@ use se.sig.ct;
 // substitution bug shows up in the manifest rather than only at run time:
 //
 //   accel (m/s^2) --Scale3(s)--> (m/s) --Split3--> three scalars
-//        --ct.Biquad--> three scalars --Merge3--> (m/s)
+//        --ct.SecondOrderSystem--> three scalars --Merge3--> (m/s)
 //
 // and separately  omega (rad/s) x arm (m) -> (rad*m/s), the Cross3 assertion.
 node Vec3Chk {
@@ -25,11 +25,11 @@ node Vec3Chk {
         node sc : math.Scale3 (m/s^2, s) { k = 0.5; };
 
         node sp : math.Split3 (m/s) {};
-        node lx : ct.Biquad (m/s) { A = { 1.0, 2.0, 4.0 };
+        node lx : ct.SecondOrderSystem (m/s) { A = { 1.0, 2.0, 4.0 };
                                     B = { 0.0, 0.0, 4.0 }; };
-        node ly : ct.Biquad (m/s) { A = { 1.0, 2.0, 4.0 };
+        node ly : ct.SecondOrderSystem (m/s) { A = { 1.0, 2.0, 4.0 };
                                     B = { 0.0, 0.0, 4.0 }; };
-        node lz : ct.Biquad (m/s) { A = { 1.0, 2.0, 4.0 };
+        node lz : ct.SecondOrderSystem (m/s) { A = { 1.0, 2.0, 4.0 };
                                     B = { 0.0, 0.0, 4.0 }; };
         node mg : math.Merge3 (m/s) {};
         node nm : math.Norm3  (m/s) {};

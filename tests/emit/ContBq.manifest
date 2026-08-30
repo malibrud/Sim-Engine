@@ -21,18 +21,18 @@ x[2]      hp.w                    -
 xd[2]     hp.w'                   1/s
 x[3]      hp.wd                   -
 xd[3]     hp.wd'                  1/s
-x[4]      bq3.wx                  -
-xd[4]     bq3.wx'                 1/s
-x[5]      bq3.wdx                 -
-xd[5]     bq3.wdx'                1/s
-x[6]      bq3.wy                  -
-xd[6]     bq3.wy'                 1/s
-x[7]      bq3.wdy                 -
-xd[7]     bq3.wdy'                1/s
-x[8]      bq3.wz                  -
-xd[8]     bq3.wz'                 1/s
-x[9]      bq3.wdz                 -
-xd[9]     bq3.wdz'                1/s
+x[4]      bq3.x.w                 -
+xd[4]     bq3.x.w'                1/s
+x[5]      bq3.x.wd                -
+xd[5]     bq3.x.wd'               1/s
+x[6]      bq3.y.w                 -
+xd[6]     bq3.y.w'                1/s
+x[7]      bq3.y.wd                -
+xd[7]     bq3.y.wd'               1/s
+x[8]      bq3.z.w                 -
+xd[8]     bq3.z.w'                1/s
+x[9]      bq3.z.wd                -
+xd[9]     bq3.z.wd'               1/s
 
 [state.discrete]          # Sim::dis; offsets from Sim::discrete_map()
           (none)
@@ -41,9 +41,15 @@ xd[9]     bq3.wdz'                1/s
           src.u                   -           double
           lp.y                    -           double
           hp.y                    -           double
-          bq3.vout.x              -           double
-          bq3.vout.y              -           double
-          bq3.vout.z              -           double
+          bq3.sp.x                -           double
+          bq3.sp.y                -           double
+          bq3.sp.z                -           double
+          bq3.mg.v.x              -           double
+          bq3.mg.v.y              -           double
+          bq3.mg.v.z              -           double
+          bq3.x.y                 -           double
+          bq3.y.y                 -           double
+          bq3.z.y                 -           double
           src3.v.x                -           double
           src3.v.y                -           double
           src3.v.z                -           double
@@ -74,6 +80,24 @@ xd[9]     bq3.wdz'                1/s
           bq3.B.c2                -           = 1.0
           bq3.B.c1                -           = 0.0
           bq3.B.c0                -           = 0.0
+          bq3.x.A.c2              -           = 1.0   <- bq3.A.c2
+          bq3.x.A.c1              -           = 2.0   <- bq3.A.c1
+          bq3.x.A.c0              -           = 4.0   <- bq3.A.c0
+          bq3.x.B.c2              -           = 1.0   <- bq3.B.c2
+          bq3.x.B.c1              -           = 0.0   <- bq3.B.c1
+          bq3.x.B.c0              -           = 0.0   <- bq3.B.c0
+          bq3.y.A.c2              -           = 1.0   <- bq3.A.c2
+          bq3.y.A.c1              -           = 2.0   <- bq3.A.c1
+          bq3.y.A.c0              -           = 4.0   <- bq3.A.c0
+          bq3.y.B.c2              -           = 1.0   <- bq3.B.c2
+          bq3.y.B.c1              -           = 0.0   <- bq3.B.c1
+          bq3.y.B.c0              -           = 0.0   <- bq3.B.c0
+          bq3.z.A.c2              -           = 1.0   <- bq3.A.c2
+          bq3.z.A.c1              -           = 2.0   <- bq3.A.c1
+          bq3.z.A.c0              -           = 4.0   <- bq3.A.c0
+          bq3.z.B.c2              -           = 1.0   <- bq3.B.c2
+          bq3.z.B.c1              -           = 0.0   <- bq3.B.c1
+          bq3.z.B.c0              -           = 0.0   <- bq3.B.c0
 
 [decimation]              # derived from `rate` at configuration
 

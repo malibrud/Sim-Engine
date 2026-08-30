@@ -1,0 +1,73 @@
+// The continuous realization of one first-order transfer function
+//
+// Instantiate this directly to enter H(s) yourself:
+//
+//     node hp : se.sig.ct.FirstOrderSystem (m/s^2) {
+//         A = { 1.0, 0.2 };       // s + 0.2
+//         B = { 1.0, 0.0 };       // s          -> high-pass
+//     };
+package se.sig.ct;
+
+use se.math;
+
+node FirstOrderSystem {
+    units { U; }
+
+    settings {
+        //        b1 s + b0
+        // H(s) = ---------
+        //        a1 s + a0
+        //
+        A: math.Poly2 = { 1.0, 0.0 };
+        B: math.Poly2 = { 0.0, 1.0 };
+    }
+
+    inputs  { x: double(U); }
+    outputs { y: double(U); }
+
+    states {
+        continuous w:  double(-) = 0.0;
+    }
+
+    vars {
+        // Suffix 'p' is a primed coefficient: the value after normalization by
+        // a1, so a0p == a0' == a0/a1.
+        a0p: double(-); // denominator, normalised by a1
+        b1p: double(-); // direct term, scaling the input
+        c0: double(-);  // output tap on w
+    }
+
+    // Normalise by a1 once, so neither derivative() nor output() carries a division.
+    //
+    //     w' = x - a0p w
+    //     y   = b1p x + (b0p - b1p a0p) w
+    //     y   = b1p x + c0 w
+    init() {
+        const double a1 = param.A.c1;
+        const double a0 = param.A.c0;
+        const double b1 = param.B.c1;
+        const double b0 = param.B.c0;
+
+        // A zero s coefficient is not a section this realization can carry: the
+        // normalisation below divides by it, and the one state it drives is the
+        // wrong shape for a zeroth-order design in any case. A configuration
+        // fault, so it ends the run rather than the process.
+        if ( a1 == 0.0 )
+            sim.abort( "se.sig.ct.FirstOrderSystem: A.c1 is zero -- not a first-order section" );
+
+        var.a0p = a0 / a1;
+
+        var.b1p          = b1 / a1;
+        const double b0p = b0 / a1;
+
+        var.c0  = b0p - var.b1p * var.a0p;
+    }
+
+    derivative(x) {
+        der.w = in.x - var.a0p * state.w;
+    }
+
+    output(x) {
+        out.y = var.b1p * in.x + var.c0 * state.w;
+    }
+}

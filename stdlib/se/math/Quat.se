@@ -1,0 +1,8 @@
+package se.math;
+
+type Quat {
+    w: double(-);  // real term
+    x: double(-);  // i term
+    y: double(-);  // j term
+    z: double(-);  // k term
+}

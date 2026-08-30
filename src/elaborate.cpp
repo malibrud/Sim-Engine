@@ -1283,8 +1283,8 @@ bool Elaborator::settings_of(const NodeInfo* def,
     return ok;
 }
 
-std::vector<Unit> Elaborator::unit_args_of(const NodeInfo* child, const ast::Instance& inst,
-                                           const Source& src) {
+std::vector<Unit> Elaborator::unit_args_of(const NodeInfo* parent, const NodeInfo* child,
+                                           const ast::Instance& inst, const Source& src) {
     const std::size_t want = child->unit_params.size();
     const std::size_t got = inst.unit_args.size();
     std::vector<Unit> out;
@@ -1313,14 +1313,20 @@ std::vector<Unit> Elaborator::unit_args_of(const NodeInfo* child, const ast::Ins
     }
 
     for (const ast::UnitPtr& u : inst.unit_args) {
-        // Evaluated with NO parameter scope: a unit argument is a concrete
-        // unit, so `(U)` here would have to name a real Appendix A symbol.
-        UnitEval ue(src, diag_);
+        // §6.2a — evaluated in the ENCLOSING node's parameter scope, so a
+        // parametric composite may pass its own `U` down: `ct.Biquad(U)`, or
+        // any expression over it. `bound()` then substitutes this instance's
+        // own binding, which is already live, and a parameter that names
+        // nothing outside falls through to `SE0414` as it always did.
+        UnitEval ue(src, diag_, parent->unit_params);
         Unit bound_unit;
         if (!ue.eval(u.get(), bound_unit)) {
             failed_ = true;
-            bound_unit = unit_one();
-        } else if (bound_unit.nonradian_angle) {
+            out.push_back(unit_one());
+            continue;
+        }
+        bound_unit = bound(bound_unit);
+        if (bound_unit.nonradian_angle) {
             // Same reason as `SE0415`: this unit becomes a declared unit of
             // every port that mentions the parameter.
             diag_.error("SE0415", src, inst.unit_args_loc,
@@ -1398,7 +1404,7 @@ void Elaborator::instantiate(const NodeInfo* def, const std::string& path,
             auto it = def->children.find(inst.name);
             if (it == def->children.end()) continue;
             if (it->second->unit_params.empty() && inst.unit_args.empty()) continue;
-            child_bindings[inst.name] = unit_args_of(it->second, inst, def_src);
+            child_bindings[inst.name] = unit_args_of(def, it->second, inst, def_src);
         }
 
         collect_wires(def, path, m, child_bindings);
@@ -1756,13 +1762,18 @@ void Elaborator::collect_wires(const NodeInfo* def, const std::string& path, Mod
             return true;
         }
 
+        // §6.2a — a composite may be unit-parametric, so its own boundary ports
+        // are substituted against this instance's binding just as a child's are
+        // below. `bound_type`, not `bound`: a record port such as
+        // `vin: Vec3(U)` carries the parameter in its ARGUMENTS, and
+        // substituting only the scalar unit would leave `U` standing.
         if (e.is_self) {
             if (e.segs.empty()) {
                 // Bare `self`, so the sole port on the side the arrow needs.
                 const Field* only = sole(as_source ? def->inputs : def->outputs);
                 if (!only) return false;
                 out_field = *only;
-                out_field.type.unit = bound(only->type.unit);
+                out_field.type = bound_type(only->type);
                 key = sub(path, only->name);
                 return true;
             }
@@ -1786,10 +1797,8 @@ void Elaborator::collect_wires(const NodeInfo* def, const std::string& path, Mod
                                 "unresolved port");
                 return false;
             }
-            // A composite may not be unit-parametric (`SE0418`), so its own
-            // binding is empty and this is a copy.
             out_field = *field;
-            out_field.type.unit = bound(field->type.unit);
+            out_field.type = bound_type(field->type);
             key = sub(path, n);
             return true;
         }
@@ -1820,7 +1829,11 @@ void Elaborator::collect_wires(const NodeInfo* def, const std::string& path, Mod
             // §6.2c — a dotted tail addresses a leaf of a record setting. The
             // leaves are the only real thing, so this is naming a scalar, not
             // taking a field of a wire (which is SE0311 and about ports).
-            Type t = si->type;
+            //
+            // Substituted first, for the same reason a boundary port is: a
+            // setting of a parametric composite may be declared `(U)`, and the
+            // tail below threads the arguments down from an already-bound type.
+            Type t = bound_type(si->type);
             std::string name = e.segs[1];
             for (std::size_t k = 2; k < e.segs.size(); ++k) {
                 const Field* f = nullptr;

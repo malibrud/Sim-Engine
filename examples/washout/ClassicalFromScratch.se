@@ -9,8 +9,8 @@
 // Six nodes and eleven wires become three nodes and four wires, and the three
 // axes' parameters stop being three unrelated instances that a reader has to
 // notice are meant to move together. The high-pass makes the same point a
-// second time: `Classical.se` spends three `ct.Biquad` instances on one
-// design, where `ct.Biquad3` takes it once (§6.2c).
+// second time: `Classical.se` spends three `ct.SecondOrderSystem` instances on one
+// design, where `ct.SecondOrderSystem3` takes it once (§6.2c).
 //
 // NOTE that `gain` and `limit` below are wide open at {1, 1, 1} and
 // {10, 10, 10} m/s^2, which effectively disables the scale-limit: this file
@@ -62,7 +62,7 @@ node ClassicalFromScratch {
         // The vector-native second-order section, for the same reason
         // `ScaleLimit3` is used above rather than three `ScaleLimit`s: one
         // design, entered once, applied to all three axes (§6.2c).
-        node thpLocal: sig.ct.Biquad3 (m/s^2) {
+        node thpLocal: sig.ct.SecondOrderSystem3 (m/s^2) {
             // s^2 / (s^2 + 2*zeta*wn*s + wn^2), wn = 3.1 rad/s, zeta = 1.4
             A = { 1.0, 8.68, 9.61 };
             B = { 1.0, 0.0,  0.0  };

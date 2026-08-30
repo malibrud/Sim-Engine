@@ -1,0 +1,6 @@
+package se.math;
+
+type Poly2 {
+    c1: double(-);  // coefficient of the x^1 term
+    c0: double(-);  // coefficient of the x^0 term
+}

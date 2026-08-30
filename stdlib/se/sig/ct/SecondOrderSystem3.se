@@ -1,0 +1,69 @@
+// One second-order section applied to each axis of a vector: three independent
+// realizations of the SAME H(s), entered once.
+//
+// This is `se.sig.ct.SecondOrderSystem` done three times, and it is a COMPOSITE
+// rather than a leaf: `Split3` -> three sections -> `Merge3`, which §5.3 makes
+// the only arrangement available while a wire carries the whole record. Those
+// five nodes exist either way. What this node buys is that the MODEL says one
+// instance and one design instead of five instances and eight wires, and that
+// the three sections cannot drift apart afterwards.
+// `examples/washout/Classical.se` and `ClassicalFromScratch.se` are the same
+// channel written both ways.
+//
+// THE COEFFICIENTS ARE ENTERED ONCE, which is the point, and this is where the
+// node differs in spirit from `ScaleLimit3`. There the three axes are
+// deliberately NOT interchangeable -- heave is scaled less and limited harder
+// than surge or sway -- so its parameters are a `Vec3` and it stays a leaf.
+// Here they are one `A` and one `B`, because a washout's three channels are
+// filtered by one design; three axes wanting three different responses are
+// three instances, and saying so with three instances is clearer than a setting
+// that permits it silently. `A` and `B` reach the sections by ordinary setting
+// flow-down (§6.9.1), so they are live: overriding `A.c1` at configuration
+// moves all three.
+//
+// THE STATES ARE NOT SHARED. Each axis carries its own `w`/`wd` pair, so this is
+// six continuous states, not two. They join the solver's state vector
+// individually and an initial condition addresses one axis at a time, as
+// `x.w`, `x.wd`, `y.w`, and so on -- the section instance names are public
+// surface here, the same way a leaf's state names are.
+//
+// Instantiate this directly to enter H(s) yourself:
+//
+//     node hp : se.sig.ct.SecondOrderSystem3 (m/s^2) {
+//         A = { 1.0, 8.68, 9.61 };       // s^2 + 8.68 s + 9.61
+//         B = { 1.0, 0.0,  0.0  };       // s^2          -> high-pass
+//     };
+package se.sig.ct;
+
+use se.math;
+use se.sig.ct;
+
+node SecondOrderSystem3 {
+    units { U; }
+
+    settings {
+        //        b2 s^2 + b1 s + b0
+        // H(s) = ------------------
+        //        a2 s^2 + a1 s + a0
+        //
+        A: math.Poly3 = { 1.0, 0.0, 0.0 };
+        B: math.Poly3 = { 0.0, 0.0, 1.0 };
+    }
+
+    inputs  { vin:  math.Vec3(U); }
+    outputs { vout: math.Vec3(U); }
+
+    structure {
+        node sp: math.Split3(U) {};
+        node mg: math.Merge3(U) {};
+        node x: ct.SecondOrderSystem(U) { A = param.A; B = param.B; };
+        node y: ct.SecondOrderSystem(U) { A = param.A; B = param.B; };
+        node z: ct.SecondOrderSystem(U) { A = param.A; B = param.B; };
+
+        self --> sp;
+        sp.x --> x --> mg.x;
+        sp.y --> y --> mg.y;
+        sp.z --> z --> mg.z;
+        mg  --> self;
+    }
+}

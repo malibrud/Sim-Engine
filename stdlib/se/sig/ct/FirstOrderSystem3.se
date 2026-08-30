@@ -1,0 +1,37 @@
+// One first-order section applied to each axis of a vector: three independent
+// realizations of the SAME H(s), sharing one pair of coefficients.
+
+package se.sig.ct;
+
+use se.math;
+use se.sig.ct;
+
+node FirstOrderSystem3 {
+    units { U; }
+
+    settings {
+        //        b1 s + b0
+        // H(s) = ---------
+        //        a1 s + a0
+        //
+        A: math.Poly2 = { 1.0, 0.0 };
+        B: math.Poly2 = { 0.0, 1.0 };
+    }
+
+    inputs  { vin:  math.Vec3(U); }
+    outputs { vout: math.Vec3(U); }
+
+    structure {
+        node sp: math.Split3(U) {};
+        node mg: math.Merge3(U) {};
+        node x: ct.FirstOrderSystem(U) { A = param.A; B = param.B; };
+        node y: ct.FirstOrderSystem(U) { A = param.A; B = param.B; };
+        node z: ct.FirstOrderSystem(U) { A = param.A; B = param.B; };
+
+        self --> sp;
+        sp.x --> x --> mg.x;
+        sp.y --> y --> mg.y;
+        sp.z --> z --> mg.z;
+        mg  --> self;
+    }
+}

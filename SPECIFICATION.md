@@ -883,21 +883,66 @@ does: `limit: Vec3(U)` on a node bound `(m/s^2)`, given
 `{ 5000.0 (mm/s^2), … }`, receives `5.0` in each field, each factor folded at
 elaboration.
 
-##### Leaf-only
+##### Flow-down to children
 
-A **composite may not declare unit parameters** (`SE0418`). Flowing a unit
-parameter to a child is a second flow-down mechanism running parallel to §6.9.1's,
-and nothing has yet needed it. This is a restriction, not a design position:
-lifting it is a pure relaxation and no model written against this rule would
-change meaning.
+**A composite declares unit parameters exactly as a leaf does**, and for the
+reason §6.1 gives: a node's kind is *inferred*, today's model is tomorrow's
+subsystem with no edit, and nothing about a node's external surface may depend
+on which kind it happens to be. A `units` section is external surface.
+
+Inside a composite, a **child's unit argument may be an expression over the
+composite's own parameters** — the same rule §5.2 already gives a record
+reference:
+
+```
+node Biquad3 {
+    units   { U; }
+    inputs  { vin:  math.Vec3(U); }
+    outputs { vout: math.Vec3(U); }
+    structure {
+        node sp: math.Split3(U) { };
+        node x:  ct.Biquad(U)   { A = param.A; B = param.B; };
+        …
+    }
+}
+```
+
+Such an argument is **bound again when the composite is instantiated**, and
+composes through nesting to any depth: a composite bound `(m/s^2)` that passes
+`U` to a child which passes it on in turn binds the innermost port to
+`(m/s^2)`. Nothing else changes — an argument naming no parameter of the
+enclosing node is an ordinary Appendix A symbol, so a typo is still `SE0414`,
+and arity is still `SE0419`.
+
+This is a second flow-down mechanism running parallel to §6.9.1's, and the two
+are deliberately **not** unified: a setting flows a *value*, which §7 may
+compute and §6.2b may override in a shipped binary; a unit parameter flows a
+*unit*, which is checked and then erased before any value exists.
+
+##### Checking a parametric composite
+
+A leaf's `U → U` is an assertion the compiler **cannot** verify, because the
+body is verbatim C++. A composite's interior is wires, so it can be — and a
+contract that costs the same to declare should not be worth less on one kind of
+node than the other.
+
+**Today that interior is checked per instantiation**: `U` is substituted and the
+wires are checked exactly as a non-parametric composite's are. The intended
+strengthening is to check it **once at the definition**, with `U` left symbolic:
+an unbound parameter compares only against itself, so `(U) --> (U)` passes,
+`(U) --> (V)` and `(U)` into a child bound `(m)` do not, and no instance need
+exist for either verdict. Until that lands, an interior that is correct for only
+some bindings is diagnosed at the call sites that happen to use them rather than
+where the mistake is.
 
 ##### Cost
 
 None at run time. Units are erased at the C++ boundary (I3), so a parametric
-definition emits **one class regardless of how many ways it is instantiated** —
-the parameter exists only to be checked, and is gone by stage 6. This is what
-makes unit polymorphism cheap enough to use everywhere in a library, and it is
-why the feature needed no code generator changes at all.
+leaf emits **one class regardless of how many ways it is instantiated** — the
+parameter exists only to be checked, and is gone by stage 6. A parametric
+composite emits nothing at all, having no runtime form to be parametric in
+(§15.2). This is what makes unit polymorphism cheap enough to use everywhere in
+a library, and it is why the feature needed no code generator changes at all.
 
 #### 6.2b Configuration
 
@@ -3428,7 +3473,7 @@ of thing wearing the same name.
 | `SE0421` | 4 | Cycle among derived settings |
 | `SE0416` | 3 | Unit parameter shadows an Appendix A unit symbol |
 | `SE0417` | 3 | Duplicate unit parameter |
-| `SE0418` | 3 | A composite may not declare unit parameters |
+| `SE0418` | — | *Retired.* A composite may not declare unit parameters — lifted by §6.2a. The number stays burned; codes are stable. |
 | `SE0419` | 4 | Wrong number of unit arguments at an instantiation |
 | `SE0422` | 4 | Reserved setting `rate` has the wrong unit or type |
 | `SE0423` | 4 | Wrong number of values in a positional brace list |
@@ -3762,6 +3807,16 @@ Recorded so that their absence is visibly deliberate.
    obviously right. `se.math.Split3`/`Merge3` cover the need meanwhile, and
    `se.math.Vec3`'s fields are `double` deliberately so that nothing forecloses
    it.
+
+8c. **A parametric composite's interior is not yet checked at its definition**
+   (§6.2a). Lifting `SE0418` made composites unit-parametric; substitution
+   happens per instantiation, so an interior that holds for only some bindings
+   is reported at the call sites using them rather than where it was written.
+   Checking it once with `U` left symbolic is the decided semantics and the
+   algebra already supports it — an unbound parameter compares only against
+   itself. Recorded here rather than in the list below because it is a
+   *tightening*: it would reject interiors that are accidentally monomorphic,
+   which the ones written so far are not, but which is not nothing.
 
 **Deliberately deferred, each a pure extension:**
 

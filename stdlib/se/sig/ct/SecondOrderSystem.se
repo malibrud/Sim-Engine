@@ -4,12 +4,12 @@
 //
 // `dt.Biquad` takes ANALOG coefficients precisely so that a continuous
 // realization could consume the identical spec, and this is it. The two nodes
-// take the same H(s) and have the same U -> U ports, and now the same name:
-// moving a block between them is a change of one package segment and a
-// re-spelling of the coefficients. They differ only in how those coefficients
-// are WRITTEN -- this node groups each polynomial into one `math.Poly3`, where
-// `dt.Biquad` still spells out six scalars -- and in the one setting `dt` has
-// that this one cannot have: `fs`.
+// take the same H(s) and have the same U -> U ports, so moving a block between
+// them is a change of type name and a re-spelling of the coefficients, with the
+// design itself carried across untouched. They differ only in how those
+// coefficients are WRITTEN -- this node groups each polynomial into one
+// `math.Poly3`, where `dt.Biquad` still spells out six scalars -- and in the one
+// setting `dt` has that this one cannot have: `fs`.
 //
 // Reach for this one when the filter is part of the plant rather than part of
 // the signal processing: its states join the solver's state vector, so they are
@@ -21,7 +21,7 @@
 //
 // Instantiate this directly to enter H(s) yourself:
 //
-//     node hp : se.sig.ct.Biquad (m/s^2) {
+//     node hp : se.sig.ct.SecondOrderSystem (m/s^2) {
 //         A = { 1.0, 8.68, 9.61 };       // s^2 + 8.68 s + 9.61
 //         B = { 1.0, 0.0,  0.0  };       // s^2          -> high-pass
 //     };
@@ -29,7 +29,7 @@ package se.sig.ct;
 
 use se.math;
 
-node Biquad {
+node SecondOrderSystem {
     units { U; }
 
     settings {
@@ -101,7 +101,7 @@ node Biquad {
         // are the wrong shape for a first-order design in any case. A
         // configuration fault, so it ends the run rather than the process.
         if ( a2 == 0.0 )
-            sim.abort( "se.sig.ct.Biquad: A.c2 is zero -- not a second-order section" );
+            sim.abort( "se.sig.ct.SecondOrderSystem: A.c2 is zero -- not a second-order section" );
 
         var.a1p = a1 / a2;
         var.a0p = a0 / a2;

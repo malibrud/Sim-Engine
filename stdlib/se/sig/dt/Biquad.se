@@ -4,7 +4,7 @@
 // Taking analog rather than pre-transformed discrete coefficients is what makes
 // the design layer (LowPass2, HighPass2, ...) realization-agnostic: every design
 // computes an s-domain numerator and denominator and hands them here. That is
-// what let `ct.Biquad` consume the identical spec without touching any design,
+// what let `ct.SecondOrderSystem` consume the identical spec without touching any design,
 // and it is why the two share a name rather than a prefix.
 //
 // Instantiate this directly to enter H(s) yourself:

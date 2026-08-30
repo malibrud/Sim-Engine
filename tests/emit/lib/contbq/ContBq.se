@@ -1,4 +1,4 @@
-// Numerical check for se.sig.ct.Biquad, the stdlib's first block with
+// Numerical check for se.sig.ct.SecondOrderSystem, the stdlib's first block with
 // continuous states. Both sections are driven by the same unit step and both
 // have an exact closed form, which is what tests/run.ps1 compares the recorded
 // CSV against — the same treatment `decay` gets, rather than a golden file.
@@ -13,7 +13,7 @@
 // hp is the sharper of the two: its step response starts at exactly 1, so a
 // dropped or mis-signed direct term is wrong in the very first recorded row.
 //
-// `bq3` is the same assertion for `ct.Biquad3`, whose characteristic bug the
+// `bq3` is the same assertion for `ct.SecondOrderSystem3`, whose characteristic bug the
 // scalar cases cannot reach: six states and three output taps in one leaf, so a
 // cross-wired axis -- `der.wdy` reading `state.wdx`, `out.vout.z` reading `wy`
 // -- compiles perfectly and integrates something plausible. It is given hp's
@@ -36,17 +36,17 @@ node ContBq {
     structure {
         node src : Step {};
 
-        node lp : ct.Biquad (-) {
+        node lp : ct.SecondOrderSystem (-) {
             A = { 1.0, 2.0, 4.0 };
             B = { 0.0, 0.0, 4.0 };
         };
-        node hp : ct.Biquad (-) {
+        node hp : ct.SecondOrderSystem (-) {
             A = { 1.0, 2.0, 4.0 };
             B = { 1.0, 0.0, 0.0 };
         };
 
         // Same H(s) as `hp`, three axes at once.
-        node bq3 : ct.Biquad3 (-) {
+        node bq3 : ct.SecondOrderSystem3 (-) {
             A = { 1.0, 2.0, 4.0 };
             B = { 1.0, 0.0, 0.0 };
         };
@@ -70,7 +70,7 @@ node Step {
 }
 
 // File-private, and the three components are DELIBERATELY DISTINCT: a vector
-// source of {1, 1, 1} would let every axis-crossing bug in `Biquad3` pass.
+// source of {1, 1, 1} would let every axis-crossing bug in `SecondOrderSystem3` pass.
 node Step3 {
     outputs { v: math.Vec3(-); }
 

@@ -546,24 +546,6 @@ RecordInfo* Resolver::resolve_record(FileInfo& file, const ast::TypeDef& def,
     return info;
 }
 
-// §6.2a — leaf-only for nodes. A parametric composite would need unit
-// flow-down alongside setting flow-down; this is a restriction to relax, not a
-// rule, so no model valid today would break when it lifts. Records have no such
-// restriction: they have no children to flow anything down to.
-std::vector<std::string> Resolver::resolve_unit_params(const FileInfo& file,
-                                                       const ast::NodeDef& def) {
-    if (def.sec_units.present && def.is_composite()) {
-        diag_.error("SE0418", *file.src, def.sec_units.loc,
-                    "a composite may not declare unit parameters",
-                    "only a leaf node may be unit-parametric",
-                    {note("binding a composite's parameters would have to flow down "
-                          "to its children, which is a separate mechanism (§6.2a)"),
-                     help("put the unit parameters on the leaf that declares the ports")});
-        return {};
-    }
-    return resolve_unit_params(file, def.sec_units, def.unit_params);
-}
-
 std::vector<std::string> Resolver::resolve_unit_params(
     const FileInfo& file, const ast::SectionMark& sec,
     const std::vector<ast::UnitParamDecl>& params) {
@@ -611,7 +593,7 @@ NodeInfo* Resolver::resolve_node(FileInfo& file, const ast::NodeDef& def,
 
     // §6.2a — the unit parameters must be known before any declaration in this
     // node is resolved, since every port unit may reference them.
-    info->unit_params = resolve_unit_params(file, def);
+    info->unit_params = resolve_unit_params(file, def.sec_units, def.unit_params);
     unit_params_ = info->unit_params;
     struct ClearParams {
         std::vector<std::string>& v;
