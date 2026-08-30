@@ -13,6 +13,9 @@ sim ContBq {
         signals {
             lp.y;
             hp.y;
+            bq3.vout.x;
+            bq3.vout.y;
+            bq3.vout.z;
         }
     }
 }

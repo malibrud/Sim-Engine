@@ -1,0 +1,126 @@
+// One second-order section applied to each axis of a vector: three independent
+// realizations of the SAME H(s), sharing one pair of coefficients.
+//
+// This is `se.sig.ct.Biquad` done three times in one node, and it stands in the
+// same relation to it that `se.sig.ScaleLimit3` stands in to `ScaleLimit`.
+// Without it the only spelling for filtering a `Vec3` is `Split3` -> three
+// scalar sections -> `Merge3`: five nodes and eight wires for one vector
+// operation, with three coefficient sets that nothing ties together even though
+// they are meant to be one filter. `examples/washout/Classical.se` and
+// `ClassicalFromScratch.se` are the same channel written both ways.
+//
+// THE COEFFICIENTS ARE SHARED, WHICH IS THE POINT, and it is the one place this
+// node differs in spirit from `ScaleLimit3`. There, the three axes are
+// deliberately NOT interchangeable -- heave is scaled less and limited harder
+// than surge or sway -- so its parameters are a `Vec3`. Here they are one `A`
+// and one `B`, because a washout's three channels are filtered by one design;
+// three axes wanting three different responses are three instances, and saying
+// so with three instances is clearer than a setting that permits it silently.
+//
+// THE STATES ARE NOT SHARED. Each axis carries its own `w`/`wd` pair, so this is
+// six continuous states, not two. They join the solver's state vector
+// individually and an initial condition addresses one axis at a time.
+//
+// Instantiate this directly to enter H(s) yourself:
+//
+//     node hp : se.sig.ct.Biquad3 (m/s^2) {
+//         A = { 1.0, 8.68, 9.61 };       // s^2 + 8.68 s + 9.61
+//         B = { 1.0, 0.0,  0.0  };       // s^2          -> high-pass
+//     };
+package se.sig.ct;
+
+use se.math;
+
+node Biquad3 {
+    units { U; }
+
+    settings {
+        //        b2 s^2 + b1 s + b0
+        // H(s) = ------------------
+        //        a2 s^2 + a1 s + a0
+        //
+        // Identical to `ct.Biquad`'s, deliberately: the shared surface is what
+        // lets a design move between the scalar and vector forms without being
+        // re-entered. See that node for why `Poly3` takes no unit argument.
+        A: math.Poly3 = { 1.0, 0.0, 0.0 };
+        B: math.Poly3 = { 0.0, 0.0, 1.0 };
+    }
+
+    inputs  { vin:  math.Vec3(U); }
+    outputs { vout: math.Vec3(U); }
+
+    // Controllable canonical form per axis, as in `ct.Biquad`. `(-)` for the
+    // same reason: a canonical form state has no honest unit when the
+    // coefficients carry none. These names are public surface -- they are the
+    // slot map in `[state.continuous]` and the path an initial condition
+    // overrides -- so they carry the axis they belong to.
+    states {
+        continuous wx:  double(-) = 0.0;
+        continuous wdx: double(-) = 0.0;
+        continuous wy:  double(-) = 0.0;
+        continuous wdy: double(-) = 0.0;
+        continuous wz:  double(-) = 0.0;
+        continuous wdz: double(-) = 0.0;
+    }
+
+    // One set, not three: the coefficients are shared, so the normalisation is
+    // done once and every axis reads the same primed values.
+    vars {
+        // Suffix 'p' is a primed coefficient: the value after normalization by
+        // a2, so a1p == a1' == a1/a2.
+        a1p: double(-);  a0p: double(-);  // denominator, normalised by a2
+        b2p: double(-);                   // direct term, scaling the input
+        c0: double(-);  c1: double(-);    // output taps on w and wd
+    }
+
+    // Normalise by a2 once, so neither derivative() nor output() carries a division.
+    //
+    //     w'  = wd
+    //     wd' = x - a1p wd - a0p w
+    //     y   = b2p x + (b1p - b2p a1p) wd + (b0p - b2p a0p) w
+    //     y   = b2p x + c1 wd              + c0 w
+    init() {
+        const double a2 = param.A.c2;
+        const double a1 = param.A.c1;
+        const double a0 = param.A.c0;
+        const double b2 = param.B.c2;
+        const double b1 = param.B.c1;
+        const double b0 = param.B.c0;
+
+        // A zero s^2 coefficient is not a section this realization can carry:
+        // the normalisation below divides by it, and the two states per axis it
+        // drives are the wrong shape for a first-order design in any case. A
+        // configuration fault, so it ends the run rather than the process.
+        if ( a2 == 0.0 )
+            sim.abort( "se.sig.ct.Biquad3: A.c2 is zero -- not a second-order section" );
+
+        var.a1p = a1 / a2;
+        var.a0p = a0 / a2;
+
+        var.b2p          = b2 / a2;
+        const double b1p = b1 / a2;
+        const double b0p = b0 / a2;
+
+        var.c1  = b1p - var.b2p * var.a1p;
+        var.c0  = b0p - var.b2p * var.a0p;
+    }
+
+    derivative(vin) {
+        der.wx  = state.wdx;
+        der.wdx = in.vin.x - var.a1p * state.wdx - var.a0p * state.wx;
+        der.wy  = state.wdy;
+        der.wdy = in.vin.y - var.a1p * state.wdy - var.a0p * state.wy;
+        der.wz  = state.wdz;
+        der.wdz = in.vin.z - var.a1p * state.wdz - var.a0p * state.wz;
+    }
+
+    // Feedthrough, and unconditionally so, for the reason `ct.Biquad` states:
+    // a strictly proper section has no direct term, but feedthrough is declared
+    // by this signature at compile time and a signature cannot depend on a
+    // setting resolved at configuration.
+    output(vin) {
+        out.vout.x = var.b2p * in.vin.x + var.c1 * state.wdx + var.c0 * state.wx;
+        out.vout.y = var.b2p * in.vin.y + var.c1 * state.wdy + var.c0 * state.wy;
+        out.vout.z = var.b2p * in.vin.z + var.c1 * state.wdz + var.c0 * state.wz;
+    }
+}

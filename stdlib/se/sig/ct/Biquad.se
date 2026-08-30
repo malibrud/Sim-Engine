@@ -4,9 +4,12 @@
 //
 // `dt.Biquad` takes ANALOG coefficients precisely so that a continuous
 // realization could consume the identical spec, and this is it. The two nodes
-// have the same six settings and the same U -> U ports, and now the same name:
-// moving a block between them is a change of one package segment and nothing
-// else.
+// take the same H(s) and have the same U -> U ports, and now the same name:
+// moving a block between them is a change of one package segment and a
+// re-spelling of the coefficients. They differ only in how those coefficients
+// are WRITTEN -- this node groups each polynomial into one `math.Poly3`, where
+// `dt.Biquad` still spells out six scalars -- and in the one setting `dt` has
+// that this one cannot have: `fs`.
 //
 // Reach for this one when the filter is part of the plant rather than part of
 // the signal processing: its states join the solver's state vector, so they are
@@ -19,33 +22,37 @@
 // Instantiate this directly to enter H(s) yourself:
 //
 //     node hp : se.sig.ct.Biquad (m/s^2) {
-//         a0 = 1.0;  a1 = 8.68;  a2 = 9.61;      // s^2 + 8.68 s + 9.61
-//         b0 = 1.0;  b1 = 0.0;   b2 = 0.0;       // s^2          -> high-pass
+//         A = { 1.0, 8.68, 9.61 };       // s^2 + 8.68 s + 9.61
+//         B = { 1.0, 0.0,  0.0  };       // s^2          -> high-pass
 //     };
 package se.sig.ct;
+
+use se.math;
 
 node Biquad {
     units { U; }
 
     settings {
-        // H(s) = (b0 s^2 + b1 s + b2) / (a0 s^2 + a1 s + a2).
+        //        b2 s^2 + b1 s + b0
+        // H(s) = ------------------
+        //        a2 s^2 + a1 s + a0
         //
-        // Declared `(-)` because a continuous coefficient array has per-element
-        // units — a1 is T^-1, a2 is T^-2 — which there is no honest way to
-        // spell. The dimensional contract lives entirely in the ports: this
-        // node is U -> U, and nothing about the coefficients can change that.
+        // One `Poly3` per polynomial, so the three coefficients that have to
+        // move together are one setting rather than three unrelated ones, and
+        // `c2`/`c1`/`c0` name the power each belongs to instead of leaving the
+        // reader to infer it from an index.
         //
-        // Identical to `dt.Biquad`'s, deliberately: the shared surface is what
-        // makes the two interchangeable.
-        a0: double(-) = 1.0;
-        a1: double(-) = 0.0;
-        a2: double(-) = 0.0;
-        b0: double(-) = 0.0;
-        b1: double(-) = 0.0;
-        b2: double(-) = 1.0;
+        // `Poly3` takes NO unit argument, and that is the honest answer rather
+        // than an omission: a continuous coefficient array has per-element
+        // units -- `c1` is T^-1, `c0` is T^-2 -- which there is no way to spell
+        // in one binding. Its fields are fixed `(-)` at its own declaration.
+        // The dimensional contract lives entirely in the ports: this node is
+        // U -> U, and nothing about the coefficients can change that.
+        A: math.Poly3 = { 1.0, 0.0, 0.0 };
+        B: math.Poly3 = { 0.0, 0.0, 1.0 };
 
         // NO `fs`, and no `rate`. There is no discretization here, so there is
-        // no sample rate to design against — the one setting that separates
+        // no sample rate to design against -- the one setting that separates
         // this node from `dt.Biquad` is the one that is missing. Accuracy is the
         // sim file's `step` and `solver`, and a continuous node is by
         // definition a base-rate node that happens to have integrated states.
@@ -56,11 +63,11 @@ node Biquad {
 
     // Controllable canonical form: `w` is the inner state, `wd` its derivative.
     // Two states whatever the section is; a first-order design does NOT belong
-    // here — see dt.Integrator, dt.Differentiator and HighPass1.
+    // here -- see dt.Integrator, dt.Differentiator and HighPass1.
     //
-    // `(-)` for the same reason dt.Biquad's Direct Form II states are: a canonical
-    // form state has no honest unit when the coefficients carry none. Note that
-    // these names are public surface — they are the slot map in
+    // `(-)` for the same reason dt.Biquad's Direct Form II states are: a
+    // canonical form state has no honest unit when the coefficients carry none.
+    // Note that these names are public surface -- they are the slot map in
     // `[state.continuous]` and the path an initial condition overrides.
     states {
         continuous w:  double(-) = 0.0;
@@ -68,41 +75,57 @@ node Biquad {
     }
 
     vars {
-        n1: double(-);  n2: double(-);     // denominator, normalised by a0
-        d0: double(-);  // direct term
-        cw: double(-);  cwd: double(-);    // output taps on w and wd
+        // Suffix 'p' is a primed coefficient: the value after normalization by
+        // a2, so a1p == a1' == a1/a2.
+        a1p: double(-);  a0p: double(-);  // denominator, normalised by a2
+        b2p: double(-);                   // direct term, scaling the input
+        c0: double(-);  c1: double(-);    // output taps on w and wd
     }
 
-    // Normalise by a0 once, so neither derivative() nor output() carries a division.
+    // Normalise by a2 once, so neither derivative() nor output() carries a division.
     //
     //     w'  = wd
-    //     wd' = u - n1 wd - n2 w
-    //     y   = d0 u + (m1 - d0 n1) wd + (m2 - d0 n2) w
+    //     wd' = x - a1p wd - a0p w
+    //     y   = b2p x + (b1p - b2p a1p) wd + (b0p - b2p a0p) w
+    //     y   = b2p x + c1 wd              + c0 w
     init() {
-        const double inv = 1.0 / param.a0;
-        var.n1 = param.a1 * inv;
-        var.n2 = param.a2 * inv;
+        const double a2 = param.A.c2;
+        const double a1 = param.A.c1;
+        const double a0 = param.A.c0;
+        const double b2 = param.B.c2;
+        const double b1 = param.B.c1;
+        const double b0 = param.B.c0;
 
-        const double m1 = param.b1 * inv;
-        const double m2 = param.b2 * inv;
+        // A zero s^2 coefficient is not a section this realization can carry:
+        // the normalisation below divides by it, and the two states it drives
+        // are the wrong shape for a first-order design in any case. A
+        // configuration fault, so it ends the run rather than the process.
+        if ( a2 == 0.0 )
+            sim.abort( "se.sig.ct.Biquad: A.c2 is zero -- not a second-order section" );
 
-        var.d0  = param.b0 * inv;
-        var.cwd = m1 - var.d0 * var.n1;
-        var.cw  = m2 - var.d0 * var.n2;
+        var.a1p = a1 / a2;
+        var.a0p = a0 / a2;
+
+        var.b2p          = b2 / a2;
+        const double b1p = b1 / a2;
+        const double b0p = b0 / a2;
+
+        var.c1  = b1p - var.b2p * var.a1p;
+        var.c0  = b0p - var.b2p * var.a0p;
     }
 
     derivative(x) {
         der.w  = state.wd;
-        der.wd = in.x - var.n1 * state.wd - var.n2 * state.w;
+        der.wd = in.x - var.a1p * state.wd - var.a0p * state.w;
     }
 
-    // Feedthrough, and unconditionally so. A strictly proper section — any
-    // low-pass or band-pass, where b0 is zero — genuinely has no direct term
-    // and could break an algebraic loop, but feedthrough is declared by this
-    // signature at compile time and a signature cannot depend on a setting
+    // Feedthrough, and unconditionally so. A strictly proper section -- any
+    // low-pass or band-pass, where `B.c2` is zero -- genuinely has no direct
+    // term and could break an algebraic loop, but feedthrough is declared by
+    // this signature at compile time and a signature cannot depend on a setting
     // resolved at configuration. A strictly-proper sibling is the way to buy
     // that back, and it is deliberately not this node.
     output(x) {
-        out.y = var.d0 * in.x + var.cwd * state.wd + var.cw * state.w;
+        out.y = var.b2p * in.x + var.c1 * state.wd + var.c0 * state.w;
     }
 }

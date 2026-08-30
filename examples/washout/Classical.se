@@ -40,16 +40,16 @@ node Classical {
         // so the platform states join the global solver rather than being
         // discretised per block.
         node hx : ct.Biquad (m/s^2) {
-            a0 = 1.0;  a1 = 4.0;  a2 = 4.0;
-            b0 = 1.0;  b1 = 0.0;  b2 = 0.0;
+            A = { 1.0, 4.0, 4.0 };
+            B = { 1.0, 0.0, 0.0 };
         };
         node hy : ct.Biquad (m/s^2) {
-            a0 = 1.0;  a1 = 4.0;  a2 = 4.0;
-            b0 = 1.0;  b1 = 0.0;  b2 = 0.0;
+            A = { 1.0, 4.0, 4.0 };
+            B = { 1.0, 0.0, 0.0 };
         };
         node hz : ct.Biquad (m/s^2) {
-            a0 = 1.0;  a1 = 2.0;  a2 = 1.0;
-            b0 = 1.0;  b1 = 0.0;  b2 = 0.0;
+            A = { 1.0, 2.0, 1.0 };
+            B = { 1.0, 0.0, 0.0 };
         };
 
         node mg : math.Merge3 (m/s^2) {};

@@ -6,9 +6,17 @@
 // instances -> `Merge3`, because there was no way to give one block three
 // per-axis gains. This file gives them to it directly (§6.2c).
 //
-// Six nodes and eleven wires become two nodes and three wires, and the three
+// Six nodes and eleven wires become three nodes and four wires, and the three
 // axes' parameters stop being three unrelated instances that a reader has to
-// notice are meant to move together.
+// notice are meant to move together. The high-pass makes the same point a
+// second time: `Classical.se` spends three `ct.Biquad` instances on one
+// design, where `ct.Biquad3` takes it once (§6.2c).
+//
+// NOTE that `gain` and `limit` below are wide open at {1, 1, 1} and
+// {10, 10, 10} m/s^2, which effectively disables the scale-limit: this file
+// is currently tuned to look at the high-pass response on its own. The
+// per-axis argument in the settings comment is about what those numbers are
+// FOR, not what they are set to here.
 //
 // The gravity term is the same argument once more, one section along: `grav` is
 // wired straight off the settings block (§6.9.2). The alternative is three
@@ -30,8 +38,8 @@ node ClassicalFromScratch {
     // limited harder than X and Y: a platform has far less heave travel than
     // surge or sway.
     settings {
-        gain:  math.Vec3(-)      = { 0.6, 0.6, 0.4 };
-        limit: math.Vec3(m/s^2)  = { 5.0, 5.0, 4.0 };
+        gain:  math.Vec3(-)      = { 1.0, 1.0, 1.0 };
+        limit: math.Vec3(m/s^2)  = { 10.0, 10.0, 10.0 };
         // Wired, not flowed down: see the `-->` below. Still an ordinary
         // setting, so a host may override it -- a lunar platform is one line of
         // a settings file away, with nothing recompiled.
@@ -51,11 +59,20 @@ node ClassicalFromScratch {
         };
         node sfSum: math.Sum3 (m/s^2);
 
+        // The vector-native second-order section, for the same reason
+        // `ScaleLimit3` is used above rather than three `ScaleLimit`s: one
+        // design, entered once, applied to all three axes (§6.2c).
+        node thpLocal: sig.ct.Biquad3 (m/s^2) {
+            // s^2 / (s^2 + 2*zeta*wn*s + wn^2), wn = 3.1 rad/s, zeta = 1.4
+            A = { 1.0, 8.68, 9.61 };
+            B = { 1.0, 0.0,  0.0  };
+        };
+
         // A setting as a wire SOURCE (§6.9.2). It costs no node and no storage:
         // `grav` is already a member, so this reads it where the value is read,
         // which is also why an override still reaches the wire.
-        self --> linScale --> sfSum.a;
-        param.grav        --> sfSum.b;
-        sfSum --> self;
+        self --> linScale  --> sfSum.a;
+        param.grav         --> sfSum.b;
+        sfSum --> thpLocal --> self;
     }
 }

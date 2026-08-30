@@ -25,12 +25,12 @@ node Vec3Chk {
         node sc : math.Scale3 (m/s^2, s) { k = 0.5; };
 
         node sp : math.Split3 (m/s) {};
-        node lx : ct.Biquad (m/s) { a0 = 1.0; a1 = 2.0; a2 = 4.0;
-                                    b0 = 0.0; b1 = 0.0; b2 = 4.0; };
-        node ly : ct.Biquad (m/s) { a0 = 1.0; a1 = 2.0; a2 = 4.0;
-                                    b0 = 0.0; b1 = 0.0; b2 = 4.0; };
-        node lz : ct.Biquad (m/s) { a0 = 1.0; a1 = 2.0; a2 = 4.0;
-                                    b0 = 0.0; b1 = 0.0; b2 = 4.0; };
+        node lx : ct.Biquad (m/s) { A = { 1.0, 2.0, 4.0 };
+                                    B = { 0.0, 0.0, 4.0 }; };
+        node ly : ct.Biquad (m/s) { A = { 1.0, 2.0, 4.0 };
+                                    B = { 0.0, 0.0, 4.0 }; };
+        node lz : ct.Biquad (m/s) { A = { 1.0, 2.0, 4.0 };
+                                    B = { 0.0, 0.0, 4.0 }; };
         node mg : math.Merge3 (m/s) {};
         node nm : math.Norm3  (m/s) {};
 

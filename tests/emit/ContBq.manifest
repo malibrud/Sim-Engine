@@ -21,6 +21,18 @@ x[2]      hp.w                    -
 xd[2]     hp.w'                   1/s
 x[3]      hp.wd                   -
 xd[3]     hp.wd'                  1/s
+x[4]      bq3.wx                  -
+xd[4]     bq3.wx'                 1/s
+x[5]      bq3.wdx                 -
+xd[5]     bq3.wdx'                1/s
+x[6]      bq3.wy                  -
+xd[6]     bq3.wy'                 1/s
+x[7]      bq3.wdy                 -
+xd[7]     bq3.wdy'                1/s
+x[8]      bq3.wz                  -
+xd[8]     bq3.wz'                 1/s
+x[9]      bq3.wdz                 -
+xd[9]     bq3.wdz'                1/s
 
 [state.discrete]          # Sim::dis; offsets from Sim::discrete_map()
           (none)
@@ -29,6 +41,12 @@ xd[3]     hp.wd'                  1/s
           src.u                   -           double
           lp.y                    -           double
           hp.y                    -           double
+          bq3.vout.x              -           double
+          bq3.vout.y              -           double
+          bq3.vout.z              -           double
+          src3.v.x                -           double
+          src3.v.y                -           double
+          src3.v.z                -           double
 
 [boundary.in]             # root inputs the host must drive, as sig.in.*
           (none)
@@ -38,24 +56,40 @@ xd[3]     hp.wd'                  1/s
           hp.y                    -
 
 [settings]                # configurable; value is the elaborated default
-          lp.a0                   -           = 1.0
-          lp.a1                   -           = 2.0
-          lp.a2                   -           = 4.0
-          lp.b0                   -           = 0.0
-          lp.b1                   -           = 0.0
-          lp.b2                   -           = 4.0
-          hp.a0                   -           = 1.0
-          hp.a1                   -           = 2.0
-          hp.a2                   -           = 4.0
-          hp.b0                   -           = 1.0
-          hp.b1                   -           = 0.0
-          hp.b2                   -           = 0.0
+          lp.A.c2                 -           = 1.0
+          lp.A.c1                 -           = 2.0
+          lp.A.c0                 -           = 4.0
+          lp.B.c2                 -           = 0.0
+          lp.B.c1                 -           = 0.0
+          lp.B.c0                 -           = 4.0
+          hp.A.c2                 -           = 1.0
+          hp.A.c1                 -           = 2.0
+          hp.A.c0                 -           = 4.0
+          hp.B.c2                 -           = 1.0
+          hp.B.c1                 -           = 0.0
+          hp.B.c0                 -           = 0.0
+          bq3.A.c2                -           = 1.0
+          bq3.A.c1                -           = 2.0
+          bq3.A.c0                -           = 4.0
+          bq3.B.c2                -           = 1.0
+          bq3.B.c1                -           = 0.0
+          bq3.B.c0                -           = 0.0
 
 [decimation]              # derived from `rate` at configuration
 
 [types]
+se.math.Poly3.c2                  -
+se.math.Poly3.c1                  -
+se.math.Poly3.c0                  -
+se.math.Vec3                      units { U }
+se.math.Vec3.x                    U
+se.math.Vec3.y                    U
+se.math.Vec3.z                    U
 
 [recorded]                # columns of contbq.csv
           time                    s
           lp.y                    -
           hp.y                    -
+          bq3.vout.x              -
+          bq3.vout.y              -
+          bq3.vout.z              -

@@ -70,24 +70,24 @@ xd[5]     lz.wd'                  1/s
 
 [settings]                # configurable; value is the elaborated default
           sc.k                    s           = 0.5
-          lx.a0                   -           = 1.0
-          lx.a1                   -           = 2.0
-          lx.a2                   -           = 4.0
-          lx.b0                   -           = 0.0
-          lx.b1                   -           = 0.0
-          lx.b2                   -           = 4.0
-          ly.a0                   -           = 1.0
-          ly.a1                   -           = 2.0
-          ly.a2                   -           = 4.0
-          ly.b0                   -           = 0.0
-          ly.b1                   -           = 0.0
-          ly.b2                   -           = 4.0
-          lz.a0                   -           = 1.0
-          lz.a1                   -           = 2.0
-          lz.a2                   -           = 4.0
-          lz.b0                   -           = 0.0
-          lz.b1                   -           = 0.0
-          lz.b2                   -           = 4.0
+          lx.A.c2                 -           = 1.0
+          lx.A.c1                 -           = 2.0
+          lx.A.c0                 -           = 4.0
+          lx.B.c2                 -           = 0.0
+          lx.B.c1                 -           = 0.0
+          lx.B.c0                 -           = 4.0
+          ly.A.c2                 -           = 1.0
+          ly.A.c1                 -           = 2.0
+          ly.A.c0                 -           = 4.0
+          ly.B.c2                 -           = 0.0
+          ly.B.c1                 -           = 0.0
+          ly.B.c0                 -           = 4.0
+          lz.A.c2                 -           = 1.0
+          lz.A.c1                 -           = 2.0
+          lz.A.c0                 -           = 4.0
+          lz.B.c2                 -           = 0.0
+          lz.B.c1                 -           = 0.0
+          lz.B.c0                 -           = 4.0
 
 [decimation]              # derived from `rate` at configuration
 
@@ -96,3 +96,6 @@ se.math.Vec3                      units { U }
 se.math.Vec3.x                    U
 se.math.Vec3.y                    U
 se.math.Vec3.z                    U
+se.math.Poly3.c2                  -
+se.math.Poly3.c1                  -
+se.math.Poly3.c0                  -

@@ -12,8 +12,19 @@
 //
 // hp is the sharper of the two: its step response starts at exactly 1, so a
 // dropped or mis-signed direct term is wrong in the very first recorded row.
+//
+// `bq3` is the same assertion for `ct.Biquad3`, whose characteristic bug the
+// scalar cases cannot reach: six states and three output taps in one leaf, so a
+// cross-wired axis -- `der.wdy` reading `state.wdx`, `out.vout.z` reading `wy`
+// -- compiles perfectly and integrates something plausible. It is given hp's
+// coefficients and a CONSTANT VECTOR input of {1, 2, 3}, so by linearity each
+// axis is hp's own step response scaled by its own component, and the three
+// columns are 1x, 2x and 3x each other at every sample. Any axis reading
+// another's state or input is off by a whole integer factor, in the first row,
+// rather than by something a tolerance might absorb.
 package contbq;
 
+use se.math;
 use se.sig.ct;
 
 node ContBq {
@@ -26,16 +37,24 @@ node ContBq {
         node src : Step {};
 
         node lp : ct.Biquad (-) {
-            a0 = 1.0;  a1 = 2.0;  a2 = 4.0;
-            b0 = 0.0;  b1 = 0.0;  b2 = 4.0;
+            A = { 1.0, 2.0, 4.0 };
+            B = { 0.0, 0.0, 4.0 };
         };
         node hp : ct.Biquad (-) {
-            a0 = 1.0;  a1 = 2.0;  a2 = 4.0;
-            b0 = 1.0;  b1 = 0.0;  b2 = 0.0;
+            A = { 1.0, 2.0, 4.0 };
+            B = { 1.0, 0.0, 0.0 };
         };
+
+        // Same H(s) as `hp`, three axes at once.
+        node bq3 : ct.Biquad3 (-) {
+            A = { 1.0, 2.0, 4.0 };
+            B = { 1.0, 0.0, 0.0 };
+        };
+        node src3 : Step3 {};
 
         src --> lp;
         src --> hp;
+        src3 --> bq3;
 
         lp --> self.lp_y;
         hp --> self.hp_y;
@@ -48,4 +67,16 @@ node Step {
     outputs { u: double(-); }
 
     output() { out.u = 1.0; }
+}
+
+// File-private, and the three components are DELIBERATELY DISTINCT: a vector
+// source of {1, 1, 1} would let every axis-crossing bug in `Biquad3` pass.
+node Step3 {
+    outputs { v: math.Vec3(-); }
+
+    output() {
+        out.v.x = 1.0;
+        out.v.y = 2.0;
+        out.v.z = 3.0;
+    }
 }

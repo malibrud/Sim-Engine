@@ -898,6 +898,13 @@ if (-not $cl) {
     # The second follows from the first by H_hp + H_bp + H_lp = 1, so it is a
     # derivation rather than a second magic constant. hp starts at exactly 1,
     # which is the assertion on the direct term b0.
+    #
+    # Columns 3-5 are ct.Biquad3 on hp's coefficients, driven by the constant
+    # vector {1, 2, 3}. By linearity each axis is hp's own response scaled by
+    # its component, so they are checked against 1x, 2x and 3x the SAME closed
+    # form. That is what catches a cross-wired axis inside the three-axis leaf:
+    # six states in one node, where `der.wdy` reading `state.wdx` compiles
+    # perfectly and is off by a factor of 2 in the first row.
     if ($emitDirs.ContainsKey('ContBq')) {
         $cbDir = $emitDirs['ContBq']
         Push-Location $cbDir
@@ -918,8 +925,12 @@ if (-not $cl) {
                 $cs = [Math]::Cos($wd * $t)
                 $sn = [Math]::Sin($wd * $t)
                 $q  = ($sigma / $wd) * $sn
+                $hpv  = $e * ($cs - $q)
                 $errs = @([Math]::Abs([double]$c[1] - (1.0 - $e * ($cs + $q))),
-                          [Math]::Abs([double]$c[2] - (      $e * ($cs - $q))))
+                          [Math]::Abs([double]$c[2] - $hpv),
+                          [Math]::Abs([double]$c[3] - (1.0 * $hpv)),
+                          [Math]::Abs([double]$c[4] - (2.0 * $hpv)),
+                          [Math]::Abs([double]$c[5] - (3.0 * $hpv)))
                 foreach ($err in $errs) { if ($err -gt $worst) { $worst = $err } }
             }
         } else {
@@ -930,7 +941,7 @@ if (-not $cl) {
         # magnitude the FILE resolves only about 5e-9. rk4's own error here is
         # nearer 1e-12. A wrong coefficient is O(0.1), so 1e-7 still catches it.
         if ($worst -lt 1e-7) {
-            Write-Host ("ok   build/emit/ContBq : rk4 matches both step responses, max error " +
+            Write-Host ("ok   build/emit/ContBq : rk4 matches both step responses and all three Biquad3 axes, max error " +
                         $worst.ToString('E2')) -ForegroundColor Green
             $script:pass++
         } else {
