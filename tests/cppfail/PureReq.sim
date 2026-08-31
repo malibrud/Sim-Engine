@@ -1,0 +1,9 @@
+// See lib/purereq/PureReq.se. This model is expected to emit cleanly and then
+// FAIL to compile.
+sim PureReq {
+    root: purereq.PureReq {};
+
+    step:     1 (ms);
+    solver:   rk4;
+    duration: 1 (ms);
+}

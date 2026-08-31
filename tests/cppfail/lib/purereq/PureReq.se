@@ -1,0 +1,26 @@
+// A model that MUST NOT COMPILE, on the same principle as PureStop.se beside
+// it and for the same reason.
+//
+// §10.6 puts two kinds of contract on the `sim` handle. `sim.check_*` is
+// observational and legal everywhere; `sim.require` HALTS, so it is confined
+// to the mutating methods exactly as `sim.stop`/`sim.abort` are, and the
+// confinement is carried by the handle's type rather than by a rule anyone has
+// to remember: `require` is a member of `RunControl`, not of `RunView`.
+//
+// The two lines below are the two halves of one assertion. The `require` must
+// fail to compile, naming `require` and `RunView`; the `check_near` on the line
+// after it must compile, because a contract that only reports is legal in a
+// pure method and the whole design of §10.6 rests on that split. A compile that
+// fails for some other reason is not this test passing, so the runner also
+// requires the diagnostics to say nothing about `check_near`.
+package purereq;
+
+node PureReq {
+    outputs { y: double(-); }
+
+    output() {
+        sim.require(false, "halting from a pure method is not legal");  // must NOT compile
+        sim.check_near(1.0, 1.0, 1e-9, "reporting from one is");        // must compile
+        out.y = sim.time();
+    }
+}

@@ -1762,6 +1762,9 @@ void Emitter::sim_run() {
     o_ << "    final_all(ctx);\n";
     if (m_.record.present) o_ << "    se_rec_.close();\n";
     if (m_.realtime) o_ << "    se_rt::realtime().summary();\n";
+    // §10.6 -- after the realtime summary and before the closing line, so
+    // the last thing a log carries is the run's outcome and not a contract detail.
+    o_ << "    se_rt::checks().summary();\n";
     o_ << "    se_rt::logs().write(se_rt::Level::Info, \"sim\", se_time_,\n";
     o_ << "                        se_rt::format(\"run {}: {}\", ctx.reason,\n";
     o_ << "                                      ctx.message.empty() ? \"-\" "
@@ -1800,7 +1803,11 @@ void Emitter::sim_run() {
     o_ << "    while (!done()) tick();\n";
     o_ << "    finish();\n";
     o_ << "    const char* r = se_rt::reason_name(se_rt::control().reason());\n";
-    o_ << "    return (std::strcmp(r, \"aborted\") == 0 || std::strcmp(r, \"error\") == 0)\n";
+    // §10.6 -- a run that violated a contract is not a successful run, even
+    // when nothing halted it. That is what lets a contract BE a test oracle
+    // instead of something a harness has to go grepping the log for.
+    o_ << "    return (std::strcmp(r, \"aborted\") == 0 || std::strcmp(r, \"error\") == 0 ||\n";
+    o_ << "            se_rt::checks().any())\n";
     o_ << "               ? 1\n               : 0;\n";
     o_ << "}\n";
 

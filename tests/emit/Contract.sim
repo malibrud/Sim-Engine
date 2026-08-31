@@ -1,0 +1,22 @@
+// §10.6 — the contract-check acceptance model. See lib/contract/Contract.se for
+// which six contracts it makes and which three of them fail. Batch mode, and
+// only 30 ticks: the point is the reports, not the arithmetic.
+sim Contract {
+    root: contract.Contract {};
+
+    step:     1 (ms);
+    solver:   rk4;
+    duration: 30 (ms);
+
+    record: {
+        file: "contract.csv";
+        signals { w.y; }
+    }
+
+    // The reports are the output under test, so they go to a file the runner
+    // can read rather than to a console it would have to scrape.
+    log: {
+        file:  "contract.log";
+        level: info;
+    }
+}

@@ -368,9 +368,10 @@ struct TraceLog {
 
 )SERT"
     // MSVC caps a single string literal at 16380 bytes, and this header passed
-    // it. Adjacent literals concatenate, so the split is invisible in the
-    // output; it must fall on a blank line between sections, and each half must
-    // stay under the cap as the header grows.
+    // it long ago. Adjacent literals concatenate, so the splits are invisible
+    // in the output; each must fall on a blank line between sections, and each
+    // PIECE must stay under the cap as the header grows. There are three of
+    // them below, sized so none is close to the limit.
     R"SERT(// ─── Block descriptors (section 15.6) ────────────────────────────────────────
 //
 // A generated model exposes its signal and discrete-state blocks as one
@@ -535,6 +536,103 @@ inline Control& control() {
     return c;
 }
 
+)SERT"
+    R"SERT(// ─── Contract checks (section 10.6) ──────────────────────────────────────────
+//
+// A contract is a claim a body makes about its own inputs, states or outputs:
+// this quaternion is unit-norm, this gain is finite, this duty cycle is in
+// [0,1]. It is checked where the claim lives — at run time, in a named block
+// instance, at a sim instant — which is exactly what separates it from
+// anything `sec` could have decided at generation.
+//
+// Reporting is OBSERVATIONAL, on section 10.1's rule and for section 10.1's
+// reason. `output()` and `derivative()` are evaluated at every minor step of
+// every tick, so a check that halted there would both break section 10.2's
+// confinement and end runs over trial states the trajectory never visits. A
+// violation still FAILS THE RUN — summary() prints it and Sim::run() returns
+// nonzero — it simply does so at teardown rather than mid-step. The halting
+// form is RunControl::require below, confined where stop/abort are.
+
+// One (node, contract) pair that has been violated at least once.
+//
+// The key is the two `const char*` values THEMSELVES, not their text. Both are
+// string literals — the node path is emitted into the model, the contract name
+// is written in the body — so their addresses are stable for the life of the
+// process, and the same wording in two different leaves stays two different
+// sites, which is what a reader wants to see.
+struct CheckSite {
+    const char*   path;
+    const char*   contract;
+    std::uint64_t count      = 0;
+    double        first_time = 0.0;
+    std::uint64_t first_tick = 0;
+    std::string   first_detail;   // the values, as the first report printed them
+};
+
+class Checks {
+public:
+    // How many times one site reports before it goes quiet. Throttling is not
+    // a nicety here: rk4 evaluates output() four times per tick, so a contract
+    // violated for a whole 20 s run at 1 kHz would write 80,000 identical
+    // lines and bury the first one, which is the only one that locates the
+    // cause. The count keeps rising after the reports stop.
+    static constexpr std::uint64_t report_limit = 5;
+
+    void fail(const char* path, const char* type, const char* contract,
+              const std::string& detail, double t, std::uint64_t tick) {
+        CheckSite& s = site(path, contract);
+        if (s.count == 0) {
+            s.first_time   = t;
+            s.first_tick   = tick;
+            s.first_detail = detail;
+        }
+        ++s.count;
+        if (s.count > report_limit) return;
+        logs().write(Level::Error, path, t,
+                     format("contract failed: {}; {}  ({}, tick {})",
+                            contract, detail, type, tick));
+        if (s.count == report_limit)
+            logs().write(Level::Error, path, t,
+                         format("contract failed: {}; further reports suppressed, "
+                                "the total is in the summary", contract));
+    }
+
+    bool any() const { return !sites_.empty(); }
+
+    // The report a reader actually acts on, one line per violated site: the
+    // first failure locates the cause in time, and the count says whether it
+    // was a transient or the whole run.
+    void summary() const {
+        if (sites_.empty()) return;
+        logs().write(Level::Error, "sim", sim_time(),
+                     format("{} contract(s) violated", sites_.size()));
+        for (const CheckSite& s : sites_)
+            logs().write(Level::Error, "sim", sim_time(),
+                         format("  {}: {} -- {} time(s), first at t = {} s "
+                                "(tick {}); {}",
+                                s.path, s.contract, s.count, s.first_time,
+                                s.first_tick, s.first_detail));
+    }
+
+private:
+    // Linear, and deliberately: this runs only when a contract has ALREADY
+    // failed, the site count is a handful, and two pointer comparisons beat
+    // hashing a string. Nothing on the passing path reaches here at all.
+    CheckSite& site(const char* path, const char* contract) {
+        for (CheckSite& s : sites_)
+            if (s.path == path && s.contract == contract) return s;
+        sites_.push_back(CheckSite{path, contract, 0, 0.0, 0, std::string()});
+        return sites_.back();
+    }
+
+    std::vector<CheckSite> sites_;
+};
+
+inline Checks& checks() {
+    static Checks c;
+    return c;
+}
+
 // ─── The run view (section 10.5) ─────────────────────────────────────────────
 //
 // The engine's per-evaluation state, one instance per model. `now` is the
@@ -567,6 +665,57 @@ struct RunView {
     std::uint64_t tick() const { return run->tick; }
     const char*   path() const { return node_path; }
     const char*   type() const { return node_type; }
+
+    // ── Contracts (section 10.6) ────────────────────────────────────────────
+    //
+    // Legal in every body, observational everywhere, and each returns the
+    // condition — so a body that cannot proceed on bad input can say
+    //
+    //     if (!sim.check_finite(in.a, "acceleration is finite")) return;
+    //
+    // The overloads that take VALUES are the point of the family. A body can
+    // always write `check(fabs(n - 1.0) < tol, "unit norm")`, but the report
+    // can then only say the condition was false; `check_near(n, 1.0, tol,
+    // "unit norm")` says what `n` was and by how much it missed, which is the
+    // difference between a diagnostic and a notification.
+    bool check(bool ok, const char* contract) const {
+        if (!ok) contract_failed(contract, "condition is false");
+        return ok;
+    }
+    bool check(bool ok, const char* contract, double v) const {
+        if (!ok) contract_failed(contract, format("value {}", v));
+        return ok;
+    }
+    bool check_finite(double v, const char* contract) const {
+        const bool ok = std::isfinite(v);
+        if (!ok) contract_failed(contract, format("got {}, want a finite value", v));
+        return ok;
+    }
+    bool check_range(double v, double lo, double hi, const char* contract) const {
+        // NaN fails this, and says so through the same channel: neither
+        // comparison holds, and the overshoot below prints as nan too.
+        const bool ok = v >= lo && v <= hi;
+        if (!ok)
+            contract_failed(contract, format("got {}, want [{}, {}], outside by {}",
+                                             v, lo, hi, v < lo ? lo - v : v - hi));
+        return ok;
+    }
+    bool check_near(double a, double b, double tol, const char* contract) const {
+        const double e  = std::fabs(a - b);
+        const bool   ok = e <= tol;
+        if (!ok)
+            contract_failed(contract,
+                            format("got {}, want {}, |err| {} > tol {}", a, b, e, tol));
+        return ok;
+    }
+
+protected:
+    // Off the caller's path on purpose: every check above is a branch that does
+    // no work at all when the contract holds, and the message is built only
+    // here. RunControl::require reaches it for the halting form.
+    void contract_failed(const char* contract, const std::string& detail) const {
+        checks().fail(node_path, node_type, contract, detail, run->now, run->tick);
+    }
 };
 
 // The widened form for init(), on_step() and final(): everything above plus
@@ -577,9 +726,32 @@ struct RunControl : RunView {
 
     void stop(const std::string& m) const { control().stop(m); }
     void abort(const std::string& m) const { control().abort(m); }
+
+    // section 10.6 — the halting form of a contract, confined here for exactly
+    // the reason stop/abort are. A claim that must not be survived belongs in a
+    // mutating method; in `output()` this is "no member named require", a
+    // compile error at the .se line, while `sim.check_*` there still works.
+    bool require(bool ok, const char* contract) const {
+        if (!ok) require_failed(contract, "condition is false");
+        return ok;
+    }
+    bool require(bool ok, const char* contract, double v) const {
+        if (!ok) require_failed(contract, format("value {}", v));
+        return ok;
+    }
+
+private:
+    // Reported through the same registry as a check, so the summary counts it
+    // and the exit code follows, and THEN the run is ended. Control::fail is
+    // first-writer-wins, so the first violated contract is the one named.
+    void require_failed(const char* contract, const std::string& detail) const {
+        contract_failed(contract, detail);
+        control().fail(format("contract failed: {} at {}", contract, node_path));
+    }
 };
 
-// ─── Recording (section 13.5) ────────────────────────────────────────────────
+)SERT"
+    R"SERT(// ─── Recording (section 13.5) ────────────────────────────────────────────────
 
 class Recorder {
 public:

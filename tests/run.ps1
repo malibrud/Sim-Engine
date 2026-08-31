@@ -385,43 +385,55 @@ if (-not $cl) {
         }
     }
 
-    # The one case in the suite that MUST NOT COMPILE.
+    # The cases in the suite that MUST NOT COMPILE.
     #
     # Section 10.5 put `sim` in scope of every body. That is only safe because
     # the surface it widens is NOT the one section 10.2 confines: a leaf holds
     # a plain se_rt::RunView, and preamble() shadows it with an
-    # se_rt::RunControl in init() and on_step() alone. Nothing else here would
-    # notice a refactor that injected RunControl everywhere, so this asserts
-    # the negative by compiling it and requiring the failure.
+    # se_rt::RunControl in init() and on_step() alone. Section 10.6 rests on the
+    # same split -- `sim.check_*` observes and is legal everywhere, `sim.require`
+    # halts and is not. Nothing else here would notice a refactor that injected
+    # RunControl everywhere or moved a halting member onto RunView, so these
+    # assert the negative by compiling it and requiring the failure.
+    #
+    # Each case pins THREE conditions, because "the compile failed" on its own
+    # would pass for a typo: it must fail, name the confined member on RunView,
+    # and say nothing about the member on the next line -- the positive half of
+    # the same claim, which has to still work.
     #
     # Kept outside tests/emit deliberately: the loop above compiles every case
     # it finds there and expects success.
-    $cfOut = Join-Path $emitOut 'PureStop'
-    if (Test-Path $cfOut) { Remove-Item -Recurse -Force $cfOut }
-    New-Item -ItemType Directory -Force $cfOut | Out-Null
-    $cfArg = $cfOut.Replace('\', '/')
-    & $sec --no-color --quiet --emit -I 'tests/cppfail/lib' -o $cfArg 'tests/cppfail/PureStop.sim'
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "FAIL tests/cppfail/PureStop.sim : should emit cleanly, sec refused it" -ForegroundColor Red
-        $script:fail++
-    } else {
+    $cppFail = @(
+        @{ name = 'PureStop'; member = 'stop';    legal = 'time';
+           note = 'sim.stop in output() is a compile error at the .se line, and sim.time() is not' },
+        @{ name = 'PureReq';  member = 'require'; legal = 'check_near';
+           note = 'sim.require in output() is a compile error at the .se line, and sim.check_near() is not' }
+    )
+    foreach ($cf in $cppFail) {
+        $cfOut = Join-Path $emitOut $cf.name
+        if (Test-Path $cfOut) { Remove-Item -Recurse -Force $cfOut }
+        New-Item -ItemType Directory -Force $cfOut | Out-Null
+        $cfArg = $cfOut.Replace('\', '/')
+        & $sec --no-color --quiet --emit -I 'tests/cppfail/lib' -o $cfArg ("tests/cppfail/" + $cf.name + ".sim")
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host ("FAIL tests/cppfail/" + $cf.name +
+                        ".sim : should emit cleanly, sec refused it") -ForegroundColor Red
+            $script:fail++
+            continue
+        }
         Push-Location $cfOut
         $cfLog  = (& '.\build.bat' 2>&1 | Out-String)
         $cfCode = $LASTEXITCODE
         Pop-Location
-        # Three conditions, because "the compile failed" on its own would pass
-        # for a typo. It must fail, name `stop` on RunView, and say nothing
-        # about `time` -- sim.time() in a pure method is the other half of the
-        # claim and has to still work.
-        $named  = ($cfLog -match "'stop'") -and ($cfLog -match 'RunView')
-        $quiet  = ($cfLog -notmatch "'time'")
-        $atLine = ($cfLog -match 'PureStop\.se')
+        $named  = ($cfLog -match ("'" + $cf.member + "'")) -and ($cfLog -match 'RunView')
+        $quiet  = ($cfLog -notmatch ("'" + $cf.legal + "'"))
+        $atLine = ($cfLog -match ($cf.name + '\.se'))
         if ($cfCode -ne 0 -and $named -and $quiet -and $atLine) {
-            Write-Host ("ok   tests/cppfail/PureStop : sim.stop in output() is a compile " +
-                        "error at the .se line, and sim.time() is not") -ForegroundColor Green
+            Write-Host ("ok   tests/cppfail/" + $cf.name + " : " + $cf.note) -ForegroundColor Green
             $script:pass++
         } else {
-            Write-Host "FAIL tests/cppfail/PureStop : expected C2039 on 'stop' at the .se line" -ForegroundColor Red
+            Write-Host ("FAIL tests/cppfail/" + $cf.name + " : expected C2039 on '" +
+                        $cf.member + "' at the .se line") -ForegroundColor Red
             Write-Host ("     exit=" + $cfCode + " named=" + $named + " quiet=" + $quiet +
                         " at_se_line=" + $atLine)
             Write-Host $cfLog
@@ -743,6 +755,94 @@ if (-not $cl) {
             $script:pass++
         } else {
             Write-Host ("FAIL build/emit/ChainChk : max error " + $worst) -ForegroundColor Red
+            $script:fail++
+        }
+    }
+
+    # Contract checks (SPECIFICATION 10.6). The model in tests/emit/lib/contract
+    # makes six contracts about itself. Three hold for the whole run and three
+    # fail on a schedule that is closed form, so every number below is derived
+    # rather than recorded:
+    #
+    #   q is unit-norm      fails at EVERY evaluation. 16 output passes (ticks
+    #                       0..15) plus 15 integrations of 4 rk4 stages = 76.
+    #   t in [0, 0.0102]    fails on the trial states past the window: 3 from
+    #                       tick 10's integration and 4 from each of ticks
+    #                       11..14, so 3 + 16 = 19.
+    #   reaches tick 15     the halting form, once, and it ends the run there.
+    #
+    # The three that HOLD are as much of the assertion as the three that fail. A
+    # satisfied contract must leave nothing whatever in the log, and that is
+    # what the silence check below refuses to let regress; without it the log
+    # would fill with contracts that are working.
+    #
+    # Two properties here are ones no other case in the suite would catch. The
+    # THROTTLE: five reports and then a count, because 76 identical lines bury
+    # the first one, which is the only one that locates the cause. And the
+    # MINOR-STEP instant: the window's upper end sits between two ticks, so the
+    # first failure is reported at t = 0.0105 -- proof that a contract in a pure
+    # method sees the solver's clock and not the tick's.
+    if ($emitDirs.ContainsKey('Contract')) {
+        $ctDir = $emitDirs['Contract']
+        Push-Location $ctDir
+        & '.\build\Contract.exe' 2>&1 | Out-Null
+        $ctCode = $LASTEXITCODE
+        Pop-Location
+
+        $bad = @()
+        # A violated contract must fail the RUN. This is what lets a contract be
+        # a test oracle instead of something a harness has to go grepping for.
+        if ($ctCode -ne 1) { $bad += "exit code $ctCode, expected 1" }
+
+        $ctLog = Join-Path $ctDir 'contract.log'
+        if (-not (Test-Path $ctLog)) {
+            $bad += 'no contract.log was written'
+        } else {
+            # -Encoding UTF8 for the manifest's reason: the file is written
+            # BOM-less and 5.1 would otherwise decode it as the ANSI codepage.
+            $ctLines = @(Get-Content -Encoding UTF8 $ctLog)
+
+            $rep = @($ctLines | Where-Object {
+                $_.Contains('contract failed: q is unit-norm; got 1.05') })
+            if ($rep.Count -ne 5) {
+                $bad += "$($rep.Count) reports for the always-failing contract, expected 5"
+            } elseif (-not ($rep[0].Contains('error w: ') -and
+                            $rep[0].Contains('|err| 0.05 > tol 1e-09') -and
+                            $rep[0].Contains('(contract.Contract#Watch, tick 0)'))) {
+                # The report has to carry the path, the type, the values AND the
+                # bound. A report that only says a contract failed is the thing
+                # this feature exists to replace.
+                $bad += "the report is missing part of its detail: $($rep[0])"
+            }
+            $sup = @($ctLines | Where-Object {
+                $_.Contains('q is unit-norm; further reports suppressed') })
+            if ($sup.Count -ne 1) { $bad += "$($sup.Count) suppression notices, expected 1" }
+
+            foreach ($quiet in @('k is finite', 'k is positive', 't does not run backwards')) {
+                if (@($ctLines | Where-Object { $_.Contains($quiet) }).Count -ne 0) {
+                    $bad += "a satisfied contract was reported: $quiet"
+                }
+            }
+
+            $want = @(
+                '3 contract(s) violated',
+                'w: q is unit-norm -- 76 time(s), first at t = 0 s (tick 0)',
+                'w: t is within the checked window -- 19 time(s), first at t = 0.0105 s (tick 10)',
+                'w: the run reaches tick 15 -- 1 time(s), first at t = 0.015 s (tick 15)',
+                'run error: contract failed: the run reaches tick 15')
+            foreach ($w in $want) {
+                if (@($ctLines | Where-Object { $_.Contains($w) }).Count -ne 1) {
+                    $bad += "missing from the summary: $w"
+                }
+            }
+        }
+
+        if ($bad.Count -eq 0) {
+            Write-Host ("ok   build/emit/Contract : contracts report path, values and " +
+                        "bound, throttle at five, and fail the run") -ForegroundColor Green
+            $script:pass++
+        } else {
+            Write-Host ("FAIL build/emit/Contract : " + ($bad -join '; ')) -ForegroundColor Red
             $script:fail++
         }
     }

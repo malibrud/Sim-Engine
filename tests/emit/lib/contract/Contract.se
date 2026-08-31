@@ -1,0 +1,78 @@
+// §10.6 — contract checks, end to end. Every claim this model makes about
+// itself is deliberate, and the ones that fail do so on a schedule the test
+// runner can state in closed form:
+//
+//   q is unit-norm          fails at EVERY evaluation -- the throttle's case
+//   t is in the window      fails once t leaves [0, t_hi], first at a MINOR
+//                           step, so its reported instant is strictly between
+//                           two ticks
+//   the run reaches tick 15 the halting form; ends the run at tick 15
+//
+//   k is finite             holds for the whole run
+//   k is positive           holds for the whole run
+//   t does not run backwards holds for the whole run
+//
+// The three that hold are as much of the assertion as the three that fail: a
+// satisfied contract must leave NOTHING in the log, which is what makes the
+// counts on the other three readable rather than buried.
+package contract;
+
+node Contract {
+    outputs { y: double(-); }
+
+    structure {
+        node w : Watch {};
+        w --> self.y;
+    }
+}
+
+// One leaf carrying all six. It has a continuous state on purpose: that is
+// what puts its `derivative()` on the solver's minor steps, and the minor-step
+// instant is the half of §10.6's report that nothing else in the suite proves.
+node Watch {
+    settings {
+        // Deliberately not unit-norm, and by a margin no tolerance forgives.
+        q: double(-) = 1.05;
+        k: double(-) = 2.0;
+        // The upper end of the window `t` is checked against. It sits BETWEEN
+        // two ticks on purpose: t is 0.010 at tick 10 and 0.011 at tick 11, so
+        // the first value to leave the window is the solver's 0.0105 and the
+        // first report therefore carries a fractional instant. Put it on a tick
+        // instead and the first failure is decided by whether accumulating ten
+        // additions of 1e-3 lands a hair above 0.01 or a hair below.
+        t_hi: double(s) = 0.0102;
+    }
+
+    outputs { y: double(-); }
+
+    states { continuous t: double(s) = 0.0; }
+
+    output() {
+        // Fails at every evaluation. Five reports, then silence and a count --
+        // rk4 evaluates this several times per tick, so without the throttle
+        // this one contract would be the whole log.
+        sim.check_near(param.q, 1.0, 1e-9, "q is unit-norm");
+
+        // Holds for the whole run, and must therefore be invisible.
+        sim.check_finite(param.k, "k is finite");
+        sim.check(param.k > 0.0, "k is positive", param.k);
+
+        out.y = param.k * state.t;
+    }
+
+    derivative() {
+        // A pure method, and the first failure lands on a minor step: t crosses
+        // t_hi between two ticks, so the reported instant is fractional. That
+        // is the assertion that §10.5's clock reaches a contract.
+        sim.check_range(state.t, 0.0, param.t_hi, "t is within the checked window");
+        sim.check(state.t >= 0.0, "t does not run backwards");
+        der.t = 1.0;
+    }
+
+    on_step() {
+        // The halting form (§10.6), legal here and a compile error in the two
+        // methods above. `tick` rather than `time` so the boundary is an
+        // integer comparison and not a question about a decimal literal.
+        sim.require(sim.tick() < 15, "the run reaches tick 15");
+    }
+}

@@ -1982,6 +1982,8 @@ restrictions, which are really one restriction wearing three hats:
 - `log.*` → `init()`/`on_step()`/`final()` only (§10.1).
 - `native` handles in scope → `init()`/`on_step()`/`final()` only (§6.7).
 - `sim.stop`/`sim.abort` → `init()`/`on_step()` only (§10.2).
+- `sim.require` → `init()`/`on_step()` only (§10.6): it halts, so it is
+  confined where every other way of halting is.
 
 A `sendto()` in `output()` would put four packets on the wire per step, at values
 the model never actually took, silently. Confining mutation keeps results
@@ -1993,6 +1995,12 @@ effect repeated at states the trajectory never visits, and a read has no side
 effect to repeat. Evaluating y = g(t,x,u) four times is not a problem — it is
 what a Runge-Kutta stage IS, and the language already hands those methods `x`
 and `u` at exactly those trial states.
+
+`sim.check_*` (§10.6) is legal in every method for the same reason `log.trace`
+is: it is observational. It fires four times per step when a contract is
+broken, and that is *correct* — the four are counted, five are reported and
+the rest are a total. What it never does is change the model or end the run;
+the form that ends a run is `sim.require`, on the line above.
 
 ### 8.5 The sort
 
@@ -2300,6 +2308,11 @@ It is a **parameter, not a global**, for the same reason feedthrough rides
 `output()`'s signature: the outcome is only knowable at teardown, and a parameter
 says exactly that.
 
+A `sim.require` failure (§10.6) arrives here as `ctx.reason == "error"`, with the
+contract named in `ctx.message`. A non-halting `sim.check_*` violation does not
+touch `ctx` at all — the run completed — but it does still make the process exit
+code nonzero, which is the distinction §10.6 draws between reporting and halting.
+
 `final()` runs on normal and error termination alike, in reverse init order, but
 **only for nodes whose `init()` completed** — a node that never initialised cannot
 be asked to tear down. RAII on C++ members is the quiet default for nodes that
@@ -2399,6 +2412,92 @@ by an argument about what a body happens to contain.
 `sim.stop` and `sim.abort` are **not** part of this surface; they stay confined
 to `init()` and `on_step()` by §10.2, and the confinement is carried by the
 handle's type rather than by a rule an implementation has to remember.
+
+`sim.check_*` (§10.6) **is** part of it, and meets the admission rule the same
+way `sim.time()` does: what it reports is a function of the values in front of
+it at this instant. `sim.require` is not, for `sim.stop`'s reason — it halts —
+and rides the same widened handle.
+
+### 10.6 Contract checks
+
+A **contract** is a claim a body makes about its own inputs, states or outputs —
+this quaternion is unit-norm, this gain is finite, this duty cycle is in [0,1].
+Today those claims live in header comments, and when one is broken the model
+produces plausible numbers and the first sign of trouble is a recorded column
+that is wrong by a factor nobody notices.
+
+Observational, legal in **every** method:
+
+| | On failure it reports |
+|---|---|
+| `sim.check(ok, "contract")` | the contract |
+| `sim.check(ok, "contract", v)` | …and the value that decided it |
+| `sim.check_finite(v, "contract")` | the non-finite value |
+| `sim.check_range(v, lo, hi, "contract")` | got, the interval, and the overshoot |
+| `sim.check_near(a, b, tol, "contract")` | got, want, \|err\|, tol |
+
+Halting, and confined to `init()`/`on_step()` by §8.4:
+
+| | |
+|---|---|
+| `sim.require(ok, "contract")` | reports, then ends the run with reason `error` |
+| `sim.require(ok, "contract", v)` | …carrying the value into the report |
+
+Each returns the condition, so a body that cannot proceed on bad input can say
+`if (!sim.check_finite(in.a, "…")) return;`.
+
+**The overloads that take values are the point of the family.** A body can always
+write `check(fabs(n - 1.0) < tol, "unit norm")`, but the report can then only say
+the condition was false. `check_near(n, 1.0, tol, "unit norm")` says what `n` was
+and by how much it missed, and that is the difference between a diagnostic and a
+notification.
+
+**Reporting is observational, on §10.1's rule and for §10.1's reason.**
+`output()` and `derivative()` are evaluated at every minor step of every tick, so
+a check that halted there would both break §10.2's confinement and end runs over
+trial states the trajectory never visits. The halting form is `sim.require`, and
+it lives on the same handle `sim.stop` does — in `output()` it is *no member
+named require*, a compile error at the `.se` line, while `sim.check_*` on the
+next line still compiles.
+
+**A violated contract still fails the run.** Teardown prints one line per
+violated site — the contract, the node path, how many times it fired, when it
+first fired and with what values — and the process exit code is nonzero even
+when nothing halted. That is what makes a contract usable as an oracle rather
+than as something a harness has to go grepping a log for.
+
+**Reports are throttled per site, and that is not a nicety.** A contract broken
+for a whole run at 1 kHz reports tens of thousands of times, and the first
+report — the only one that locates the cause — is the one that scrolls away.
+Five reports per (node, contract) pair, then silence and a count in the summary.
+
+A contract is a claim about the **model**, not about the compiler. That is why it
+is checked at run time, in a named block instance, at a sim instant, rather than
+at generation: `sec` can tell you that a unit does not balance (§5), but only the
+run can tell you that the quaternion arriving on this wire drifted off the unit
+sphere at t = 4.31 s.
+
+```
+node Quat2Rot {
+    output(q) {
+        sim.check_near(norm4(in.q), 1.0, 1e-9, "input quaternion is unit-norm");
+        ...
+    }
+}
+```
+
+```
+[    0.010500] error drive.q2r: contract failed: input quaternion is unit-norm;
+               got 1.0349, want 1, |err| 0.0349 > tol 1e-09  (se.kin.Quat2Rot, tick 10)
+...
+[    2.000000] error sim: 1 contract(s) violated
+[    2.000000] error sim:   drive.q2r: input quaternion is unit-norm -- 8004 time(s),
+               first at t = 0.0105 s (tick 10); got 1.0349, want 1, |err| 0.0349 > tol 1e-09
+```
+
+The fractional instant in that first report is not a typo: a contract in a pure
+method sees the solver's clock (§10.5), so it names the minor step the violation
+actually occurred at rather than the tick that contains it.
 
 ---
 

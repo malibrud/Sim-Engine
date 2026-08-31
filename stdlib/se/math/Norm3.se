@@ -17,5 +17,10 @@ node Norm3 {
     // plain `double` and <cmath> is already in scope of a generated body.
     output(v) {
         out.y = std::sqrt(in.v.x * in.v.x + in.v.y * in.v.y + in.v.z * in.v.z);
+        // One contract rather than three (SPEC 10.6). A non-finite component
+        // reaches the output through the sum whatever it was, and a magnitude
+        // is the last place a NaN is still traceable to where it came from --
+        // downstream it is just a column of NaN with no node's name on it.
+        sim.check_finite(out.y, "the magnitude is finite");
     }
 }
