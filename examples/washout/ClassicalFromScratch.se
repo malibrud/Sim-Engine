@@ -9,7 +9,7 @@
 // Six nodes and eleven wires become three nodes and four wires, and the three
 // axes' parameters stop being three unrelated instances that a reader has to
 // notice are meant to move together. The high-pass makes the same point a
-// second time: `Classical.se` spends three `ct.SecondOrderSystem` instances on one
+// second time: `Classical.se` spends three `ct.Biquad` instances on one
 // design, where `ct.SecondOrderSystem3` takes it once (§6.2c).
 //
 // NOTE that `gain` and `limit` below are wide open at {1, 1, 1} and
@@ -50,29 +50,41 @@ node ClassicalFromScratch {
     outputs { aout: math.Vec3(m/s^2); }   // commanded platform acceleration
 
     structure {
-        // A whole-record flow-down: one spelling reaches all three leaves, and
-        // an override of `gain.z` at configuration still arrives here, because
-        // the copy is emitted per leaf and not folded (§6.2b).
-        node linScale : sig.ScaleLimit3 (m/s^2) {
+        // Tilt Coordination Channel Nodes
+        node xyAccel: math.Vec3ToVec2(m/s^2) {};
+        node tiltScale : sig.ScaleLimit2 (m/s^2) {
+            gain  = param.gain;
+        };
+
+        node tiltLocalFilt: sig.ct.SecondOrderSystem3 (m/s^2) {
+            // s^2 / (s^2 + 2*zeta*wn*s + wn^2), wn = 3.1 rad/s, zeta = 1.4
+            A = { 1.0, 8.68, 9.61 };
+            B = { 0.0, 0.0,  9.61  };
+        };
+
+
+        // Translational Channel Nodes
+        node transScale : sig.ScaleLimit3 (m/s^2) {
             gain  = param.gain;
             limit = param.limit;
         };
         node sfSum: math.Sum3 (m/s^2);
 
-        // The vector-native second-order section, for the same reason
-        // `ScaleLimit3` is used above rather than three `ScaleLimit`s: one
-        // design, entered once, applied to all three axes (§6.2c).
-        node thpLocal: sig.ct.SecondOrderSystem3 (m/s^2) {
+        node transLocalFilt: sig.ct.SecondOrderSystem3 (m/s^2) {
             // s^2 / (s^2 + 2*zeta*wn*s + wn^2), wn = 3.1 rad/s, zeta = 1.4
             A = { 1.0, 8.68, 9.61 };
             B = { 1.0, 0.0,  0.0  };
         };
 
-        // A setting as a wire SOURCE (§6.9.2). It costs no node and no storage:
-        // `grav` is already a member, so this reads it where the value is read,
-        // which is also why an override still reaches the wire.
-        self --> linScale  --> sfSum.a;
+        node transGlobalFilt: sig.ct.FirstOrderSystem3 (m/s^2) {
+            A = { 1.0, 0.2 };
+            B = { 1.0, 0.0 };
+        };
+
+        // Tilt Channel
+        // Translational Channel
+        self --> transScale  --> sfSum.a;
         param.grav         --> sfSum.b;
-        sfSum --> thpLocal --> self;
+        sfSum --> transLocalFilt --> transGlobalFilt --> self;
     }
 }

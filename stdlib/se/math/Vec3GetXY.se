@@ -1,0 +1,15 @@
+package se.math;
+
+use se.math;
+
+node Vec3ToVec2 {
+    units    { U; }
+
+    inputs   { x: math.Vec3(U); }
+    outputs  { y: math.Vec2(U); }
+
+    output(v) {
+        out.y.x = in.v.x;
+        out.y.y = in.v.y;
+    }
+}

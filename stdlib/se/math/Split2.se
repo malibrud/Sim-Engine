@@ -1,0 +1,15 @@
+package se.math;
+
+use se.math;
+
+node Split2 {
+    units { U; }
+
+    inputs  { v: math.Vec2(U); }
+    outputs { x: double(U);  y: double(U); }
+
+    output(v) {
+        out.x = in.v.x;
+        out.y = in.v.y;
+    }
+}

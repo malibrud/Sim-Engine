@@ -1,0 +1,17 @@
+package se.math;
+
+use se.math;
+
+node Scale2 {
+    units    { U; Gain; }
+    settings { k: double(Gain) = 1.0; }
+
+    inputs   { v: math.Vec2(U); }
+    outputs  { y: math.Vec2(U*Gain); }
+
+    output(v) {
+        out.y.x = in.v.x * param.k;
+        out.y.y = in.v.y * param.k;
+    }
+}
+

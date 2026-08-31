@@ -1,0 +1,43 @@
+package se.kin;
+
+node Quat2Rot {
+
+    inputs  { q: kin.Quat;  }
+    outputs { R: kin.Rot; }
+
+    output(q) {
+        // Get references
+        se::kin::Quat q = in.q;
+        se::kin::Rot R  = out.R;
+
+        // Precompute quadratic terms
+        auto x2 = q.x * q.x;
+        auto y2 = q.y * q.y;
+        auto z2 = q.z * q.z;
+
+        auto wx = q.w * q.x;
+        auto wy = q.w * q.y;
+        auto wz = q.w * q.z;
+
+        auto xy = q.x * q.y;
+        auto yz = q.y * q.z;
+        auto zx = q.z * q.x;
+
+        // Diagonal terms
+        R00 = 1 - 2*(y2 + z2);
+        R11 = 1 - 2*(z2 + x2);
+        R22 = 1 - 2*(x2 + y2);
+
+        // X-Y terms
+        R01 =  2*(xy - wz);
+        R10 =  2*(xy + wz);
+
+        // Y-Z terms
+        R12 =  2*(yz - wx);
+        R21 =  2*(yz + wx);
+
+        // Z-X terms
+        R20 =  2*(zx - wy);
+        R02 =  2*(zx + wy);
+    }
+}

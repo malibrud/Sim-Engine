@@ -1,0 +1,15 @@
+package se.math;
+
+use se.math;
+
+node Merge2 {
+    units { U; }
+
+    inputs  { x: double(U);  y: double(U); }
+    outputs { v: math.Vec2(U); }
+
+    output(x, y, z) {
+        out.v.x = in.x;
+        out.v.y = in.y;
+    }
+}

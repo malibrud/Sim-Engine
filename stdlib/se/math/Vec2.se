@@ -1,0 +1,8 @@
+package se.math;
+
+type Vec2 {
+    units { U; }
+
+    x: double(U);  // points forward for a body frame, north for a global one
+    y: double(U);  // points right for a body frame, east for a global one
+}

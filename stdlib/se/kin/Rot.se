@@ -1,0 +1,7 @@
+package se.kin;
+
+type Rot {
+    R00: double(-);   R01: double(-);   R02: double(-);
+    R10: double(-);   R11: double(-);   R12: double(-);
+    R20: double(-);   R21: double(-);   R22: double(-);
+}

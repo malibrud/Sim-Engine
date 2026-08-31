@@ -1,0 +1,25 @@
+package se.sig.ct;
+
+use se.math;
+use se.sig.ct;
+
+node Integrator3 {
+    units { U; }
+
+    inputs  { x: math.Vec3(U); }
+    outputs { y: math.Vec3(U*s); }
+
+    structure {
+        node sp: math.Split3(U) {};
+        node mg: math.Merge3(U) {};
+        node x: ct.Integrator(U) {};
+        node y: ct.Integrator(U) {};
+        node z: ct.Integrator(U) {};
+
+        self --> sp;
+        sp.x --> x --> mg.x;
+        sp.y --> y --> mg.y;
+        sp.z --> z --> mg.z;
+        mg  --> self;
+    }
+}

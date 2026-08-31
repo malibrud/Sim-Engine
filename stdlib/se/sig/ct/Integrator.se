@@ -1,0 +1,20 @@
+package se.sig.ct;
+
+node Integrator {
+    units { U; }
+
+    inputs  { x: double(U); }
+    outputs { y: double(U*s); }
+
+    states {
+        continuous y:  double(-) = 0.0;
+    }
+
+    derivative(x) {
+        der.y = in.x;
+    }
+
+    output() {
+        out.y = state.y;
+    }
+}

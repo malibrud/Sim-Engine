@@ -1,0 +1,32 @@
+package se.sig.ct;
+
+use se.math;
+use se.sig.ct;
+
+node SecondOrderSystem3 {
+    units { U; }
+
+    settings {
+        //        b2 s^2 + b1 s + b0
+        // H(s) = ------------------
+        //        a2 s^2 + a1 s + a0
+        //
+        A: math.Poly3 = { 1.0, 0.0, 0.0 };
+        B: math.Poly3 = { 0.0, 0.0, 1.0 };
+    }
+
+    inputs  { vin:  math.Vec2(U); }
+    outputs { vout: math.Vec2(U); }
+
+    structure {
+        node sp: math.Split2(U) {};
+        node mg: math.Merge2(U) {};
+        node x: ct.SecondOrderSystem(U) { A = param.A; B = param.B; };
+        node y: ct.SecondOrderSystem(U) { A = param.A; B = param.B; };
+
+        self --> sp;
+        sp.x --> x --> mg.x;
+        sp.y --> y --> mg.y;
+        mg  --> self;
+    }
+}
