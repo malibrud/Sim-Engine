@@ -1,7 +1,7 @@
 # sim-engine
 
 A node-based simulation engine. Models are written in a plain-text language and
-lowered ahead of time to dependency-free C++17: a node definition becomes a
+lowered ahead of time to dependency-free C++20: a node definition becomes a
 class, an instance becomes an object, and the wiring diagram becomes the calling
 order.
 
@@ -19,7 +19,7 @@ order.
 
 `sec` implements **all six stages** of the pipeline in SPECIFICATION.md §1.3 —
 lexical, syntactic, resolution, elaboration, scheduling and emission. Given a
-`.sim` file it writes compilable, runnable C++17.
+`.sim` file it writes compilable, runnable C++20.
 
 ```bash
 build.bat                                  # -> build\sec.exe  (needs cl on PATH)

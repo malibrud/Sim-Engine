@@ -3,7 +3,7 @@ package se.sig.ct;
 use se.math;
 use se.sig.ct;
 
-node SecondOrderSystem3 {
+node SecondOrderSystem2 {
     units { U; }
 
     settings {

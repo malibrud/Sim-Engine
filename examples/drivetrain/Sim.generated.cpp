@@ -25,7 +25,7 @@
 //       plain `double` that is, by construction, in its declared unit — see the
 //       trailing comment on each one, and Sim.units.txt for the full manifest.
 //       Nothing here depends on a units library; this file compiles with a
-//       stock C++17 compiler and no third-party packages.
+//       stock C++20 compiler and no third-party packages.
 //    4. Purity and feedthrough are enforced by the C++ type system, not by an
 //       analyzer. See the notes on each method below.
 // ─────────────────────────────────────────────────────────────────────────────

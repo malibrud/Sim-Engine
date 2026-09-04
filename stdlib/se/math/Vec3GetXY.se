@@ -2,14 +2,14 @@ package se.math;
 
 use se.math;
 
-node Vec3ToVec2 {
+node Vec3GetXY {
     units    { U; }
 
     inputs   { x: math.Vec3(U); }
     outputs  { y: math.Vec2(U); }
 
-    output(v) {
-        out.y.x = in.v.x;
-        out.y.y = in.v.y;
+    output(x) {
+        out.y.x = in.x.x;
+        out.y.y = in.x.y;
     }
 }

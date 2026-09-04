@@ -3,7 +3,7 @@
 **Specification, version 0.1 (draft) — 2026-07-27**
 
 A plain-text language for describing hierarchical, node-based simulation models,
-lowered ahead of time to dependency-free C++17.
+lowered ahead of time to dependency-free C++20.
 
 ---
 
@@ -3017,7 +3017,7 @@ they are shape, and shape was fixed when the binary was generated.
 Normative to the extent stated. A worked, hand-verified example lives in
 [`examples/drivetrain/`](examples/drivetrain/) — four `.se` sources, a `.sim`
 file, the generated C++, the unit manifest, and the runtime header. It compiles
-with `cl /std:c++17 /EHsc`, with no third-party packages and no include path
+with `cl /std:c++20 /EHsc`, with no third-party packages and no include path
 outside the repository.
 
 ### 15.1 The constraint that decides everything

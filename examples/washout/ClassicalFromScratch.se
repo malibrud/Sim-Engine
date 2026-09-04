@@ -33,39 +33,43 @@ use se.math;
 use se.sig;
 
 node ClassicalFromScratch {
-    // The per-axis parameters live HERE, on the composite, so the whole cue is
-    // tuned from one place and flows down as a record. Z is scaled less and
-    // limited harder than X and Y: a platform has far less heave travel than
-    // surge or sway.
     settings {
-        gain:  math.Vec3(-)      = { 1.0, 1.0, 1.0 };
+        trnGain:  math.Vec3(-)      = { 1.0, 1.0, 1.0 };
+        tltGain:  double(-)      = 1.0;
         limit: math.Vec3(m/s^2)  = { 10.0, 10.0, 10.0 };
-        // Wired, not flowed down: see the `-->` below. Still an ordinary
-        // setting, so a host may override it -- a lunar platform is one line of
-        // a settings file away, with nothing recompiled.
         grav:  math.Vec3(m/s^2)  = { 0.0, 0.0, -9.80665 };
+        headPos: math.Vec3(m) = { 0.0, 0.0, 0.0 };
     }
 
-    inputs  { ain:  math.Vec3(m/s^2); }   // specific force, vehicle body frame
+    inputs  { 
+        ain:  math.Vec3(m/s^2); // specific force, vehicle body frame
+        win:  math.Vec3(m/s^2); // Local angular velocity
+    }   
     outputs { aout: math.Vec3(m/s^2); }   // commanded platform acceleration
 
     structure {
+
+        //----------------------------------
         // Tilt Coordination Channel Nodes
-        node xyAccel: math.Vec3ToVec2(m/s^2) {};
-        node tiltScale : sig.ScaleLimit2 (m/s^2) {
-            gain  = param.gain;
+        //----------------------------------
+
+        node xyAccel: math.Vec3GetXY(m/s^2) {};
+        node tiltScale : math.Scale2 (m/s^2, -) {
+            k  = param.tltGain;
         };
 
-        node tiltLocalFilt: sig.ct.SecondOrderSystem3 (m/s^2) {
-            // s^2 / (s^2 + 2*zeta*wn*s + wn^2), wn = 3.1 rad/s, zeta = 1.4
-            A = { 1.0, 8.68, 9.61 };
-            B = { 0.0, 0.0,  9.61  };
+        node tiltLocalFilt: sig.ct.SecondOrderLowpass2 (m/s^2) {
+            wn = 3.1(rad/s);
+            z = 1.4;
         };
+        node tiltCalc: TiltCalc {};
 
-
+        //----------------------------------
         // Translational Channel Nodes
+        //----------------------------------
+
         node transScale : sig.ScaleLimit3 (m/s^2) {
-            gain  = param.gain;
+            gain  = param.trnGain;
             limit = param.limit;
         };
         node sfSum: math.Sum3 (m/s^2);
@@ -82,8 +86,12 @@ node ClassicalFromScratch {
         };
 
         // Tilt Channel
+        self.ain --> xyAccel --> tiltScale --> tiltLocalFilt;
+                                               tiltLocalFilt.vout  --> tiltCalc.acc;
+                                               tiltLocalFilt.voutd --> tiltCalc.accRate;
+
         // Translational Channel
-        self --> transScale  --> sfSum.a;
+        self.ain --> transScale  --> sfSum.a;
         param.grav         --> sfSum.b;
         sfSum --> transLocalFilt --> transGlobalFilt --> self;
     }

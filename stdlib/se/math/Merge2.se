@@ -8,7 +8,7 @@ node Merge2 {
     inputs  { x: double(U);  y: double(U); }
     outputs { v: math.Vec2(U); }
 
-    output(x, y, z) {
+    output(x, y) {
         out.v.x = in.x;
         out.v.y = in.y;
     }

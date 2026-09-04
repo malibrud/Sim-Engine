@@ -182,7 +182,7 @@ const char* se_runtime_hpp() {
 //  legal and simply does not emit it elsewhere, which is how confinement is
 //  enforced: by name withholding, not by an analyser (section 15.4).
 //
-//  C++17, no third-party packages.
+//  C++20, no third-party packages.
 // ─────────────────────────────────────────────────────────────────────────────
 #pragma once
 
@@ -238,6 +238,10 @@ void format_into(std::ostringstream& o, const char* f, const A& a, const R&... r
     }
 }
 
+// Every call below is written `se_rt::format(...)`, qualified. Unqualified, an
+// argument of a std type drags `std::format` in by ADL -- C++20 makes <format>
+// reachable from headers this one already includes -- and the two overloads are
+// then ambiguous. Qualifying the name turns ADL off at the call site.
 template <class... A>
 std::string format(const char* f, const A&... a) {
     std::ostringstream o;
@@ -335,19 +339,19 @@ struct Log {
     const char* path;
 
     template <class... A> void trace(const char* f, const A&... a) const {
-        logs().write(Level::Trace, path, sim_time(), format(f, a...));
+        logs().write(Level::Trace, path, sim_time(), se_rt::format(f, a...));
     }
     template <class... A> void debug(const char* f, const A&... a) const {
-        logs().write(Level::Debug, path, sim_time(), format(f, a...));
+        logs().write(Level::Debug, path, sim_time(), se_rt::format(f, a...));
     }
     template <class... A> void info(const char* f, const A&... a) const {
-        logs().write(Level::Info, path, sim_time(), format(f, a...));
+        logs().write(Level::Info, path, sim_time(), se_rt::format(f, a...));
     }
     template <class... A> void warn(const char* f, const A&... a) const {
-        logs().write(Level::Warn, path, sim_time(), format(f, a...));
+        logs().write(Level::Warn, path, sim_time(), se_rt::format(f, a...));
     }
     template <class... A> void error(const char* f, const A&... a) const {
-        logs().write(Level::Error, path, sim_time(), format(f, a...));
+        logs().write(Level::Error, path, sim_time(), se_rt::format(f, a...));
     }
 };
 
@@ -362,7 +366,8 @@ struct TraceLog {
 
     template <class... A> void trace(const char* f, const A&... a) const {
         if (!logs().trace_enabled) return;
-        logs().write(Level::Trace, path, sim_time(), format(f, a...) + "  [minor step]");
+        logs().write(Level::Trace, path, sim_time(),
+                     se_rt::format(f, a...) + "  [minor step]");
     }
 };
 
@@ -589,12 +594,13 @@ public:
         ++s.count;
         if (s.count > report_limit) return;
         logs().write(Level::Error, path, t,
-                     format("contract failed: {}; {}  ({}, tick {})",
-                            contract, detail, type, tick));
+                     se_rt::format("contract failed: {}; {}  ({}, tick {})",
+                                   contract, detail, type, tick));
         if (s.count == report_limit)
             logs().write(Level::Error, path, t,
-                         format("contract failed: {}; further reports suppressed, "
-                                "the total is in the summary", contract));
+                         se_rt::format("contract failed: {}; further reports "
+                                       "suppressed, the total is in the summary",
+                                       contract));
     }
 
     bool any() const { return !sites_.empty(); }
@@ -605,13 +611,14 @@ public:
     void summary() const {
         if (sites_.empty()) return;
         logs().write(Level::Error, "sim", sim_time(),
-                     format("{} contract(s) violated", sites_.size()));
+                     se_rt::format("{} contract(s) violated", sites_.size()));
         for (const CheckSite& s : sites_)
             logs().write(Level::Error, "sim", sim_time(),
-                         format("  {}: {} -- {} time(s), first at t = {} s "
-                                "(tick {}); {}",
-                                s.path, s.contract, s.count, s.first_time,
-                                s.first_tick, s.first_detail));
+                         se_rt::format("  {}: {} -- {} time(s), first at "
+                                       "t = {} s (tick {}); {}",
+                                       s.path, s.contract, s.count,
+                                       s.first_time, s.first_tick,
+                                       s.first_detail));
     }
 
 private:
@@ -683,12 +690,14 @@ struct RunView {
         return ok;
     }
     bool check(bool ok, const char* contract, double v) const {
-        if (!ok) contract_failed(contract, format("value {}", v));
+        if (!ok) contract_failed(contract, se_rt::format("value {}", v));
         return ok;
     }
     bool check_finite(double v, const char* contract) const {
         const bool ok = std::isfinite(v);
-        if (!ok) contract_failed(contract, format("got {}, want a finite value", v));
+        if (!ok)
+            contract_failed(contract,
+                            se_rt::format("got {}, want a finite value", v));
         return ok;
     }
     bool check_range(double v, double lo, double hi, const char* contract) const {
@@ -696,8 +705,9 @@ struct RunView {
         // comparison holds, and the overshoot below prints as nan too.
         const bool ok = v >= lo && v <= hi;
         if (!ok)
-            contract_failed(contract, format("got {}, want [{}, {}], outside by {}",
-                                             v, lo, hi, v < lo ? lo - v : v - hi));
+            contract_failed(
+                contract, se_rt::format("got {}, want [{}, {}], outside by {}",
+                                        v, lo, hi, v < lo ? lo - v : v - hi));
         return ok;
     }
     bool check_near(double a, double b, double tol, const char* contract) const {
@@ -705,7 +715,8 @@ struct RunView {
         const bool   ok = e <= tol;
         if (!ok)
             contract_failed(contract,
-                            format("got {}, want {}, |err| {} > tol {}", a, b, e, tol));
+                            se_rt::format("got {}, want {}, |err| {} > tol {}",
+                                          a, b, e, tol));
         return ok;
     }
 
@@ -736,7 +747,7 @@ struct RunControl : RunView {
         return ok;
     }
     bool require(bool ok, const char* contract, double v) const {
-        if (!ok) require_failed(contract, format("value {}", v));
+        if (!ok) require_failed(contract, se_rt::format("value {}", v));
         return ok;
     }
 
@@ -746,7 +757,8 @@ private:
     // first-writer-wins, so the first violated contract is the one named.
     void require_failed(const char* contract, const std::string& detail) const {
         contract_failed(contract, detail);
-        control().fail(format("contract failed: {} at {}", contract, node_path));
+        control().fail(se_rt::format("contract failed: {} at {}",
+                                     contract, node_path));
     }
 };
 

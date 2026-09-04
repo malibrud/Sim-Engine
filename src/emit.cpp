@@ -2544,11 +2544,11 @@ std::string Emitter::build_script(Script kind, const std::string& main_name) {
     // never carried around pre-applied in a joined string.
     std::vector<std::string> args, links;
     if (windows) {
-        args = {"/nologo", "/std:c++17", "/EHsc",  "/W4",
+        args = {"/nologo", "/std:c++20", "/EHsc",  "/W4",
                 "/permissive-", "/utf-8", "/O2",   "/MD",
                 "/D_CRT_SECURE_NO_WARNINGS"};
     } else {
-        args = {"-std=c++17", "-O2", "-Wall", "-Wextra"};
+        args = {"-std=c++20", "-O2", "-Wall", "-Wextra"};
     }
     for (const ast::BuildStmt& b : m_.program->build) {
         if (!b.when.empty() && b.when != platform) continue;

@@ -1,0 +1,44 @@
+package se.sig.ct;
+
+use se.math;
+use se.sig.ct;
+
+
+node SecondOrderLowpass2 {
+    units { U; }
+
+    settings {
+        //                 wn^2
+        // H(s) = ---------------------
+        //        s^2 + 2 wn z s + wn^2
+        //
+        // H'(s) = s H(s)
+        //
+        wn: double(rad/s);
+        z: double(-);
+    }
+
+    inputs  { vin: math.Vec2(U); }
+    outputs { 
+        vout:  math.Vec2(U);
+        voutd: math.Vec2(U/s); // s Y(s)
+    }
+
+    structure {
+        node sp: math.Split2(U) {};
+        node mgy: math.Merge2(U) {};
+        node mgyd: math.Merge2(U/s) {};
+        node x: ct.SecondOrderLowpass(U) { wn = param.wn; z = param.z; };
+        node y: ct.SecondOrderLowpass(U) { wn = param.wn; z = param.z; };
+
+        self --> sp;
+        sp.x --> x;
+                 x.y  --> mgy.x;
+                 x.yd --> mgyd.x;
+        sp.y --> y;
+                 y.y  --> mgy.y;
+                 y.yd --> mgyd.y;
+        mgy  --> self.vout;
+        mgyd --> self.voutd;
+    }
+}

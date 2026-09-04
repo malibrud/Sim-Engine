@@ -1,0 +1,45 @@
+package washout;
+
+use se.math;
+
+node TiltCalc {
+    declarations {
+        #include <cmath>
+        #include <algorithm>
+        #include <numbers>
+        constexpr double half_pi = std::numbers::pi / 2.0;
+    }
+    settings { G: double(m/s^2) = 9.80665; }
+
+    inputs   { 
+        acc:     math.Vec2(m/s^2); 
+        accRate: math.Vec2(m/s^3); 
+    }
+    outputs  { 
+        tilt:     math.Vec2(rad); 
+        tiltRate: math.Vec2(rad/s); 
+    }
+
+    output(acc, accRate) {
+        tiltOf(  in.acc.x,  in.accRate.x, out.tilt.y, out.tiltRate.y ); // Acceleration into x is mocked by a positive pitch about the y axis.
+        tiltOf( -in.acc.y, -in.accRate.y, out.tilt.x, out.tiltRate.x ); // Acceleration into y is mocked by a negative roll about the x axis.
+    }
+
+    void tiltOf( double acc, double accRate, double& angle, double& angleRate ) const {
+        double g = param.G;
+        double u = acc / g; // sin(tilt)
+        if ( u > -1 && u < 1 ) {
+            angle     = std::asin( u );
+            angleRate = ( accRate / g ) / std::sqrt( 1.0 - u*u );
+        } else 
+        if ( u <= -1 ) {
+            angle     = -half_pi;
+            angleRate = 0;
+        } else
+        if ( u >= +1 ) {
+            angle     = half_pi;
+            angleRate = 0;
+        }
+    }
+ 
+}

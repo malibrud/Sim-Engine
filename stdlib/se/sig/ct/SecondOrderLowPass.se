@@ -1,0 +1,58 @@
+package se.sig.ct;
+
+use se.math;
+
+node SecondOrderLowpass {
+    units { U; }
+
+    settings {
+        //                 wn^2
+        // H(s) = ---------------------
+        //        s^2 + 2 wn z s + wn^2
+        //
+        // H'(s) = s H(s)
+        wn: double(rad/s);
+        z: double(-);
+    }
+
+    inputs  { x: double(U); }
+    outputs { 
+        y:  double(U);
+        yd: double(U/s); // s Y(s)
+    }
+
+    states {
+        continuous w:  double(-) = 0.0;
+        continuous wd: double(-) = 0.0;
+    }
+
+    vars {
+        // Suffix 'p' is a primed coefficient: the value after normalization by
+        // a2, so a1p == a1' == a1/a2.
+        a1: double(-);  a0: double(-);  // denominator, normalised by a2
+        b0: double(-);  // numerator of the low-pass
+        c1: double(-);  // numerator of the rate
+    }
+
+    init() {
+        sim.require( param.wn > 0, "Filter break frequency 'wn' must be positive and non-zero." );
+        sim.require( param.z >= 0, "Filter damping factor 'z' must be positive or zero." );
+        auto wn = param.wn;
+        auto wn2 = wn * wn;
+        auto z  = param.z;
+
+        var.a1 = 2 * z * wn;
+        var.a0 = wn2;
+        var.b0 = wn2;
+    }
+
+    derivative(x) {
+        der.w  = state.wd;
+        der.wd = in.x - var.a1 * state.wd - var.a0 * state.w;
+    }
+
+    output(x) {
+        out.y  = var.b0 * state.w;
+        out.yd = var.b0 * state.wd;
+    }
+}

@@ -1243,7 +1243,7 @@ if (-not $cl) {
         $hostDir = $emitDirs['drivetrain']
         Copy-Item (Join-Path $root 'tests\emit\host.cpp') $hostDir -Force
         Push-Location $hostDir
-        $out = (& cl /nologo /std:c++17 /EHsc /W4 /permissive- /utf-8 /O2 /MD `
+        $out = (& cl /nologo /std:c++20 /EHsc /W4 /permissive- /utf-8 /O2 /MD `
                     /D_CRT_SECURE_NO_WARNINGS /Fe:host.exe host.cpp 2>&1 | Out-String)
         $built = ($LASTEXITCODE -eq 0 -and $out -notmatch 'warning')
         $ran = $false
