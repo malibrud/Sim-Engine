@@ -65,6 +65,16 @@ std::string pad(const std::string& s, std::size_t n) {
     return r;
 }
 
+// `pad` where the padding IS the column separator, so an over-long entry must
+// still be held off the next column. `pad` alone runs them together -- a 26-
+// character signal path in a 24-wide field emits `...mgy.v.xm/s^2` -- and the
+// manifest is a contract a host parses, not just something to look at.
+std::string col(const std::string& s, std::size_t n) {
+    std::string r = pad(s, n);
+    if (s.size() >= n) r += ' ';   // pad() added nothing, so add the gap
+    return r;
+}
+
 // Round-trippable and still readable: the shortest precision that reads back
 // as the same double.
 std::string dbl(double v) {
@@ -801,7 +811,7 @@ void Emitter::sim_members() {
             for (const StateSlot& s : leaf.states)
                 if (s.continuous)
                     o_ << "    //  x[" << s.slot << "] / xd[" << s.slot << "]   "
-                       << pad(leaf.path + "." + s.name, 24) << s.unit.str() << "\n";
+                       << col(leaf.path + "." + s.name, 24) << s.unit.str() << "\n";
         o_ << "    std::array<double, n_states> x{};\n";
         o_ << "    std::array<double, n_states> xd{};\n\n";
     } else {
@@ -822,7 +832,7 @@ void Emitter::sim_members() {
                     leaf.path.empty() ? st.name : leaf.path + "." + st.name;
                 o_ << "    //  x[se_x_off_[" << st.off << "]]"
                    << (st.extent.present ? ".." : "  ") << "   "
-                   << pad(p + (st.extent.present ? " " + st.extent.text : ""), 30)
+                   << col(p + (st.extent.present ? " " + st.extent.text : ""), 30)
                    << st.unit.str() << "\n";
             }
         o_ << "    std::size_t n_states = 0;                 // §6.2b step 4\n";
@@ -888,7 +898,7 @@ void Emitter::sim_members() {
                 const std::string p =
                     leaf.path.empty() ? st.name : leaf.path + "." + st.name;
                 o_ << "    //  dis_arr[se_da_off_[" << st.off << "]]..   "
-                   << pad(p + " " + st.extent.text, 30) << st.unit.str() << "\n";
+                   << col(p + " " + st.extent.text, 30) << st.unit.str() << "\n";
             }
         o_ << "    std::size_t n_dstates = 0;\n";
         o_ << "    double*     dis_arr = nullptr;            // host-provided, §15.5a\n";
@@ -978,7 +988,7 @@ void Emitter::sim_members() {
             o_ << "\n    struct {\n";
             for (const Row& r : crows)
                 o_ << "        " << pad(r.type, 8) << " "
-                   << (r.comment.empty() ? r.decl : pad(r.decl, 20) + r.comment)
+                   << (r.comment.empty() ? r.decl : col(r.decl, 20) + r.comment)
                    << "\n";
             o_ << "    } " << param_base(s.owner) << ";   // "
                << (s.owner.empty() ? std::string("<root>") : s.owner) << "\n";
@@ -2395,17 +2405,17 @@ std::string Emitter::manifest() {
             if (!s.continuous) continue;
             const std::string path = leaf.path.empty() ? s.name : leaf.path + "." + s.name;
             if (!m_.dynamic_states) {
-                t << pad("x[" + std::to_string(s.slot) + "]", 10) << pad(path, 24)
+                t << col("x[" + std::to_string(s.slot) + "]", 10) << col(path, 24)
                   << s.unit.str() << "\n";
-                t << pad("xd[" + std::to_string(s.slot) + "]", 10) << pad(path + "'", 24)
+                t << col("xd[" + std::to_string(s.slot) + "]", 10) << col(path + "'", 24)
                   << s.der_unit.str() << "\n";
                 continue;
             }
             const std::string ext = s.extent.present ? " " + s.extent.text : "";
-            t << pad("x[?]", 10) << pad(path + ext, 24)
-              << pad(s.unit.str(), 12) << "dynamic\n";
-            t << pad("xd[?]", 10) << pad(path + "'" + ext, 24)
-              << pad(s.der_unit.str(), 12) << "dynamic\n";
+            t << col("x[?]", 10) << col(path + ext, 24)
+              << col(s.unit.str(), 12) << "dynamic\n";
+            t << col("xd[?]", 10) << col(path + "'" + ext, 24)
+              << col(s.der_unit.str(), 12) << "dynamic\n";
         }
     if (m_.n_cont_slots == 0 && m_.n_states == 0) t << "          (none)\n";
 
@@ -2417,7 +2427,7 @@ std::string Emitter::manifest() {
     t << "\n[state.discrete]          # Sim::dis; offsets from Sim::discrete_map()\n";
     const std::vector<SlotRow> dis = discrete_rows();
     for (const SlotRow& r : dis)
-        t << pad("", 10) << pad(r[0], 24) << pad(r[3], 12) << r[2] << "\n";
+        t << col("", 10) << col(r[0], 24) << col(r[3], 12) << r[2] << "\n";
     if (dis.empty()) t << "          (none)\n";
 
     // §15.5a — the fourth block. An array-shaped discrete state cannot live
@@ -2427,23 +2437,23 @@ std::string Emitter::manifest() {
         t << "\n[state.discrete.array]    # Sim::dis_arr; rows from "
              "Sim::discrete_array_map()\n";
         for (const SlotRow& r : array_state_rows(false))
-            t << pad("dis_arr[?]", 12) << pad(r[0] + " " + r[1], 22) << pad(r[3], 12)
+            t << col("dis_arr[?]", 12) << col(r[0] + " " + r[1], 22) << col(r[3], 12)
               << "dynamic\n";
     }
 
     t << "\n[signals]                 # Sim::sig; offsets from Sim::signal_map()\n";
     for (const SlotRow& r : signal_rows())
-        t << pad("", 10) << pad(r[0], 24) << pad(r[3], 12) << r[2] << "\n";
+        t << col("", 10) << col(r[0], 24) << col(r[3], 12) << r[2] << "\n";
 
     t << "\n[boundary.in]             # root inputs the host must drive, as sig.in.*\n";
     for (const BoundaryIn& b : m_.boundary_in)
-        t << pad("", 10) << pad(b.path, 24)
+        t << col("", 10) << col(b.path, 24)
           << (b.type.is_record ? b.type.record->fq : b.type.unit.str()) << "\n";
     if (m_.boundary_in.empty()) t << "          (none)\n";
 
     t << "\n[boundary.out]            # root outputs the host may read\n";
     for (const BoundaryOut& b : m_.boundary_out)
-        t << pad("", 10) << pad(b.path, 24) << b.type.unit.str() << "\n";
+        t << col("", 10) << col(b.path, 24) << b.type.unit.str() << "\n";
     if (m_.boundary_out.empty()) t << "          (none)\n";
 
     // §15.6 — the configuration schema (§14.1): every path a settings source may
@@ -2453,7 +2463,7 @@ std::string Emitter::manifest() {
     // open the model.
     t << "\n[settings]                # configurable; value is the elaborated default\n";
     for (const SettingSlot& s : m_.settings) {
-        t << pad("", 10) << pad(s.path, 24) << pad(s.unit.str(), 12) << "= "
+        t << col("", 10) << col(s.path, 24) << col(s.unit.str(), 12) << "= "
           << literal(s.value, s.scalar);
         if (!s.constant) {
             std::string e;
@@ -2474,7 +2484,7 @@ std::string Emitter::manifest() {
         if (!dynamic_rate(leaf)) continue;
         char buf[64];
         std::snprintf(buf, sizeof buf, "%g Hz", 1.0 / (m_.step * leaf.decimation));
-        t << pad("", 10) << pad(leaf.path, 24) << pad(buf, 12) << "= every "
+        t << col("", 10) << col(leaf.path, 24) << col(buf, 12) << "= every "
           << leaf.decimation << (leaf.decimation == 1 ? " tick" : " ticks") << "\n";
     }
 
@@ -2488,18 +2498,18 @@ std::string Emitter::manifest() {
             std::string ps;
             for (std::size_t i = 0; i < r->unit_params.size(); ++i)
                 ps += (i ? ", " : "") + r->unit_params[i];
-            t << pad(r->fq, 34) << "units { " << ps << " }\n";
+            t << col(r->fq, 34) << "units { " << ps << " }\n";
         }
         for (const Field& f : r->fields)
-            t << pad(r->fq + "." + f.name, 34)
+            t << col(r->fq + "." + f.name, 34)
               << (f.type.is_record ? f.type.record->fq : f.type.unit.str()) << "\n";
     }
 
     if (m_.record.present) {
         t << "\n[recorded]                # columns of " << m_.record.file << "\n";
-        t << pad("", 10) << pad("time", 24) << "s\n";
+        t << col("", 10) << col("time", 24) << "s\n";
         for (const RecordedSignal& s : m_.record.signals)
-            t << pad("", 10) << pad(s.path, 24) << s.unit.str() << "\n";
+            t << col("", 10) << col(s.path, 24) << s.unit.str() << "\n";
     }
     return t.str();
 }

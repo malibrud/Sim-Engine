@@ -27,11 +27,13 @@ node SecondOrderLowpass {
     }
 
     vars {
-        // Suffix 'p' is a primed coefficient: the value after normalization by
-        // a2, so a1p == a1' == a1/a2.
-        a1: double(-);  a0: double(-);  // denominator, normalised by a2
-        b0: double(-);  // numerator of the low-pass
-        c1: double(-);  // numerator of the rate
+        // The canonical-form coefficients, built once from `wn` and `z`. There
+        // is no normalisation here and so no primed spelling: unlike
+        // `SecondOrderSystem`, this node is handed a DESIGN rather than a pair
+        // of polynomials, so the s^2 coefficient is 1 by construction and
+        // nothing is ever divided by it.
+        a1: double(-);  a0: double(-);  // denominator: s^2 + a1 s + a0
+        b0: double(-);  // numerator, and the DC gain once a0 divides it out
     }
 
     init() {

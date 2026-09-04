@@ -16,6 +16,12 @@
 // an accelerometer reads, f = a - g, so at rest and level it is {0, 0, -9.81}.
 // The compiler does not check this and cannot (see Vec3.se); it is a contract
 // between the model and whoever drives its boundary.
+//
+// NOTE that `ClassicalFromScratch.se` -- which this file is meant to be read
+// beside -- takes the OTHER convention on its input: gravity-free kinematic
+// acceleration, subtracting `grav` internally to get the specific force. The
+// two boundaries are not interchangeable, and a driver written for one is off
+// by 1 g against the other.
 package washout;
 
 use se.math;

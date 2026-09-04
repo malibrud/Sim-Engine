@@ -1,0 +1,29 @@
+// Two-input vector difference -- `y = a - b`, the counterpart of `se.math.Sum3`
+// and there for the same normative reason: §6.9.2 forbids fan-in, so a signal
+// that has to be removed from another needs an explicit node to do it in.
+//
+// Two inputs, not N, matching `Sum3`: subtraction is not associative the way a
+// wide adder's addition is, so the pair is the only shape that reads
+// unambiguously. Chain them when more is needed.
+//
+// It exists because `Sum3` with a negated constant is the same arithmetic
+// written so that the reader has to check two signs instead of one -- see the
+// gravity term in `examples/washout/ClassicalFromScratch.se`, where getting
+// that pair wrong doubles the g and the high-pass then hides it.
+package se.math;
+
+use se.math;
+
+node Diff3 {
+    units { U; }
+
+    inputs  { a: math.Vec3(U);  b: math.Vec3(U); }
+    outputs { y: math.Vec3(U); }
+
+    output(a, b) {
+        out.y.x = in.a.x - in.b.x;
+        out.y.y = in.a.y - in.b.y;
+        out.y.z = in.a.z - in.b.z;
+    }
+}
+

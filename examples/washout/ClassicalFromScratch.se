@@ -24,9 +24,18 @@
 // is four nodes and four wires to say a number this file already writes down.
 //
 // COORDINATE CONVENTION -- SAE, matching `se.math.Vec3`: X forward/north, Y
-// right/east, Z down. Specific force is what an accelerometer reads, f = a - g,
-// so at rest and level it is {0, 0, -9.81}. The compiler does not check this and
-// cannot; it is a contract with whoever drives the boundary.
+// right/east, Z down.
+//
+// `ain` is KINEMATIC acceleration and carries NO gravity: a vehicle at rest and
+// level drives {0, 0, 0}, not {0, 0, -9.81}. The `sf` node subtracts `grav` to
+// form the specific force an accelerometer would read, f = a - g, which at rest
+// and level is {0, 0, -9.80665}. So the 1 g lives INSIDE this node and never at
+// its boundary. Reading it the other way round -- and the earlier draft of this
+// comment did -- makes `sf` come out at -2 g, which the high-pass then washes
+// away, so nothing downstream complains and the CSV looks fine.
+//
+// The compiler does not check any of this and cannot (see `Vec3.se`); the
+// contract with whoever drives the boundary is this comment and nothing else.
 package washout;
 
 use se.math;
@@ -37,14 +46,17 @@ node ClassicalFromScratch {
         trnGain:  math.Vec3(-)      = { 1.0, 1.0, 1.0 };
         tltGain:  double(-)      = 1.0;
         limit: math.Vec3(m/s^2)  = { 10.0, 10.0, 10.0 };
-        grav:  math.Vec3(m/s^2)  = { 0.0, 0.0, -9.80665 };
+        grav:  math.Vec3(m/s^2)  = { 0.0, 0.0, 9.80665 };
         headPos: math.Vec3(m) = { 0.0, 0.0, 0.0 };
     }
 
     inputs  { 
-        ain:  math.Vec3(m/s^2); // specific force, vehicle body frame
-        win:  math.Vec3(m/s^2); // Local angular velocity
+        ain:  math.Vec3(m/s^2); // kinematic acceleration, vehicle body frame,
+                                //   gravity-free -- see the note above
+        win:  math.Vec3(rad/s); // Local angular velocity
     }   
+    // High-passed, so whatever DC `sf` carries is gone by the time it gets
+    // here: the constant -g contributes a startup transient and nothing else.
     outputs { aout: math.Vec3(m/s^2); }   // commanded platform acceleration
 
     structure {
@@ -72,7 +84,7 @@ node ClassicalFromScratch {
             gain  = param.trnGain;
             limit = param.limit;
         };
-        node sfSum: math.Sum3 (m/s^2);
+        node sf: math.Diff3 (m/s^2);
 
         node transLocalFilt: sig.ct.SecondOrderSystem3 (m/s^2) {
             // s^2 / (s^2 + 2*zeta*wn*s + wn^2), wn = 3.1 rad/s, zeta = 1.4
@@ -91,8 +103,8 @@ node ClassicalFromScratch {
                                                tiltLocalFilt.voutd --> tiltCalc.accRate;
 
         // Translational Channel
-        self.ain --> transScale  --> sfSum.a;
-        param.grav         --> sfSum.b;
-        sfSum --> transLocalFilt --> transGlobalFilt --> self;
+        self.ain --> transScale  --> sf.a;
+        param.grav               --> sf.b;
+        sf --> transLocalFilt --> transGlobalFilt --> self;
     }
 }

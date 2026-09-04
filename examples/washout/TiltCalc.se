@@ -5,7 +5,6 @@ use se.math;
 node TiltCalc {
     declarations {
         #include <cmath>
-        #include <algorithm>
         #include <numbers>
         constexpr double half_pi = std::numbers::pi / 2.0;
     }

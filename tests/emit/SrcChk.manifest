@@ -101,7 +101,7 @@
           n_cp.rate               Hz          = 1000.0
           n_wn.rate               Hz          = 1000.0
           n_wn.sigma0             m/s^2       = 1.0
-          n_wn.psd                m^2/(Hz*s^4)= 0.002   <- ((2.0 * n_wn.sigma0) * n_wn.sigma0) / n_wn.rate
+          n_wn.psd                m^2/(Hz*s^4) = 0.002   <- ((2.0 * n_wn.sigma0) * n_wn.sigma0) / n_wn.rate
           n_wn.sigma              m/s^2       = 2.0
           n_wn.mean               m/s^2       = 0.5
           n_wn.seed               -           = 12345
