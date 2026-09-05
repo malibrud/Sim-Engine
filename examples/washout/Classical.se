@@ -1,74 +1,110 @@
-// Classical washout — the TRANSLATIONAL CHANNEL, from Reid & Nahon (1985),
-// UTIAS Report No. 296.
+// Classical washout, translational channel — built from ONE vector block.
 //
-// This is a partial model, and deliberately so: it is the acceptance test for
-// parametric record types (§5.2). What it has to demonstrate is that a `Vec3`
-// composes with the scalar signal library rather than standing apart from it.
+// The same channel as `Classical.se`, written the other way round, and the two
+// are meant to be read side by side. `Classical.se` predates record settings: it
+// reaches the scalar signal library through `Split3` -> three `ScaleLimit`
+// instances -> `Merge3`, because there was no way to give one block three
+// per-axis gains. This file gives them to it directly (§6.2c).
 //
-// Present:  specific force in -> scale + limit -> high-pass -> platform accel.
-// Absent:   tilt coordination (needs the low-pass channel and Euler/quaternion
-//           types), the rotational channel, and the double integration to
-//           platform position (records may not be `continuous` states yet, §5.2,
-//           so that is scalar work once the states are written out).
+// Six nodes and eleven wires become three nodes and four wires, and the three
+// axes' parameters stop being three unrelated instances that a reader has to
+// notice are meant to move together. The high-pass makes the same point a
+// second time: `Classical.se` spends three `ct.Biquad` instances on one
+// design, where `ct.SecondOrderSystem3` takes it once (§6.2c).
 //
-// COORDINATE CONVENTION -- SAE, matching `se.math.Vec3` and the predecessor
-// implementation: X forward/north, Y right/east, Z down. Specific force is what
-// an accelerometer reads, f = a - g, so at rest and level it is {0, 0, -9.81}.
-// The compiler does not check this and cannot (see Vec3.se); it is a contract
-// between the model and whoever drives its boundary.
+// NOTE that `gain` and `limit` below are wide open at {1, 1, 1} and
+// {10, 10, 10} m/s^2, which effectively disables the scale-limit: this file
+// is currently tuned to look at the high-pass response on its own. The
+// per-axis argument in the settings comment is about what those numbers are
+// FOR, not what they are set to here.
 //
-// NOTE that `ClassicalFromScratch.se` -- which this file is meant to be read
-// beside -- takes the OTHER convention on its input: gravity-free kinematic
-// acceleration, subtracting `grav` internally to get the specific force. The
-// two boundaries are not interchangeable, and a driver written for one is off
-// by 1 g against the other.
+// The gravity term is the same argument once more, one section along: `grav` is
+// wired straight off the settings block (§6.9.2). The alternative is three
+// `se.sig.src.Constant` instances -- it is scalar-only -- and a `Merge3`, which
+// is four nodes and four wires to say a number this file already writes down.
+//
+// COORDINATE CONVENTION -- SAE, matching `se.math.Vec3`: X forward/north, Y
+// right/east, Z down.
+//
+// `ain` is KINEMATIC acceleration and carries NO gravity: a vehicle at rest and
+// level drives {0, 0, 0}, not {0, 0, -9.81}. The `sf` node subtracts `grav` to
+// form the specific force an accelerometer would read, f = a - g, which at rest
+// and level is {0, 0, -9.80665}. So the 1 g lives INSIDE this node and never at
+// its boundary. Reading it the other way round -- and the earlier draft of this
+// comment did -- makes `sf` come out at -2 g, which the high-pass then washes
+// away, so nothing downstream complains and the CSV looks fine.
+//
+// The compiler does not check any of this and cannot (see `Vec3.se`); the
+// contract with whoever drives the boundary is this comment and nothing else.
 package washout;
 
 use se.math;
 use se.sig;
-use se.sig.ct;
 
-node Classical {
-    inputs  { f: math.Vec3(m/s^2); }        // specific force, vehicle body frame
-    outputs { a: math.Vec3(m/s^2); }        // commanded platform acceleration
+node ClassicalFromScratch {
+    settings {
+        trnGain:  math.Vec3(-)      = { 1.0, 1.0, 1.0 };
+        tltGain:  double(-)      = 1.0;
+        limit: math.Vec3(m/s^2)  = { 10.0, 10.0, 10.0 };
+        grav:  math.Vec3(m/s^2)  = { 0.0, 0.0, 9.80665 };
+        headPos: math.Vec3(m) = { 0.0, 0.0, 0.0 };
+    }
+
+    inputs  { 
+        ain:  math.Vec3(m/s^2); // kinematic acceleration, vehicle body frame,
+                                //   gravity-free -- see the note above
+        win:  math.Vec3(rad/s); // Local angular velocity
+    }   
+    // High-passed, so whatever DC `sf` carries is gone by the time it gets
+    // here: the constant -g contributes a startup transient and nothing else.
+    outputs { aout: math.Vec3(m/s^2); }   // commanded platform acceleration
 
     structure {
-        // Per-axis scaling and limiting. `Split3` is what lets the vector meet
-        // the scalar library: a wire carries the whole record (§5.3), so the
-        // three axes have to be named before a scalar block can see them.
-        node sp : math.Split3 (m/s^2) {};
 
-        node sx : sig.ScaleLimit (m/s^2) { gain = 0.6; limit = 5.0; };
-        node sy : sig.ScaleLimit (m/s^2) { gain = 0.6; limit = 5.0; };
-        node sz : sig.ScaleLimit (m/s^2) { gain = 0.4; limit = 4.0; };
+        //----------------------------------
+        // Tilt Coordination Channel Nodes
+        //----------------------------------
 
-        // Second-order high-pass, s^2 / (s^2 + 2*zeta*wn*s + wn^2). Continuous,
-        // so the platform states join the global solver rather than being
-        // discretised per block.
-        node hx : ct.SecondOrderSystem (m/s^2) {
-            A = { 1.0, 4.0, 4.0 };
-            B = { 1.0, 0.0, 0.0 };
-        };
-        node hy : ct.SecondOrderSystem (m/s^2) {
-            A = { 1.0, 4.0, 4.0 };
-            B = { 1.0, 0.0, 0.0 };
-        };
-        node hz : ct.SecondOrderSystem (m/s^2) {
-            A = { 1.0, 2.0, 1.0 };
-            B = { 1.0, 0.0, 0.0 };
+        node xyAccel: math.Vec3GetXY(m/s^2) {};
+        node tiltScale : math.Scale2 (m/s^2, -) {
+            k  = param.tltGain;
         };
 
-        node mg : math.Merge3 (m/s^2) {};
+        node tiltLocalFilt: sig.ct.SecondOrderLowpass2 (m/s^2) {
+            wn = 3.1(rad/s);
+            z = 1.4;
+        };
+        node tiltCalc: TiltCalc {};
 
-        // One statement per axis, read left to right as the signal path
-        // (§6.9.2). `sx` and `hx` are bare because each has a single input and
-        // a single output, so naming them would say nothing; the ends stay
-        // named because `Split3` and `Merge3` have three ports on that side and
-        // WHICH axis is exactly the thing worth reading here.
-        self --> sp;
-        sp.x --> sx --> hx --> mg.x;
-        sp.y --> sy --> hy --> mg.y;
-        sp.z --> sz --> hz --> mg.z;
-        mg --> self;
+        //----------------------------------
+        // Translational Channel Nodes
+        //----------------------------------
+
+        node transScale : sig.ScaleLimit3 (m/s^2) {
+            gain  = param.trnGain;
+            limit = param.limit;
+        };
+        node sf: math.Diff3 (m/s^2);
+
+        node transLocalFilt: sig.ct.SecondOrderSystem3 (m/s^2) {
+            // s^2 / (s^2 + 2*zeta*wn*s + wn^2), wn = 3.1 rad/s, zeta = 1.4
+            A = { 1.0, 8.68, 9.61 };
+            B = { 1.0, 0.0,  0.0  };
+        };
+
+        node transGlobalFilt: sig.ct.FirstOrderSystem3 (m/s^2) {
+            A = { 1.0, 0.2 };
+            B = { 1.0, 0.0 };
+        };
+
+        // Tilt Channel
+        self.ain --> xyAccel --> tiltScale --> tiltLocalFilt;
+                                               tiltLocalFilt.vout  --> tiltCalc.acc;
+                                               tiltLocalFilt.voutd --> tiltCalc.accRate;
+
+        // Translational Channel
+        self.ain --> transScale  --> sf.a;
+        param.grav               --> sf.b;
+        sf --> transLocalFilt --> transGlobalFilt --> self;
     }
 }
