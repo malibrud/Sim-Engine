@@ -1,0 +1,63 @@
+// `se.kin.QuatExp` against its closed form, at four points chosen so that no
+// broken implementation lands on all of them by accident.
+//
+//   qId    v = 0                    -> (1, 0, 0, 0)
+//          The whole reason the Taylor branch exists: |v| = 0 makes the closed
+//          form sin(|v|/2)/|v| a 0/0, and a rotation of nothing is the single
+//          most common input an attitude integrator ever sees. Drop the branch
+//          and this column is NaN, not a near miss.
+//
+//   q90    v = (0, pi/2, 0)         -> w = y = sqrt(2)/2
+//          A right angle about ONE axis, and the case that pins the half-angle.
+//          Forget the halving and w reads 0 and y reads 1.
+//
+//   qGen   v = (2, 4, 4)/3          -> w = cos 1, (x,y,z) = sin(1)*(1,2,2)/3
+//          |v| = 2 exactly, about an axis aligned with nothing, at an angle no
+//          small-angle approximation survives. Three distinct components, so a
+//          transposed or dropped axis moves a column.
+//
+//   qTiny  v = (1e-9, 0, 0)         -> w = 1, x = 5e-10
+//          Below the 1e-8 crossover, so this is the branch qId cannot reach:
+//          `k` must be the series and must still be 1/2 to the last bit.
+//          Taking the closed form here instead is not catastrophic, but taking
+//          NEITHER -- returning 0, or the unhalved angle -- moves the column.
+//
+// Every quaternion above is unit-norm by construction, so nothing here asserts
+// that; see the header of `QuatExp.se` for why.
+package qexp;
+
+use se.math;
+use se.kin;
+
+node QExp {
+    // The general case doubles as the root's output, so the emit also proves a
+    // record type crosses a composite boundary.
+    outputs { q: kin.Quat; }
+
+    structure {
+        node mId:  math.Merge3(rad) {};
+        node qId:  kin.QuatExp {};
+        0.0 --> mId.x, mId.y, mId.z;
+        mId --> qId;
+
+        node m90:  math.Merge3(rad) {};
+        node q90:  kin.QuatExp {};
+        0.0                --> m90.x, m90.z;
+        1.5707963267948966 --> m90.y;
+        m90 --> q90;
+
+        node mGen: math.Merge3(rad) {};
+        node qGen: kin.QuatExp {};
+        0.6666666666666666 --> mGen.x;
+        1.3333333333333333 --> mGen.y, mGen.z;
+        mGen --> qGen;
+
+        node mTiny: math.Merge3(rad) {};
+        node qTiny: kin.QuatExp {};
+        0.000000001 --> mTiny.x;
+        0.0         --> mTiny.y, mTiny.z;
+        mTiny --> qTiny;
+
+        qGen --> self;
+    }
+}

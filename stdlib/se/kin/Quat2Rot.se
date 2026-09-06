@@ -1,4 +1,19 @@
+// Unit quaternion -> the 3x3 rotation matrix of the same rotation.
+//
+// This block PINS the convention the rest of `se.kin` reads back: `R` is the
+// matrix that takes a LOCAL (body) vector to a GLOBAL one, so `Quat2Rot(a*b)`
+// is `Quat2Rot(a) * Quat2Rot(b)` and a quaternion product composes with its
+// right operand acting in the left operand's frame. Everything else here --
+// `QuatExp`'s sign convention included -- is only meaningful relative to that
+// choice, and it is made once, here.
+//
+// The matrix form is worth having even though the quaternion holds the same
+// rotation in four numbers rather than nine: rotating more than one or two
+// vectors by the same attitude is cheaper through `R`, and a matrix is what an
+// external interface usually wants at the boundary.
 package se.kin;
+
+use se.kin;
 
 node Quat2Rot {
 
@@ -6,38 +21,42 @@ node Quat2Rot {
     outputs { R: kin.Rot; }
 
     output(q) {
-        // Get references
-        se::kin::Quat q = in.q;
-        se::kin::Rot R  = out.R;
+        // Named locals rather than an alias for `in.q`: the port is itself
+        // called `q`, and a local of that name in a generated body is a
+        // question about scoping that this block does not need to ask.
+        const double qw = in.q.w;
+        const double qx = in.q.x;
+        const double qy = in.q.y;
+        const double qz = in.q.z;
 
         // Precompute quadratic terms
-        auto x2 = q.x * q.x;
-        auto y2 = q.y * q.y;
-        auto z2 = q.z * q.z;
+        const double x2 = qx * qx;
+        const double y2 = qy * qy;
+        const double z2 = qz * qz;
 
-        auto wx = q.w * q.x;
-        auto wy = q.w * q.y;
-        auto wz = q.w * q.z;
+        const double wx = qw * qx;
+        const double wy = qw * qy;
+        const double wz = qw * qz;
 
-        auto xy = q.x * q.y;
-        auto yz = q.y * q.z;
-        auto zx = q.z * q.x;
+        const double xy = qx * qy;
+        const double yz = qy * qz;
+        const double zx = qz * qx;
 
         // Diagonal terms
-        R00 = 1 - 2*(y2 + z2);
-        R11 = 1 - 2*(z2 + x2);
-        R22 = 1 - 2*(x2 + y2);
+        out.R.R00 = 1 - 2*(y2 + z2);
+        out.R.R11 = 1 - 2*(z2 + x2);
+        out.R.R22 = 1 - 2*(x2 + y2);
 
         // X-Y terms
-        R01 =  2*(xy - wz);
-        R10 =  2*(xy + wz);
+        out.R.R01 =  2*(xy - wz);
+        out.R.R10 =  2*(xy + wz);
 
         // Y-Z terms
-        R12 =  2*(yz - wx);
-        R21 =  2*(yz + wx);
+        out.R.R12 =  2*(yz - wx);
+        out.R.R21 =  2*(yz + wx);
 
         // Z-X terms
-        R20 =  2*(zx - wy);
-        R02 =  2*(zx + wy);
+        out.R.R20 =  2*(zx - wy);
+        out.R.R02 =  2*(zx + wy);
     }
 }

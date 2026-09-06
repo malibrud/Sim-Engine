@@ -1,4 +1,4 @@
-package se.math;
+package se.kin;
 
 type Quat {
     w: double(-);  // real term

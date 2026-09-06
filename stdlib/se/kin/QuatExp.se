@@ -1,0 +1,68 @@
+// Exponential map: a rotation vector -- axis * angle, packed into one `Vec3` --
+// to the unit quaternion of that rotation. `exp` in the Lie-group sense, and
+// the inverse of `se.kin.QuatLog`.
+//
+//     exp(v) = ( cos(|v|/2), sin(|v|/2) * v/|v| )
+//
+// This is the block an attitude integrator is built out of. Integrating a body
+// rate means composing `exp(omega*dt)` onto the current orientation each step,
+// and for a rate held constant across the step that composition is not an
+// approximation of the kinematics -- it is their closed-form solution. The
+// alternative, integrating the four quaternion components against
+// `qdot = 1/2 q (x) omega` and renormalising afterwards, is a first-order
+// method wearing a correction that hides how far off it drifted.
+//
+// The output is unit-norm by construction: cos^2 + sin^2 * |v/|v||^2 = 1, in
+// exact arithmetic and to the last bit in floating point. Nothing downstream
+// has to renormalise, and no contract here needs to assert it (see below).
+//
+// The unit is FIXED at `rad` rather than parameterised, unlike `math.Norm3` or
+// `math.Cross3`. Those generalise because a magnitude or a product genuinely
+// has a dimension for the caller to choose. A rotation vector does not: it is
+// an angle and can be nothing else. Fixing it is what turns the most likely
+// wiring mistake at this port -- a `Vec3(rad/s)` reaching it because a `*dt`
+// was forgotten -- into an SE0410 rather than a plausible-looking orientation
+// that is wrong by a factor of the step size.
+//
+// COORDINATE CONVENTION -- right-handed, matching `math.Vec3` and the rotation
+// matrix `se.kin.Quat2Rot` builds. As `Vec3` says, this is documentation: the
+// compiler does not model frames and cannot check that the vector arriving here
+// is expressed in the one the caller thinks it is.
+package se.kin;
+
+use se.math;
+use se.kin;
+
+node QuatExp {
+
+    inputs  { v: math.Vec3(rad); }
+    outputs { q: kin.Quat; }
+
+    output(v) {
+        const double th2 = in.v.x*in.v.x + in.v.y*in.v.y + in.v.z*in.v.z;
+        const double th  = std::sqrt(th2);
+
+        // k = sin(th/2)/th, by its Taylor series below the crossover. The
+        // series is not an optimisation. At th = 0 the closed form is 0/0, and
+        // an identity rotation is the single most common input this block ever
+        // sees -- every step before the first motion, and every axis of a rate
+        // that happens to be zero. The next term is th^4/3840, so 1e-8 leaves
+        // the branch's two sides agreeing far below what a double can resolve.
+        const double k = th > 1e-8 ? std::sin(0.5*th)/th : 0.5 - th2/48.0;
+
+        out.q.w = std::cos(0.5*th);
+        out.q.x = k * in.v.x;
+        out.q.y = k * in.v.y;
+        out.q.z = k * in.v.z;
+
+        // `math.Norm3`'s argument, one layer earlier. Unit norm needs no
+        // contract -- it is exact by construction, so asserting it would only
+        // ever fire on a compiler bug. What is worth asserting is the input,
+        // because the caller downstream is an orientation STATE: a single
+        // non-finite rate poisons it for the rest of the run, and by the time
+        // it surfaces as a column of NaN there is no node's name left on it
+        // (SPEC 10.6). One check on the magnitude, not three on the components:
+        // a non-finite component reaches `th` through the sum whatever it was.
+        sim.check_finite(th, "the rotation angle is finite");
+    }
+}

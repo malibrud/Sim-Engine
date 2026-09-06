@@ -358,13 +358,11 @@ $smokeSkip = @(
     # Unfinished drafts that do not compile today, kept out so the check stays
     # green and the debt stays visible. Delete the entry, not the test, when the
     # block is finished.
-    'se.sig.WnZeta2Poly',   # pre-dates the "a unit is a type argument" unification
+    'se.sig.WnZeta2Poly'    # pre-dates the "a unit is a type argument" unification
                             # (b989ec4): still spells `wn (rad/s) double;`, gives
                             # `output(x)` an input its empty `inputs {}` does not
                             # declare, and writes Poly3's fields as a2/a1/a0
                             # where the type calls them c2/c1/c0.
-    'se.kin.Quat2Rot'       # checked in as unfinished (6758a68); its verbatim
-                            # body assigns undeclared `R00`-style names.
 )
 $smokeSettings = @{
     'se.sig.ScaleLimit'             = 'limit = 1.0(m);'
@@ -375,6 +373,38 @@ $smokeSettings = @{
     'se.sig.dt.Differentiator'      = 'wc = 1.0(rad/s);'
     'se.sig.dt.LowPass2'            = 'wn = 1.0(rad/s);'
     'se.sig.src.Ramp'               = 'slope = 1.0(m/s);'
+}
+
+# Sec. 6.3: an unconnected input is an error, there is no implicit zero, so
+# every record-valued port needs a record SOURCE -- and that source has to carry
+# the port's unit. `Vec3(rad)` fed from a `Merge3(m)` is an SE0410, not a smoke
+# pass, so one merge is made per (width, unit) pair on demand and shared by
+# fan-out. Sec. 6.9.2 forbids fan-IN only; fan-out is free.
+$smokeSrc = [ordered]@{}
+
+function Get-SmokeVecSource([int]$n, [string]$u) {
+    $key = "k${n}_" + ($u -replace '[^A-Za-z0-9]', '_')
+    if (-not $smokeSrc.Contains($key)) {
+        $ports = if ($n -eq 2) { @('x', 'y') } else { @('x', 'y', 'z') }
+        $fan   = ($ports | ForEach-Object { "$key.$_" }) -join ', '
+        $smokeSrc[$key] = @(
+            "        node ${key}: math.Merge${n}($u) {};",
+            "        0.0 --> $fan;")
+    }
+    return $key
+}
+
+# A quaternion source, for the ports whose type is `kin.Quat`. There is no
+# `MergeQuat` to reach for and there should not be one -- four loose doubles are
+# not a rotation. `QuatExp` of a zero rotation vector is, and it is identity.
+function Get-SmokeQuatSource() {
+    if (-not $smokeSrc.Contains('kq')) {
+        $rv = Get-SmokeVecSource 3 'rad'
+        $smokeSrc['kq'] = @(
+            "        node kq: se.kin.QuatExp {};",
+            "        $rv --> kq.v;")
+    }
+    return 'kq'
 }
 
 $smokeRoot = Join-Path $emitOut 'stdlib-smoke'
@@ -404,19 +434,31 @@ foreach ($f in (Get-ChildItem (Join-Path $root 'stdlib') -Recurse -Filter *.se |
     $ident = 'n_' + $fq.Replace('.', '_')
     $smokeDecls.Add("        node ${ident}: ${fq}${uargs} { " + $smokeSettings[$fq] + " };")
 
-    # Sec. 6.3: an unconnected input is an error, there is no implicit zero. So
-    # every port gets a source -- a constant for a scalar, the shared `k2`/`k3`
-    # for a record. One merge serves them all because sec. 6.9.2 forbids fan-IN
-    # only; fan-out is free.
+    # The unit parameters this node declares. An input annotated with one of
+    # them binds to `m` at the instantiation above; anything else is a literal
+    # unit and needs a source of its own.
+    $uparams = @()
+    if ($um.Success) {
+        $uparams = @($um.Groups[1].Value -split ';' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    }
+
+    # A scalar port takes `0.0` whatever its unit -- a bare literal takes the
+    # site's. A record port does not have that luxury; see $smokeSrc above.
     $im = [regex]::Match($text, 'inputs\s*\{([^}]*)\}')
     if ($im.Success) {
         foreach ($d in ($im.Groups[1].Value -split ';')) {
             if (-not $d.Trim()) { continue }
             $parts = $d -split ':', 2
             $port  = $parts[0].Trim()
-            $src = '0.0'
-            if     ($parts[1] -match 'Vec3') { $src = 'k3' }
-            elseif ($parts[1] -match 'Vec2') { $src = 'k2' }
+            $src   = '0.0'
+            if ($parts[1] -match 'Vec([23])\s*\(\s*([^)]*?)\s*\)') {
+                $n = [int]$Matches[1]
+                $u = $Matches[2]
+                if ($uparams -contains $u) { $u = 'm' }
+                $src = Get-SmokeVecSource $n $u
+            } elseif ($parts[1] -match 'Quat') {
+                $src = Get-SmokeQuatSource
+            }
             $smokeWires.Add("        $src --> ${ident}.${port};")
         }
     }
@@ -428,13 +470,11 @@ $smokeSe = @"
 package smoke;
 
 use se.math;
+use se.kin;
 
 node Smoke {
     structure {
-        node k2: math.Merge2(m) {};
-        node k3: math.Merge3(m) {};
-        0.0 --> k2.x, k2.y;
-        0.0 --> k3.x, k3.y, k3.z;
+$(($smokeSrc.Values | ForEach-Object { $_ }) -join "`n")
 
 $($smokeDecls -join "`n")
 
@@ -700,6 +740,58 @@ if (-not $cl) {
             $script:pass++
         } else {
             Write-Host ("FAIL build/emit/PortPath : a column is off by " + $worst) `
+                -ForegroundColor Red
+            $script:fail++
+        }
+    }
+
+    # `se.kin.QuatExp` against the closed form of the exponential map, at four
+    # points. See tests/emit/lib/qexp/QExp.se for what each column is for; the
+    # short version is that qId and qTiny straddle the 1e-8 Taylor crossover, so
+    # a missing branch is a NaN on one side and a lost half-angle on the other,
+    # and qGen's three distinct components catch a transposed axis. RELATIVE
+    # tolerance, because qTiny.x is 5e-10 and an absolute bound would pass it
+    # whatever it held.
+    if ($emitDirs.ContainsKey('QExp')) {
+        $qeDir = $emitDirs['QExp']
+        Push-Location $qeDir
+        & '.\build\QExp.exe' 2>&1 | Out-Null
+        $ran = ($LASTEXITCODE -eq 0)
+        Pop-Location
+        # cos/sin of the half angle, per column:
+        #   qId    (0)          q90    (pi/2 about y)
+        #   qGen   (2 rad about (1,2,2)/3)
+        #   qTiny  (1e-9 about x, below the crossover)
+        # Written out rather than computed, so the expected column is a fact
+        # about exp() and not a second evaluation of the same library call the
+        # model already made. sqrt(1/2); cos 1; sin(1)/3; 2 sin(1)/3.
+        $want = @(1.0, 0.0,
+                  0.70710678118654752, 0.70710678118654752,
+                  0.54030230586813977,
+                  0.28049032826929884, 0.56098065653859767, 0.56098065653859767,
+                  1.0, 5.0e-10)
+        $worst = [double]::PositiveInfinity
+        $csv = Join-Path $qeDir 'qexp.csv'
+        if ($ran -and (Test-Path $csv)) {
+            $worst = 0.0
+            foreach ($line in (Get-Content $csv | Select-Object -Skip 1)) {
+                if (-not $line) { continue }
+                $cols = $line -split ','
+                for ($c = 0; $c -lt $want.Count; $c++) {
+                    $scale = [Math]::Max(1.0, [Math]::Abs($want[$c]))
+                    $err = [Math]::Abs([double]$cols[$c + 1] - $want[$c]) / $scale
+                    if ($err -gt $worst) { $worst = $err }
+                }
+            }
+        }
+        # The CSV carries %.9g, so 1e-9 is the floor a correct column can reach.
+        if ($worst -lt 1e-8) {
+            Write-Host ("ok   build/emit/QExp : QuatExp matches exp(v) on both " +
+                        "sides of the Taylor crossover, max error " +
+                        $worst.ToString('E2')) -ForegroundColor Green
+            $script:pass++
+        } else {
+            Write-Host ("FAIL build/emit/QExp : a column is off by " + $worst) `
                 -ForegroundColor Red
             $script:fail++
         }

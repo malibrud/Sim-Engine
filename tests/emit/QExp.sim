@@ -1,0 +1,19 @@
+// SPEC 5.2 / 6.2 -- `se.kin.QuatExp` at four points. See
+// lib/qexp/QExp.se for what each column has to read and why.
+sim QExp {
+    root: qexp.QExp {};
+
+    step:     1 (ms);
+    solver:   rk4;
+    duration: 3 (ms);
+
+    record: {
+        file: "qexp.csv";
+        signals {
+            qId.q.w;    qId.q.x;
+            q90.q.w;    q90.q.y;
+            qGen.q.w;   qGen.q.x;   qGen.q.y;   qGen.q.z;
+            qTiny.q.w;  qTiny.q.x;
+        }
+    }
+}
