@@ -44,8 +44,13 @@ use se.sig;
 node ClassicalFromScratch {
     settings {
         trnGain:  math.Vec3(-)      = { 1.0, 1.0, 1.0 };
+        trnLimit: math.Vec3(m/s^2)  = { 10.0, 10.0, 10.0 };
+
         tltGain:  double(-)      = 1.0;
-        limit: math.Vec3(m/s^2)  = { 10.0, 10.0, 10.0 };
+
+        rotGain: math.Vec3(-)      = { 1.0, 1.0, 1.0 };
+        rotLimit: math.Vec3(rad/s) = { 2.0, 2.0, 2.0 };
+
         grav:  math.Vec3(m/s^2)  = { 0.0, 0.0, 9.80665 };
         headPos: math.Vec3(m) = { 0.0, 0.0, 0.0 };
     }
@@ -77,12 +82,27 @@ node ClassicalFromScratch {
         node tiltCalc: TiltCalc {};
 
         //----------------------------------
+        // Rotation Channel Nodes
+        //----------------------------------
+
+        node rotScale : sig.ScaleLimit3 (rad/s) {
+            gain  = param.rotGain;
+            limit = param.rotLimit;
+        };
+
+        node rotLocalFilt: sig.ct.SecondOrderSystem3 (m/s^2) {
+            // s^2 / (s^2 + 2*zeta*wn*s + wn^2), wn = 1.02 rad/s, zeta = 1.0
+            A = { 1.0, 2.04, 1.0404 };
+            B = { 1.0, 0.0,  0.0  };
+        };
+
+        //----------------------------------
         // Translational Channel Nodes
         //----------------------------------
 
         node transScale : sig.ScaleLimit3 (m/s^2) {
             gain  = param.trnGain;
-            limit = param.limit;
+            limit = param.trnLimit;
         };
         node sf: math.Diff3 (m/s^2);
 
