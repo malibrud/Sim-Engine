@@ -1,0 +1,69 @@
+// A record type that never resolves, on BOTH ends of a wire (§5.2).
+//
+// This is a regression case, and the regression was a crash rather than a wrong
+// answer. `resolve_type_ref` sets `is_record` before it resolves anything, so a
+// reference that fails leaves a `Type` claiming to be a record with a null
+// `record` behind it. Elaboration does not stop at a reported error, so that
+// half-built type reached `port_conversion`, where the two ends compared EQUAL
+// (null == null), the unit-argument loop ran zero times over an empty list, and
+// the per-field walk dereferenced the null. `sec` died with an access violation
+// and printed nothing — the one outcome worse than a wrong diagnostic.
+//
+// Both ends matter. A wire whose ends disagree is rejected before the walk, so
+// only the matching case reaches it, and that is exactly the shape a real model
+// produces: `w` below is what the smoke generator builds when it sources a
+// record port from a `Merge3` bound to that port's own unit.
+//
+// Two ways in, one per failing path, and both are here because they leave the
+// same null by different routes:
+//
+//   SE0414  `sec` is not a unit — the argument fails, so the record reference
+//           returns before `out.record` is ever assigned. This is the one a
+//           real file hits: `(rad/sec)` is how the C++ config parser spells
+//           `(rad/s)`, and it is a natural thing to type.
+//   SE0304  the record NAME does not resolve, so `out.record` is assigned null.
+//           Reported ONCE for the two ports that name it, not once per port,
+//           unlike the unit above.
+//
+// Neither wire should produce an `SE0410` of its own. There is no type left to
+// say anything about, and a second diagnostic naming a record the source never
+// declared would be noise on top of the real error.
+package recnull;
+
+use se.math;
+
+node RecNull {
+    outputs { y: double(-); }
+
+    structure {
+        // SE0414, twice — once per end. The wire itself must stay silent.
+        node mw : math.Merge3 (rad/sec) {};
+        node sw : BadUnit {};
+        0.0 --> mw.x, mw.y, mw.z;
+        mw --> sw.w;
+
+        // The same shape reached by the other route: an unresolved name.
+        node mn : NoSuchRecord {};
+        node sn : BadName {};
+        mn --> sn.v;
+
+        0.0 --> self.y;
+    }
+}
+
+node BadUnit {
+    inputs  { w: math.Vec3(rad/sec); }
+    outputs { y: double(-); }
+    output(w) { out.y = in.w.x; }
+}
+
+node NoSuchRecord {
+    outputs { v: recnull.NoSuch(m); }
+    output() { }
+}
+
+node BadName {
+    inputs  { v: recnull.NoSuch(m); }
+    outputs { y: double(-); }
+    output(v) { out.y = 0.0; }
+}

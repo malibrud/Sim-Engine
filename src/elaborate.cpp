@@ -1322,7 +1322,14 @@ std::vector<Unit> Elaborator::unit_args_of(const NodeInfo* parent, const NodeInf
         Unit bound_unit;
         if (!ue.eval(u.get(), bound_unit)) {
             failed_ = true;
-            out.push_back(unit_one());
+            // Keep whatever evaluation salvaged rather than substituting `(-)`.
+            // `UnitEval` leaves the best partial unit behind — `(rad)` for
+            // `(rad/sec)`, whose numerator was fine — and a record REFERENCE to
+            // the same bad spelling keeps that partial (`resolve.cpp`). When the
+            // two paths recover differently, a port declared `Vec3(rad/sec)` and
+            // the `Merge3(rad/sec)` feeding it disagree, and one `SE0414` grows a
+            // spurious `SE0410` about units the author never wrote.
+            out.push_back(bound(bound_unit));
             continue;
         }
         bound_unit = bound(bound_unit);
@@ -1643,6 +1650,14 @@ bool Elaborator::port_conversion(const Field& from, const Field& to, const Sourc
         return false;
     }
     if (from.type.is_record) {
+        // A type whose record never resolved arrives here with `is_record` set
+        // and `record` null — the name did not resolve (`SE0304`), or one of its
+        // unit arguments did not (`SE0414`). That has already been reported, and
+        // a wire has nothing to say about a type that does not exist, so stop
+        // before the per-field walk below dereferences the null. Silent on
+        // purpose: a second diagnostic here would name a record the source
+        // never successfully declared.
+        if (!from.type.record || !to.type.record) return false;
         // The two ends must be the same record: a wire carries the whole value,
         // and there is no structural conversion between two different shapes.
         if (from.type.record != to.type.record) {

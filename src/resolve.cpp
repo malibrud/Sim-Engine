@@ -451,11 +451,20 @@ bool Resolver::resolve_type(const FileInfo& file, const ast::TypeRef& ref, Type&
     // record. `Vec3(A*B)` inside a node with `units {A; B;}` yields parametric
     // arguments, which are bound again when that node is instantiated; the
     // record's own parameters are a different scope entirely.
+    bool args_ok = true;
     {
         UnitEval eval(*file.src, diag_, unit_params_);
         for (const ast::UnitPtr& u : ref.unit_args) {
             Unit evaluated;
-            if (!eval.eval(u.get(), evaluated)) return false;
+            // A failed argument does NOT return here. `UnitEval::eval` leaves
+            // `evaluated` dimensionless on failure, so pushing it anyway keeps
+            // the arity right and lets the record below resolve — and both
+            // matter, because a reported error does not stop elaboration
+            // (`--max-errors`), and a `Type` carrying `is_record` with a null
+            // `record` reaches §5.2's per-field wire walk and crashes it. A
+            // crash there replaces a good diagnostic with no diagnostic at all,
+            // which is the same reason `unit_bind` tolerates a short binding.
+            if (!eval.eval(u.get(), evaluated)) args_ok = false;
             out.unit_args.push_back(evaluated);
         }
     }
@@ -490,7 +499,7 @@ bool Resolver::resolve_type(const FileInfo& file, const ast::TypeRef& ref, Type&
                     std::to_string(got) + " given", std::move(att));
         return false;
     }
-    return true;
+    return args_ok;
 }
 
 RecordInfo* Resolver::resolve_record(FileInfo& file, const ast::TypeDef& def,

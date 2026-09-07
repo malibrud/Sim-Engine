@@ -370,11 +370,13 @@ $smokeSkip = @(
                             # SPEC 8.3 makes a C++ compile error rather than a
                             # `sec` diagnostic.
                             #
-                            # This entry is LOAD-BEARING, not cosmetic. The bad
-                            # unit does not produce SE0414 here: a wire between
-                            # two parametric record ports carrying the same
-                            # unknown unit segfaults `sec`, so without the skip
-                            # the smoke emit crashes rather than failing.
+                            # The bad unit used to CRASH `sec` rather than
+                            # diagnose -- a wire between two parametric record
+                            # ports carrying the same unknown unit dereferenced
+                            # a null record. Fixed now, with `tests/emit/RecNull`
+                            # holding the line, so this entry is an ordinary
+                            # unfinished-draft skip again: without it the smoke
+                            # emit FAILS, where before it died silently.
 )
 $smokeSettings = @{
     'se.sig.ScaleLimit'             = 'limit = 1.0(m);'

@@ -1,0 +1,10 @@
+// §5.2 — a record type that fails to resolve, on both ends of a wire. Has an
+// `.expected`, so this case must FAIL. See lib/recnull/RecNull.se for why it
+// exists: it used to crash `sec` outright.
+sim RecNull {
+    root: recnull.RecNull {};
+
+    step:     1 (ms);
+    solver:   rk4;
+    duration: 1 (ms);
+}

@@ -1,0 +1,24 @@
+﻿error[SE0414]: unknown unit symbol `sec`
+  --> tests/emit/lib/recnull/RecNull.se:55:32
+   |
+55 |     inputs  { w: math.Vec3(rad/sec); }
+   |                                ^^^ not a unit in Appendix A
+   = help: did you mean `(deg)`, `(rev)` or `(s)`?
+
+error[SE0304]: cannot find `recnull.NoSuch`
+  --> tests/emit/lib/recnull/RecNull.se:61:18
+   |
+61 |     outputs { v: recnull.NoSuch(m); }
+   |                  ^^^^^^^^^^^^^^ no such file in any root
+   = note: looked for `recnull/NoSuch.se` in each root
+   = note: root  [stdlib]
+   = note: root  [tests/emit/lib]
+
+error[SE0414]: unknown unit symbol `sec`
+  --> tests/emit/lib/recnull/RecNull.se:40:36
+   |
+40 |         node mw : math.Merge3 (rad/sec) {};
+   |                                    ^^^ not a unit in Appendix A
+   = help: did you mean `(deg)`, `(rev)` or `(s)`?
+
+3 errors emitted
