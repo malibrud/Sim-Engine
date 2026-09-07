@@ -1,0 +1,31 @@
+package se.kin;
+
+use se.kin;
+use se.math;
+
+node AngRateToQuatRate {
+
+    inputs  { 
+        q: kin.Quat;  
+        w: math.Vec3(rad/sec); // Expressed in local coordinates.
+    }
+    outputs { qd: kin.Quat; }
+
+    output(q) {
+        // qd = 0.5 q w
+
+        const double qw = in.q.w;
+        const double qx = in.q.x;
+        const double qy = in.q.y;
+        const double qz = in.q.z;
+
+        const double wx = in.w.x;
+        const double wy = in.w.y;
+        const double wz = in.w.z;
+
+        out.qd.w = 0.5*( -qx*wx - qy*wy - qz*wz );
+        out.qd.x = 0.5*(  qw*wx + qy*wz - qz*wy );
+        out.qd.y = 0.5*(  qw*wy + qz*wx - qx*wz );
+        out.qd.z = 0.5*(  qw*wz + qx*wy - qy*wx );
+    }
+}

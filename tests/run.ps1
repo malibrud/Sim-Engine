@@ -358,11 +358,23 @@ $smokeSkip = @(
     # Unfinished drafts that do not compile today, kept out so the check stays
     # green and the debt stays visible. Delete the entry, not the test, when the
     # block is finished.
-    'se.sig.WnZeta2Poly'    # pre-dates the "a unit is a type argument" unification
+    'se.sig.WnZeta2Poly',   # pre-dates the "a unit is a type argument" unification
                             # (b989ec4): still spells `wn (rad/s) double;`, gives
                             # `output(x)` an input its empty `inputs {}` does not
                             # declare, and writes Poly3's fields as a2/a1/a0
                             # where the type calls them c2/c1/c0.
+    'se.kin.AngRateToQuatRate'
+                            # unfinished: `w` is spelled `(rad/sec)`, which is not
+                            # a unit in Appendix A -- it is `rad/s` -- and
+                            # `output(q)` omits the `w` its body reads, which
+                            # SPEC 8.3 makes a C++ compile error rather than a
+                            # `sec` diagnostic.
+                            #
+                            # This entry is LOAD-BEARING, not cosmetic. The bad
+                            # unit does not produce SE0414 here: a wire between
+                            # two parametric record ports carrying the same
+                            # unknown unit segfaults `sec`, so without the skip
+                            # the smoke emit crashes rather than failing.
 )
 $smokeSettings = @{
     'se.sig.ScaleLimit'             = 'limit = 1.0(m);'
