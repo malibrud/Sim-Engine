@@ -1,5 +1,8 @@
-// `se.kin.QuatExp` against its closed form, at four points chosen so that no
-// broken implementation lands on all of them by accident.
+// `se.kin.QuatExp` and `se.kin.QuatLog` against their closed forms, and against
+// each other.
+//
+// FORWARD -- exp(v), at four points chosen so that no broken implementation
+// lands on all of them by accident.
 //
 //   qId    v = 0                    -> (1, 0, 0, 0)
 //          The whole reason the Taylor branch exists: |v| = 0 makes the closed
@@ -22,8 +25,24 @@
 //          Taking the closed form here instead is not catastrophic, but taking
 //          NEITHER -- returning 0, or the unhalved angle -- moves the column.
 //
-// Every quaternion above is unit-norm by construction, so nothing here asserts
-// that; see the header of `QuatExp.se` for why.
+// ROUND TRIP -- log(exp(v)) must be v again, and each of the four above goes
+// back through `QuatLog`. This is the assertion that the two maps agree on the
+// half-angle and on the axis, and qTiny makes the trip through the small-angle
+// branch of BOTH: exp's series and log's `2/qw`.
+//
+// SHORTEST ROTATION -- the round trip alone cannot catch a missing `qw >= 0`
+// flip, because every v above is under pi and comes back unchanged either way.
+//
+//   qWrap  v = (0, 0, 4)            -> w = cos 2, which is NEGATIVE
+//   rWrap                           -> z = 4 - 2*pi = -2.2832
+//          Four radians about z is the same attitude as 2.2832 radians the
+//          other way, and the short way round is the one a washout leak has to
+//          decay along. Without the flip this column reads +4: the same
+//          attitude, named so that leaking it toward zero unwinds the long way.
+//
+// Every quaternion here is unit-norm by construction, so nothing asserts that;
+// see the headers of `QuatExp.se` and `QuatLog.se` for why, and for why
+// `QuatLog` in particular must not.
 package qexp;
 
 use se.math;
@@ -37,27 +56,40 @@ node QExp {
     structure {
         node mId:  math.Merge3(rad) {};
         node qId:  kin.QuatExp {};
+        node rId:  kin.QuatLog {};
         0.0 --> mId.x, mId.y, mId.z;
-        mId --> qId;
+        mId --> qId --> rId;
 
         node m90:  math.Merge3(rad) {};
         node q90:  kin.QuatExp {};
+        node r90:  kin.QuatLog {};
         0.0                --> m90.x, m90.z;
         1.5707963267948966 --> m90.y;
-        m90 --> q90;
+        m90 --> q90 --> r90;
 
         node mGen: math.Merge3(rad) {};
         node qGen: kin.QuatExp {};
+        node rGen: kin.QuatLog {};
         0.6666666666666666 --> mGen.x;
         1.3333333333333333 --> mGen.y, mGen.z;
-        mGen --> qGen;
+        mGen --> qGen --> rGen;
 
         node mTiny: math.Merge3(rad) {};
         node qTiny: kin.QuatExp {};
+        node rTiny: kin.QuatLog {};
         0.000000001 --> mTiny.x;
         0.0         --> mTiny.y, mTiny.z;
-        mTiny --> qTiny;
+        mTiny --> qTiny --> rTiny;
 
+        node mWrap: math.Merge3(rad) {};
+        node qWrap: kin.QuatExp {};
+        node rWrap: kin.QuatLog {};
+        0.0 --> mWrap.x, mWrap.y;
+        4.0 --> mWrap.z;
+        mWrap --> qWrap --> rWrap;
+
+        // Fan-out: `qGen` already feeds `rGen` above. SPEC 6.9.2 forbids
+        // fan-IN only.
         qGen --> self;
     }
 }

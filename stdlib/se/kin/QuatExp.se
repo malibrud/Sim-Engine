@@ -4,6 +4,14 @@
 //
 //     exp(v) = ( cos(|v|/2), sin(|v|/2) * v/|v| )
 //
+// Named for the map, but the field this library serves calls the operation the
+// ROTATION VECTOR to quaternion conversion -- the C++ this is ported from names
+// it `fromRotationVector`, MATLAB names it `rotvec2quat`, and the strapdown
+// navigation literature calls `v` the rotation vector throughout. It is NOT the
+// axis-angle conversion: that name conventionally means the four-number (unit
+// axis, scalar angle) pair, and a block taking that pair is a different block
+// this one does not foreclose.
+//
 // This is the block an attitude integrator is built out of. Integrating a body
 // rate means composing `exp(omega*dt)` onto the current orientation each step,
 // and for a rate held constant across the step that composition is not an

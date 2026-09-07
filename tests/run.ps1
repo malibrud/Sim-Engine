@@ -745,31 +745,40 @@ if (-not $cl) {
         }
     }
 
-    # `se.kin.QuatExp` against the closed form of the exponential map, at four
-    # points. See tests/emit/lib/qexp/QExp.se for what each column is for; the
-    # short version is that qId and qTiny straddle the 1e-8 Taylor crossover, so
-    # a missing branch is a NaN on one side and a lost half-angle on the other,
-    # and qGen's three distinct components catch a transposed axis. RELATIVE
-    # tolerance, because qTiny.x is 5e-10 and an absolute bound would pass it
-    # whatever it held.
+    # `se.kin.QuatExp` and `se.kin.QuatLog` against their closed forms and
+    # against each other. See tests/emit/lib/qexp/QExp.se for what every column
+    # is for; the short version is that qId and qTiny straddle the 1e-8 Taylor
+    # crossover on BOTH maps, qGen's three distinct components catch a
+    # transposed axis through the round trip, and qWrap is the one case the
+    # round trip cannot check itself -- a rotation past pi, which has to come
+    # back the short way round or a washout leak unwinds the wrong direction.
+    # RELATIVE tolerance, because qTiny.x is 5e-10 and an absolute bound would
+    # pass it whatever it held.
     if ($emitDirs.ContainsKey('QExp')) {
         $qeDir = $emitDirs['QExp']
         Push-Location $qeDir
         & '.\build\QExp.exe' 2>&1 | Out-Null
         $ran = ($LASTEXITCODE -eq 0)
         Pop-Location
-        # cos/sin of the half angle, per column:
-        #   qId    (0)          q90    (pi/2 about y)
-        #   qGen   (2 rad about (1,2,2)/3)
-        #   qTiny  (1e-9 about x, below the crossover)
-        # Written out rather than computed, so the expected column is a fact
-        # about exp() and not a second evaluation of the same library call the
-        # model already made. sqrt(1/2); cos 1; sin(1)/3; 2 sin(1)/3.
-        $want = @(1.0, 0.0,
-                  0.70710678118654752, 0.70710678118654752,
-                  0.54030230586813977,
-                  0.28049032826929884, 0.56098065653859767, 0.56098065653859767,
-                  1.0, 5.0e-10)
+        # Written out rather than computed, so an expected column is a fact
+        # about exp() and log() and not a second evaluation of the same library
+        # call the model already made. sqrt(1/2); cos 1; sin(1)/3; 2 sin(1)/3;
+        # cos 2; 4 - 2 pi.
+        $want = @(
+            # exp(v): qId, q90, qGen, qTiny
+            1.0, 0.0,
+            0.70710678118654752, 0.70710678118654752,
+            0.54030230586813977,
+            0.28049032826929884, 0.56098065653859767, 0.56098065653859767,
+            1.0, 5.0e-10,
+            # log(exp(v)) == v, the same four
+            0.0,
+            1.5707963267948966,
+            0.66666666666666667, 1.3333333333333333, 1.3333333333333333,
+            1.0e-9,
+            # 4 rad about z: w goes negative, and log brings it back the short
+            # way as 4 - 2 pi. Without the qw >= 0 flip this column reads +4.
+            -0.41614683654714239, -2.2831853071795865)
         $worst = [double]::PositiveInfinity
         $csv = Join-Path $qeDir 'qexp.csv'
         if ($ran -and (Test-Path $csv)) {
@@ -786,8 +795,9 @@ if (-not $cl) {
         }
         # The CSV carries %.9g, so 1e-9 is the floor a correct column can reach.
         if ($worst -lt 1e-8) {
-            Write-Host ("ok   build/emit/QExp : QuatExp matches exp(v) on both " +
-                        "sides of the Taylor crossover, max error " +
+            Write-Host ("ok   build/emit/QExp : QuatExp/QuatLog match their closed " +
+                        "forms on both sides of the Taylor crossover, round-trip, " +
+                        "and take the short way past pi, max error " +
                         $worst.ToString('E2')) -ForegroundColor Green
             $script:pass++
         } else {

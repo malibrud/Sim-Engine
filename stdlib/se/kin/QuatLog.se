@@ -1,0 +1,70 @@
+// Log map: a unit quaternion to the rotation vector -- axis * angle, packed
+// into one `Vec3` -- of the same rotation. `log` in the Lie-group sense, and
+// the inverse of `se.kin.QuatExp`.
+//
+//     log(q) = 2*atan2(|q_v|, q_w) * q_v/|q_v|
+//
+// Named for the map, but the field calls this the quaternion to ROTATION VECTOR
+// conversion -- the C++ this is ported from names it `toRotationVector`, MATLAB
+// names it `quat2rotvec`. See `QuatExp.se` for why it is not the axis-angle
+// conversion.
+//
+// Two properties of this form are load-bearing, and neither is free.
+//
+// SHORTEST ROTATION. `q` and `-q` are the same rotation, so the answer is only
+// determined once one of them is chosen. Flipping to `q_w >= 0` first picks the
+// half-turn-or-less reading, |theta| <= pi: a rotation of 4 rad about z comes
+// back as -2.283 rad about z, the same attitude reached the short way round.
+// This is what makes the map usable in a washout leak, where decaying `theta`
+// toward zero has to mean returning to neutral by the shorter path and not
+// winding the long way around. Without the flip, an orientation past pi decays
+// away from neutral.
+//
+// SCALE INVARIANCE. `2*atan2(|q_v|, q_w)` is the angle for any positive
+// multiple of `q`, so a quaternion that has drifted off the unit sphere gives
+// the same axis and the same angle as its normalised self. The obvious
+// alternative, `2*acos(q_w)`, does not: it reads the drift as a change of
+// angle, and at |q| slightly over one it leaves the domain of `acos` entirely.
+//
+// That invariance is also why this block does NOT assert its input is
+// unit-norm, though SPEC 10.6 uses exactly that contract on `Quat2Rot` as its
+// worked example. The difference is real: `Quat2Rot`'s matrix formula assumes
+// unit norm and is wrong without it, so the claim belongs there. Here the norm
+// cancels, and asserting it would be asserting a fact about the caller that
+// this block was deliberately written not to need.
+package se.kin;
+
+use se.math;
+use se.kin;
+
+node QuatLog {
+
+    inputs  { q: kin.Quat; }
+    outputs { v: math.Vec3(rad); }
+
+    output(q) {
+        // The shortest-rotation flip, before anything reads the components.
+        double qw = in.q.w, qx = in.q.x, qy = in.q.y, qz = in.q.z;
+        if (qw < 0.0) { qw = -qw; qx = -qx; qy = -qy; qz = -qz; }
+
+        const double s = std::sqrt(qx*qx + qy*qy + qz*qz);
+
+        // k = theta/s = 2*atan2(s, qw)/s, and its small-angle limit 2/qw below
+        // the same crossover `QuatExp` uses, for the same reason: at s = 0 the
+        // closed form is 0/0, and identity is the most common input there is.
+        const double k = s > 1e-8 ? 2.0 * std::atan2(s, qw) / s : 2.0 / qw;
+
+        out.v.x = k * qx;
+        out.v.y = k * qy;
+        out.v.z = k * qz;
+
+        // `QuatExp`'s contract, mirrored, on the same quantity: the rotation
+        // angle. It is the one scalar everything here flows through, so it is
+        // non-finite exactly when something upstream is -- a NaN component
+        // reaches it through `s`, and the degenerate all-zero quaternion
+        // reaches it as `inf * 0`. See `QuatExp.se` for why an orientation
+        // pipeline is worth one check: the state downstream never recovers.
+        const double theta = k * s;
+        sim.check_finite(theta, "the rotation angle is finite");
+    }
+}

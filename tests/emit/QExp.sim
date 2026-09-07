@@ -1,5 +1,6 @@
-// SPEC 5.2 / 6.2 -- `se.kin.QuatExp` at four points. See
-// lib/qexp/QExp.se for what each column has to read and why.
+// SPEC 5.2 / 6.2 -- `se.kin.QuatExp` and `se.kin.QuatLog`, forward, round trip
+// and shortest-rotation. See lib/qexp/QExp.se for what each column has to read
+// and why.
 sim QExp {
     root: qexp.QExp {};
 
@@ -14,6 +15,13 @@ sim QExp {
             q90.q.w;    q90.q.y;
             qGen.q.w;   qGen.q.x;   qGen.q.y;   qGen.q.z;
             qTiny.q.w;  qTiny.q.x;
+
+            rId.v.x;
+            r90.v.y;
+            rGen.v.x;   rGen.v.y;   rGen.v.z;
+            rTiny.v.x;
+
+            qWrap.q.w;  rWrap.v.z;
         }
     }
 }
