@@ -1,0 +1,49 @@
+// SPEC 6.12 / 8.3 -- the two ways an `adjust()` can be wrong, in one model.
+//
+// `SE0346` is the converse rule, and the only rule `adjust()` has: a node with
+// no `continuous` state has an empty `Adj`, so the body could not write
+// anything even if it wanted to. There is deliberately no forward rule to go
+// with it -- a continuous state does not require an adjustment -- so this is
+// the whole of what §6.12 checks here.
+//
+// `SE0350` is the parameter list, and it is in this file to prove that
+// `adjust()` gets that check for free: the loop in `check_methods` exempts
+// `init()` and `final(ctx)` and nothing else, so a new method is covered the
+// moment its enum case exists.
+package adjbad;
+
+node AdjBad {
+    outputs { y: double(-); }
+
+    structure {
+        node a : NoCont    {};
+        node b : BadParam  {};
+
+        1.0 --> b.u;
+        a --> self.y;
+    }
+}
+
+// SE0346: a `discrete` state is written wholesale by next(); routing one
+// through adjust() is exactly what `Adj` being continuous-only prevents.
+node NoCont {
+    outputs { y: double(-); }
+
+    states { discrete n: double(-) = 0.0; }
+
+    next()   { next.n = state.n + 1.0; }
+    adjust() { }
+    output() { out.y = state.n; }
+}
+
+// SE0350: `nosuch` is not a declared input.
+node BadParam {
+    inputs  { u: double(-); }
+    outputs { y: double(-); }
+
+    states { continuous x: double(-) = 0.0; }
+
+    derivative(u)  { der.x = in.u; }
+    adjust(nosuch) { adjust.x = state.x; }
+    output()       { out.y = state.x; }
+}

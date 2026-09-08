@@ -821,6 +821,72 @@ if (-not $cl) {
         }
     }
 
+    # SPECIFICATION 6.4b / 9.6 step 7 -- the jump map. Three columns, each
+    # pinning a different claim, and each moved hard by deleting the adjust()
+    # that produces it. See tests/emit/lib/adj/Adjust.se for the full argument.
+    #
+    #   rot.r    RK4 is not symplectic, so a point on the unit circle spirals
+    #            off it: with no adjust() this column decays to 0.9219 over the
+    #            two seconds. With one, the state is renormalised every step and
+    #            the column holds at |R(i*theta)| = 0.99959, theta = w*h -- one
+    #            step's worth off the manifold, because out.r is published from
+    #            the state the SOLVER left. That plateau is therefore also the
+    #            check that adjust() does NOT stand in for normalising in
+    #            output(), which SPECIFICATION 6.4b says in as many words.
+    #
+    #   clamp.y  A ramp against a limit that arrives on a wire, so In_adjust is
+    #            non-empty and the parameter list is doing its 8.3 job. It
+    #            plateaus at lim + h, not at lim, and that is what pins the
+    #            PLACEMENT: adjust() runs below the recorder, so every row
+    #            reports the pre-adjust state and the advance has already added
+    #            one step to the clamped value. Move the call above record_row()
+    #            and this column reads 1.00 instead of 1.01.
+    #
+    #   free.y   exp(-2t), from a node with no adjust() at all, sharing the
+    #            model with two that have one. Byte-identical with the feature
+    #            and without it, which is what says an untouched node stays
+    #            untouched -- no Adj member, no binding, no call.
+    if ($emitDirs.ContainsKey('Adjust')) {
+        $adDir = $emitDirs['Adjust']
+        Push-Location $adDir
+        & '.\build\Adjust.exe' 2>&1 | Out-Null
+        $ran = ($LASTEXITCODE -eq 0)
+        Pop-Location
+        # |1 + z + z^2/2 + z^3/6 + z^4/24| at z = i*0.6283185307179586, written
+        # out rather than recomputed: the plateau is a fact about RK4's
+        # stability polynomial and not a second evaluation of the model.
+        $rho = 0.99959371900632380
+        $worst = [double]::PositiveInfinity
+        $csv = Join-Path $adDir 'adjust.csv'
+        if ($ran -and (Test-Path $csv)) {
+            $worst = 0.0
+            foreach ($line in (Get-Content $csv | Select-Object -Skip 1)) {
+                if (-not $line) { continue }
+                $c = $line -split ','
+                $t = [double]$c[0]
+                $wantR = $rho
+                if ($t -eq 0.0) { $wantR = 1.0 }
+                $wantC = 1.01
+                if ($t -le 1.0) { $wantC = $t }
+                $errs = @([Math]::Abs([double]$c[1] - $wantR),
+                          [Math]::Abs([double]$c[2] - $wantC),
+                          [Math]::Abs([double]$c[3] - [Math]::Exp(-2.0 * $t)))
+                foreach ($e in $errs) { if ($e -gt $worst) { $worst = $e } }
+            }
+        }
+        if ($worst -lt 1e-8) {
+            Write-Host ("ok   build/emit/Adjust : adjust() holds the state on the " +
+                        "manifold, clamps below the recorder, and leaves an " +
+                        "unadjusted node alone, max error " +
+                        $worst.ToString('E2')) -ForegroundColor Green
+            $script:pass++
+        } else {
+            Write-Host ("FAIL build/emit/Adjust : a column is off by " + $worst) `
+                -ForegroundColor Red
+            $script:fail++
+        }
+    }
+
     # SPECIFICATION 6.9.2 -- a setting as a wire source. ParWire drives all
     # three spellings (a whole record, a scalar fanned out to two destinations,
     # and a leaf of a record) from `(mm/s^2)` settings into `(m/s^2)` ports, so

@@ -792,6 +792,7 @@ void Resolver::check_methods(const NodeInfo& info) {
     const ast::Method* out_m = info.method(ast::Method::Which::Output);
     const ast::Method* der_m = info.method(ast::Method::Which::Derivative);
     const ast::Method* next_m = info.method(ast::Method::Which::Next);
+    const ast::Method* adj_m = info.method(ast::Method::Which::Adjust);
 
     // §6.12 — typo safety, per kind, in both directions.
     if (!info.composite) {
@@ -832,6 +833,16 @@ void Resolver::check_methods(const NodeInfo& info) {
                     {note("`next()` may write only `next.`, and `Store` is empty here"),
                      help("per-step work that is not a state transition belongs in "
                           "`on_step()` (§8.1)")});
+    // §6.12 — the converse for `adjust()`, and the ONLY rule it has. A continuous
+    // state does not require an adjustment and most do not want one, so there is
+    // no forward rule to pair this with; §6.4b's jump map is opt-in.
+    if (adj_m && !info.has_continuous())
+        diag_.error("SE0346", src, adj_m->loc,
+                    "`adjust()` in a node with no `continuous` states", "nothing to write",
+                    {note("`adjust()` may write only `adjust.`, and `Adj` is empty here"),
+                     help("a discrete state is written wholesale by `next()`, and "
+                          "per-step work that changes no state belongs in `on_step()` "
+                          "(§8.1)")});
 
     // §8.3 — a method's parameter list is exactly the set of inputs it reads.
     // `init()` takes none (SE0241) and `final(ctx)`'s one parameter is the run

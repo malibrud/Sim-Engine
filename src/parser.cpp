@@ -50,8 +50,9 @@ const std::vector<const char*>& section_names() {
 }
 
 const std::vector<const char*>& lifecycle_names() {
-    static const std::vector<const char*> v = {"init",    "output", "derivative",
-                                              "next",    "on_step", "final"};
+    static const std::vector<const char*> v = {"init",   "output",  "derivative",
+                                              "next",   "adjust",  "on_step",
+                                              "final"};
     return v;
 }
 
@@ -188,6 +189,7 @@ void Parser::recover_in_node_body() {
                 case Tok::KwOutput:
                 case Tok::KwDerivative:
                 case Tok::KwNext:
+                case Tok::KwAdjust:
                 case Tok::KwOnStep:
                 case Tok::KwFinal:
                     return;
@@ -994,6 +996,7 @@ bool Parser::parse_node_item(ast::NodeDef& node) {
         case Tok::KwOutput:
         case Tok::KwDerivative:
         case Tok::KwNext:
+        case Tok::KwAdjust:
         case Tok::KwOnStep:
         case Tok::KwFinal:
             return parse_method(node);
@@ -1041,7 +1044,7 @@ bool Parser::parse_node_item(ast::NodeDef& node) {
                          "verbatim as a helper function",
                          "did you mean `" + did + "`?",
                          {note("the lifecycle methods are init, output, derivative, next, "
-                               "on_step, final (\xc2\xa7""8.1)")});
+                               "adjust, on_step, final (\xc2\xa7""8.1)")});
             }
             return parse_helper(node);
         }
@@ -1691,6 +1694,7 @@ bool Parser::parse_method(ast::NodeDef& node) {
         case Tok::KwOutput:     m.which = ast::Method::Which::Output;     break;
         case Tok::KwDerivative: m.which = ast::Method::Which::Derivative; break;
         case Tok::KwNext:       m.which = ast::Method::Which::Next;       break;
+        case Tok::KwAdjust:     m.which = ast::Method::Which::Adjust;     break;
         case Tok::KwOnStep:     m.which = ast::Method::Which::OnStep;     break;
         default:                m.which = ast::Method::Which::Final;      break;
     }

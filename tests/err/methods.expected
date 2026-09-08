@@ -19,7 +19,7 @@ warning[SE0221]: `on_setp` is not a lifecycle method; it will be copied verbatim
    |
 27 |     on_setp(u) { }
    |     ^^^^^^^ did you mean `on_step`?
-   = note: the lifecycle methods are init, output, derivative, next, on_step, final (§8.1)
+   = note: the lifecycle methods are init, output, derivative, next, adjust, on_step, final (§8.1)
 
 error[SE0241]: `init` takes no parameters
   --> tests/err/methods.se:35:10
@@ -36,4 +36,18 @@ error[SE0242]: `final` takes at most one parameter
    = note: the single parameter is the read-only run context: reason, message, time (§10.3)
    = help: write `final(ctx) { ... }` or `final() { ... }`
 
-4 errors, 1 warning emitted
+error[SE0201]: expected a input port name, found `adjust`
+  --> tests/err/methods.se:45:15
+   |
+45 |     inputs  { adjust: double(-); }
+   |               ^^^^^^ expected a input port name
+   = note: `adjust` is a reserved word (Appendix B)
+
+warning[SE0221]: `adjus` is not a lifecycle method; it will be copied verbatim as a helper function
+  --> tests/err/methods.se:48:5
+   |
+48 |     adjus(u) { }
+   |     ^^^^^ did you mean `adjust`?
+   = note: the lifecycle methods are init, output, derivative, next, adjust, on_step, final (§8.1)
+
+5 errors, 2 warnings emitted

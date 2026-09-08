@@ -35,6 +35,7 @@ const char* describe(Tok k) {
         case Tok::KwOutput:       return "`output`";
         case Tok::KwDerivative:   return "`derivative`";
         case Tok::KwNext:         return "`next`";
+        case Tok::KwAdjust:       return "`adjust`";
         case Tok::KwOnStep:       return "`on_step`";
         case Tok::KwFinal:        return "`final`";
         case Tok::KwSim:          return "`sim`";
@@ -73,7 +74,7 @@ Tok keyword_kind(std::string_view w) {
         {"continuous", Tok::KwContinuous},     {"discrete", Tok::KwDiscrete},
         {"init", Tok::KwInit},                 {"output", Tok::KwOutput},
         {"derivative", Tok::KwDerivative},     {"next", Tok::KwNext},
-        {"on_step", Tok::KwOnStep},
+        {"adjust", Tok::KwAdjust},             {"on_step", Tok::KwOnStep},
         {"final", Tok::KwFinal},               {"sim", Tok::KwSim},
     };
     auto it = table.find(w);

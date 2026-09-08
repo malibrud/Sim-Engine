@@ -1,0 +1,20 @@
+// SPEC 6.4b / 9.6 -- the jump map. See lib/adjust/Adjust.se for what each
+// column has to read and why. Batch mode; a 10 ms step, because the whole
+// point of `rot` is that RK4 leaves the manifold visibly at that step size.
+sim Adjust {
+    root: adj.Adjust {};
+
+    step:     10 (ms);
+    solver:   rk4;
+    duration: 2 (s);
+
+    record: {
+        file: "adjust.csv";
+        every: 10;                 // 10 Hz in the file, off a 100 Hz base step
+        signals {
+            rot.r;
+            clamp.y;
+            free.y;
+        }
+    }
+}

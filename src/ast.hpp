@@ -153,7 +153,7 @@ struct BuildStmt {            // §12.1
 };
 
 struct Method {               // §8.1
-    enum class Which { Init, Output, Derivative, Next, OnStep, Final };
+    enum class Which { Init, Output, Derivative, Next, Adjust, OnStep, Final };
     Which which = Which::Init;
     std::vector<std::string> params;   // the feedthrough set for output()
     std::vector<Loc> param_locs;
@@ -166,6 +166,7 @@ struct Method {               // §8.1
             case Which::Output:     return "output";
             case Which::Derivative: return "derivative";
             case Which::Next:       return "next";
+            case Which::Adjust:     return "adjust";
             case Which::OnStep:     return "on_step";
             case Which::Final:      return "final";
         }

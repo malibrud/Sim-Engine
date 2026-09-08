@@ -243,6 +243,7 @@ private:
     void sim_output_pass();
     void sim_derivatives();
     void sim_next();
+    void sim_adjust();
     void sim_on_step();
     void sim_integrate();
     void sim_integrate_dynamic();
@@ -257,6 +258,7 @@ private:
     bool minor_step_output(const Leaf& leaf) const;
     // True when the leaf's decimation is a runtime value rather than 1.
     bool dynamic_rate(const Leaf& leaf) const;
+    static bool adjusts(const Leaf& leaf);
     std::string decim_of(const Leaf& leaf) const;
 
     // One row per scalar slot of a block: { model path, C++ member path,
@@ -462,6 +464,23 @@ void Emitter::leaf_class(const NodeInfo& node) {
                             unit_comment(s.der_unit)});
         }
         emit_struct(o_, "Der  ", rows);
+        // §6.4b / §15.5 — `Adj` is a SECOND VIEW OF x, not a fourth block: the
+        // same slots `State` binds, handed to a const method as a non-const
+        // out-parameter. That aliasing is the feature and the footgun both, and
+        // the field set is `Der`'s, so `adjust.<discrete>` is "no such member"
+        // exactly as `der.<discrete>` is.
+        //
+        // Not `Der`'s ROWS, though: these fields hold the state itself, so the
+        // comment is the state's declared unit and not the derivative's.
+        if (node.method(ast::Method::Which::Adjust)) {
+            rows.clear();
+            for (const auto& s : node.states) {
+                if (!s.continuous) continue;
+                rows.push_back({s.extent ? "state_arr" : "state_ref", s.name + ";",
+                                unit_comment(s.type.unit)});
+            }
+            emit_struct(o_, "Adj  ", rows);
+        }
     }
     if (node.has_discrete()) {
         // This node's slice of the discrete block. It is also the type of
@@ -503,6 +522,7 @@ void Emitter::leaf_class(const NodeInfo& node) {
             std::string("In_") + (meth.which == W::Output       ? "output"
                                   : meth.which == W::Derivative ? "derivative"
                                   : meth.which == W::Next       ? "next"
+                                  : meth.which == W::Adjust     ? "adjust"
                                                                 : "step");
         rows.clear();
         for (const std::string& p : meth.params) {
@@ -589,6 +609,12 @@ void Emitter::leaf_class(const NodeInfo& node) {
                 // body writes is `next.<state>`, which resolves to the parameter.
                 // The accessor token has to be spelled `next` (§6.10).
                 o_ << "    void next(const In_next& in, Store& next) const {\n";
+                break;
+            case W::Adjust:
+                // The out-parameter shadows this member function's name, as
+                // `next`'s does and for the same reason: the accessor token has
+                // to be spelled `adjust` (§6.10) and §11 copies bodies verbatim.
+                o_ << "    void adjust(const In_adjust& in, Adj& adjust) const {\n";
                 break;
             case W::OnStep:
                 o_ << "    void on_step(const In_step& in"
@@ -735,6 +761,15 @@ bool Emitter::dynamic_rate(const Leaf& leaf) const {
 }
 
 std::string Emitter::decim_of(const Leaf& leaf) const { return leaf.ident + "_decim"; }
+
+// §6.4b — whether this leaf has a jump map to run. Both halves matter: a node
+// with no continuous states has an empty `Adj` and never gets this far
+// (SE0346 rejects it), and a node that declares no `adjust()` gets no member,
+// no binding and no call — so the feature costs a model that does not use it
+// exactly nothing.
+bool Emitter::adjusts(const Leaf& leaf) {
+    return leaf.has_continuous() && leaf.node->method(ast::Method::Which::Adjust);
+}
 
 // ═════════════════════════════════════════════════════════════════════════════
 //  The Sim class
@@ -958,6 +993,21 @@ void Emitter::sim_members() {
                    << "_der;\n";
     }
 
+    bool any_adj = false;
+    for (const Leaf& leaf : m_.leaves) any_adj = any_adj || adjusts(leaf);
+    if (any_adj) {
+        o_ << "\n    // §6.4b - `adj` is a SECOND VIEW OF x, not scratch and not a\n";
+        o_ << "    // block of its own: the same slots `state` binds. It lives here\n";
+        o_ << "    // rather than in the leaf because the out-parameter has to be\n";
+        o_ << "    // non-const at the call site while `adjust()` is a const member.\n";
+        std::size_t w = 0;
+        for (const Leaf& leaf : m_.leaves)
+            if (adjusts(leaf)) w = std::max(w, leaf.node->cpp_name.size() + 5);
+        for (const Leaf& leaf : m_.leaves)
+            if (adjusts(leaf))
+                o_ << "    " << pad(leaf.node->cpp_name + "::Adj", w) << " " << leaf.ident
+                   << "_adj;\n";
+    }
 
     // §6.2b — a composite's settings, the one runtime trace a composite leaves
     // (§15.2). They hold no signal: they are the inputs to its flow-down
@@ -1059,6 +1109,7 @@ void Emitter::sim_members() {
     o_ << "    void output_pass(std::uint64_t k);\n";
     o_ << "    void output_pass_minor();\n";
     o_ << "    void next_tick(std::uint64_t k);\n";
+    o_ << "    void adjust_tick(std::uint64_t k);\n";
     o_ << "    void on_step_tick(std::uint64_t k);\n";
     o_ << "    void integrate(double t, double h);\n";
     o_ << "    void final_all(const se_rt::RunContext& ctx) const;\n";
@@ -1355,11 +1406,19 @@ void Emitter::sim_binders() {
                    << ", " << len << ");\n";
                 o_ << "    " << leaf.ident << "_der." << st.name << ".bind(xd + " << off
                    << ", " << len << ");\n";
+                // Same block, same offset, same length as `state`: the alias IS
+                // the lowering of §6.4b.
+                if (adjusts(leaf))
+                    o_ << "    " << leaf.ident << "_adj." << st.name << ".bind(x + " << off
+                       << ", " << len << ");\n";
             } else {
                 o_ << "    " << leaf.ident << ".state." << st.name << ".bind(x[" << off
                    << "]);\n";
                 o_ << "    " << leaf.ident << "_der." << st.name << ".bind(xd[" << off
                    << "]);\n";
+                if (adjusts(leaf))
+                    o_ << "    " << leaf.ident << "_adj." << st.name << ".bind(x[" << off
+                       << "]);\n";
             }
         }
     o_ << "    se_bound_x_ = true;\n}\n";
@@ -1459,6 +1518,9 @@ void Emitter::sim_init() {
                    << "]);\n";
                 o_ << "    " << leaf.ident << "_der." << s.name << ".bind(xd[" << s.slot
                    << "]);\n";
+                if (adjusts(leaf))
+                    o_ << "    " << leaf.ident << "_adj." << s.name << ".bind(x[" << s.slot
+                       << "]);\n";
             } else {
                 if (s.extent.present) continue;
                 o_ << "    " << leaf.ident << ".state." << s.name << ".bind(dis."
@@ -1553,6 +1615,33 @@ void Emitter::sim_next() {
                << "   // " << leaf.decimation << ":1 by default\n";
         else
             o_ << "    " << leaf.ident << ".next(" << args << ");\n";
+    }
+    o_ << "}\n";
+}
+
+// x+ = j(t,x,u): the jump map, §6.4b. Once per accepted base step at each
+// node's sample instants, and BELOW the recording and the exit (§9.6 step 7),
+// which is what keeps a recorded row one consistent sample of the entry state
+// and keeps a halted run holding the x that row reported.
+//
+// There is no commit and no buffer. `adj` views the same slots as `state`, so
+// the write lands in `x` directly — the one place in the language where two
+// accessors alias, which §6.4b documents as a footgun rather than hiding.
+void Emitter::sim_adjust() {
+    o_ << "\n// The jump map (§6.4b): the only write to `x` outside the solver, and\n";
+    o_ << "// the last thing that happens before the state advances. `adj` views the\n";
+    o_ << "// SAME slots as `state`, so this is an in-place correction, not a buffer.\n";
+    o_ << "inline void Sim::adjust_tick(std::uint64_t k) {\n    (void)k;\n";
+    for (const Leaf& leaf : m_.leaves) {
+        if (!adjusts(leaf)) continue;
+        const ast::Method* a = leaf.node->method(ast::Method::Which::Adjust);
+        const std::string args = in_braces(leaf, a) + ", " + leaf.ident + "_adj";
+        if (dynamic_rate(leaf))
+            o_ << "    if (k % " << decim_of(leaf) << " == 0) " << leaf.ident
+               << ".adjust(" << args << ");"
+               << "   // " << leaf.decimation << ":1 by default\n";
+        else
+            o_ << "    " << leaf.ident << ".adjust(" << args << ");\n";
     }
     o_ << "}\n";
 }
@@ -1692,6 +1781,8 @@ void Emitter::sim_record() {
 void Emitter::sim_run() {
     bool any_discrete = false;
     for (const Leaf& leaf : m_.leaves) any_discrete = any_discrete || leaf.has_discrete();
+    bool any_adjust = false;
+    for (const Leaf& leaf : m_.leaves) any_adjust = any_adjust || adjusts(leaf);
 
     // ── init ─────────────────────────────────────────────────────────────────
     o_ << "\ninline void Sim::init() {\n";
@@ -1756,6 +1847,9 @@ void Emitter::sim_run() {
     }
     o_ << "    if (se_rt::control().halted() || se_tick_ >= tick_count) {\n";
     o_ << "        se_done_ = true;\n        return;\n    }\n";
+    // §9.6 step 7 — below the exit, so a halted run keeps the x its last row
+    // reported; above the advance, so the solver starts from the adjusted state.
+    if (any_adjust) o_ << "    adjust_tick(se_tick_);\n";
     if (any_discrete)
         o_ << "    dis = nxt;   // simultaneous update, whole model (§6.4)\n";
     o_ << "    integrate(se_time_, step_seconds);\n";
@@ -1876,6 +1970,7 @@ void Emitter::sim_class() {
     sim_output_pass();
     sim_derivatives();
     sim_next();
+    sim_adjust();
     sim_on_step();
     sim_integrate();
     sim_record();

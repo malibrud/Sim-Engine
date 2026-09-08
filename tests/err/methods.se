@@ -36,3 +36,15 @@ node BadArity {
     final(a, b) { }
     output(u)   { out.y = in.u; }
 }
+
+// `adjust` joined the reserved words (§3.4, Appendix B) the moment it became a
+// lifecycle method, so a port may no longer be called one -- and `adjus` is now
+// a near miss for it, which is the parser's candidate list carrying the new
+// entry.
+node Reserved {
+    inputs  { adjust: double(-); }
+    outputs { y: double(-); }
+
+    adjus(u) { }
+    output() { out.y = 0.0; }
+}

@@ -1,0 +1,8 @@
+// Must FAIL. See lib/adjbad/AdjBad.se for which two diagnostics and why.
+sim AdjBad {
+    root: adjbad.AdjBad {};
+
+    step:     1 (ms);
+    solver:   rk4;
+    duration: 2 (ms);
+}

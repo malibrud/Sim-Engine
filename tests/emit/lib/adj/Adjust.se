@@ -1,0 +1,115 @@
+// Numerical check for §6.4b's jump map. Three leaves, each pinning a different
+// claim the feature makes, and each chosen so that removing `adjust()` moves a
+// recorded column by far more than any tolerance.
+//
+//   rot   A point on the unit circle: c' = -w s, s' = w c. RK4 is not
+//         symplectic and does not preserve the radius, so the state walks off
+//         the manifold — and the step here is chosen to make it walk FAST.
+//         At w = 20*pi rad/s on a 10 ms step, one step multiplies the radius by
+//         |R(i*theta)| = 0.99959 at theta = 0.6283, so 2 s of it costs 8%.
+//         `adjust()` renormalises after every step; the recorded radius must
+//         therefore hold at that same 0.99959 forever instead of decaying.
+//
+//         The plateau value is itself the assertion that §6.4b's last paragraph
+//         is true: `out.r` is published at step 2 from the state the SOLVER
+//         left, which is one step off the manifold. `adjust()` keeps the state
+//         on the sphere; it does not make a consumer's precondition hold.
+//
+//   clamp Anti-windup, and the case that needs `In_adjust`: the limit arrives
+//         on a WIRE, so the body reads `in.lim` and the method's parameter list
+//         is doing its §8.3 job. `u` is a constant 1, so the state is a ramp,
+//         and with lim = 1 the clamp starts biting halfway through the run.
+//
+//         Its plateau is `lim + h`, not `lim`, and that is the column that pins
+//         the placement in the tick. `adjust()` runs at §9.6 step 7, BELOW the
+//         recording, so every row reports the pre-adjust state: the clamp pulls
+//         the state back to `lim` and the advance immediately adds one step's
+//         worth before anything is recorded. Move `adjust()` above the recorder
+//         and this column reads `lim`.
+//
+//   free  A first-order decay with no `adjust()` at all, sharing the model with
+//         two nodes that have one. Its column must be exp(-k t) to RK4's usual
+//         accuracy, which is what says the feature costs an untouched node
+//         nothing: no `Adj` member, no binding, no call.
+package adj;
+
+node Adjust {
+    outputs { r: double(-); }
+
+    structure {
+        node rot   : Rotor   { w = 62.83185307179586; };   // 10 Hz
+        node clamp : Clamped {};
+        node free  : Free    { k = 2.0; };
+
+        1.0 --> clamp.lim;
+        1.0 --> clamp.u;
+
+        rot.r --> self.r;
+    }
+}
+
+// File-private. Both states are adjusted, and `adjust()` reads no input, so
+// this is the empty-parameter-list case.
+node Rotor {
+    settings { w: double(rad/s) = 62.83185307179586; }
+    outputs  { c: double(-);  s: double(-);  r: double(-); }
+
+    states {
+        continuous c: double(-) = 1.0;
+        continuous s: double(-) = 0.0;
+    }
+
+    derivative() {
+        der.c = -param.w * state.s;
+        der.s =  param.w * state.c;
+    }
+
+    // The norm is cached before anything is written, which is the idiom §6.4b
+    // says every constraint enforcement uses -- and has to, since `adjust.c`
+    // and `state.c` are the same slot.
+    adjust() {
+        const double n = std::sqrt(state.c * state.c + state.s * state.s);
+        if (n > 0.0) {
+            adjust.c = state.c / n;
+            adjust.s = state.s / n;
+        }
+    }
+
+    output() {
+        out.c = state.c;
+        out.s = state.s;
+        out.r = std::sqrt(state.c * state.c + state.s * state.s);
+    }
+}
+
+// File-private. `adjust(lim)` reads an input, and writes CONDITIONALLY: on
+// every tick before the ramp reaches the limit, neither branch fires and the
+// slot is simply never assigned, which is §6.4b's "a state the body does not
+// write is untouched" in the only form a test can see it.
+node Clamped {
+    inputs  { lim: double(-);  u: double(-); }
+    outputs { y: double(-); }
+
+    states { continuous i: double(-) = 0.0; }
+
+    derivative(u) { der.i = in.u; }
+
+    adjust(lim) {
+        if (state.i >  in.lim) adjust.i =  in.lim;
+        if (state.i < -in.lim) adjust.i = -in.lim;
+    }
+
+    output() { out.y = state.i; }
+}
+
+// File-private, and deliberately has no `adjust()`.
+node Free {
+    settings { k: double(1/s) = 2.0; }
+    outputs  { y: double(-); }
+
+    states { continuous x: double(-) = 1.0; }
+
+    derivative() { der.x = -param.k * state.x; }
+
+    output() { out.y = state.x; }
+}

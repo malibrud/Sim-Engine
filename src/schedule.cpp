@@ -35,9 +35,9 @@ bool schedule(Diagnostics& diag, Model& m) {
         const Leaf& leaf = m.leaves[i];
         const ast::Method* out = leaf.node->method(ast::Method::Which::Output);
         if (!out) continue;
-        // Only `output()`'s list constrains ordering. `derivative()`, `next()`
-        // and `on_step()` run after outputs have propagated, so their lists are
-        // documentation plus enforcement (§8.3).
+        // Only `output()`'s list constrains ordering. `derivative()`, `next()`,
+        // `adjust()` and `on_step()` run after outputs have propagated, so their
+        // lists are documentation plus enforcement (§8.3).
         for (const std::string& p : out->params) {
             auto it = leaf.inputs.find(p);
             if (it == leaf.inputs.end()) continue;
