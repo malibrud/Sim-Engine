@@ -51,6 +51,7 @@ const char* describe(Tok k) {
         case Tok::Dot:            return "`.`";
         case Tok::Equal:          return "`=`";
         case Tok::Arrow:          return "`-->`";
+        case Tok::TildeEqual:     return "`~=`";
         case Tok::Plus:           return "`+`";
         case Tok::Minus:          return "`-`";
         case Tok::Star:           return "`*`";
@@ -329,6 +330,18 @@ Token Lexer::next() {
         case '/': return one(Tok::Slash);
         case '^': return one(Tok::Caret);
         case '%': return one(Tok::Percent);
+        case '~':
+            // `~=` is the tolerant comparison in a `tests` set (§6.13). A bare
+            // `~` is not a token, and saying so beats the generic message.
+            if (at(1) == '=') {
+                bump();
+                bump();
+                t.kind = Tok::TildeEqual;
+                finish(t.loc);
+                t.text = "~=";
+                return t;
+            }
+            break;
         case '-':
             // Maximal munch: `-->` always wins over `-` `-` `>` (§3.7).
             if (at(1) == '-' && at(2) == '>') {
@@ -354,6 +367,10 @@ Token Lexer::next() {
         diag_.error("SE0105", src_, t.loc, "unexpected `>`", "",
                     {note("`>` is not a token in this language; the connection "
                           "operator is `-->` (\xc2\xa7""3.7)")});
+    } else if (c == '~') {
+        diag_.error("SE0101", src_, t.loc, "unexpected `~`", "",
+                    {note("`~` is not a token on its own; the tolerant comparison "
+                          "in a `tests` set is `~=` (§6.13)")});
     } else if (static_cast<unsigned char>(c) >= 0x80) {
         // Consume the rest of the UTF-8 sequence so the caret spans the glyph.
         while (!eof() && (static_cast<unsigned char>(cur()) & 0xC0) == 0x80) bump();

@@ -1845,6 +1845,184 @@ Note that the rules are per-kind, not blanket: a purely continuous node needs no
 `on_step()`, though either may have one to do per-step `var`, native or logging
 work.
 
+### 6.13 `tests`
+
+A node's worked examples live in header comments today, where nothing checks
+them. `Cross3` says it is right-handed, `dt.Integrator` says its gain is half
+the sample period, and both claims are prose: they were true when they were
+written, they are load-bearing for anyone reading the block, and no run goes
+red when one stops being true.
+
+A `tests` section turns those examples into the thing that checks them. It
+holds one or more named **sets**. A set is a claim; its rows are the worked
+examples that demonstrate it.
+
+```
+node Cross3 {
+    units   { U; }
+    inputs  { a: Vec3(U); b: Vec3(U); }
+    outputs { c: Vec3(U^2); }
+
+    output(a, b) { … }
+
+    tests {
+        units { U = m; }
+
+        set "the cross product is right-handed", in.a, in.b = out.c {
+            {1,0,0}, {0,1,0}, {0,0,1}, "X x Y = Z";
+            {0,1,0}, {0,0,1}, {1,0,0}, "Y x Z = X";
+            {0,0,1}, {1,0,0}, {0,1,0}, "Z x X = Y";
+            {1,0,0}, {1,0,0}, {0,0,0}, "X x X = 0";
+        }
+    }
+}
+```
+
+**A test is not an experiment.** It fabricates one (settings, states, inputs)
+point, invokes the node, and checks what came back. There is no sim file, no
+solver, no recorder, no CSV and no golden file, and that is what keeps every
+cell an ordinary §7 expression rather than a second language. A claim about
+*accumulation* — that a filter is stable, that an integrator does not drift —
+is a claim about a trajectory and is not what this section is for.
+
+#### The set header
+
+```
+set "<claim>", <given> { "," <given> } ( "=" | "~=" ) <expected> { "," <expected> }
+    [ "within" <expression> ] "{" <row>… "}"
+```
+
+Columns are named with §6.10's accessors — the same names the body uses, so
+there is no second vocabulary — and the operator divides what is supplied from
+what is checked:
+
+| Side | Columns | Meaning |
+|---|---|---|
+| given | `param.<name>`, `in.<name>`, `state.<name>`, `step` | supplied before the invocation |
+| expected | `out.<name>`, `der.<name>`, `next.<name>`, `adjust.<name>`, `var.<name>` | read after it and compared |
+
+A column on the wrong side is `SE0361`. The split is not arbitrary: it is
+§6.10's writability column read from the outside. What a body may only write is
+what a test may only check.
+
+**The expected side is the four pure methods, plus `var`.** §8.1 makes the four
+methods that carry an equation pure and names each for the accessor it writes,
+and purity is exactly the property that makes a method callable in isolation on
+a fabricated (x, u) and repeatable. Nothing else in the language is callable
+that way, and nothing else needs to be: `se.sig.ct.Integrator`'s entire
+behaviour is `der.y = in.x` and `out.y = state.y`, and verifying it needs no
+solver. The solver is verified once, not once per node.
+
+**Which methods run is inferred from the expected columns**, and they run in
+one fixed order:
+
+```
+init()  →  output()  →  derivative()  →  next()  →  adjust()
+```
+
+`init()` always runs — a node whose `output()` reads a `var` its `init()`
+computed is not callable before it, which is most discrete filters — and the
+rest run only if some column names what they write. So a set expecting only
+`var.g` supplies no inputs and calls nothing else. The order is fixed rather
+than derived so that a set expecting several fields means one thing.
+
+`adjust.` and `state.` name the same storage (§6.4b), so an `adjust.` column
+checks the state as the adjustment left it.
+
+#### Rows
+
+A row is one §7 expression per column, in header order, then a label, then `;`.
+Every row supplies every column; there are no holes, and a case that wants a
+different shape wants a different set.
+
+Cells are §7 expressions at §7 sites, so a cell is checked against its column's
+declared unit by the same evaluator that checks a setting default, and
+`{1,0,0}` destructures against a record port exactly as §6.2c destructures a
+binding. A brace list's commas are already brace-delimited, so they are never
+confused with the commas between columns.
+
+**The label is required.** It is the worked example's name and it is what a
+failure report leads with; `X x X = 0` locates a case in a way a row index
+never will.
+
+#### `=` and `~=`
+
+`=` compares bitwise. `~=` requires a `within` clause closing the header, which
+governs every expected column in that set. There is no default tolerance
+anywhere, and `~=` without `within` is `SE0272`.
+
+The choice of operator is part of what the set documents. `out.c = {0,0,1}`
+says a cross product of unit axes is exact, and `next.w1 = 1.0` says the node
+does no arithmetic it did not need to — claims a tolerance would quietly
+weaken. A set whose columns differ in this respect is two sets, and that is the
+right grain: *these are exact identities* and *these are computed to 1e-15* are
+different things to claim about a block.
+
+A bare tolerance literal takes the unit of the site it qualifies (§7.2), so
+`within 1e-15` against `out.y : double(U*s)` is 1e-15 in that port's unit and
+is dimension-checked like any other value.
+
+#### The preamble
+
+`step:`, `units {}` and `settings {}` may precede the sets and are shared by
+all of them. A column of the same name overrides for its row.
+
+```
+tests {
+    step:  10 (ms);
+    units { U = m/s^2; }
+
+    // `fs` is absent, so it takes its declared default of `sample_rate`.
+    // That is what this set is for.
+    set "the gain is half the sample period", step ~= var.g within 1e-15 {
+        10 (ms), 0.005,  "100 Hz";
+         5 (ms), 0.0025, "200 Hz";
+    }
+
+    set "the accumulator advances exactly", state.w1, in.x = next.w1 {
+        0.0, 1.0, 1.0, "1 + 0 needs no tolerance";
+        1.0, 1.0, 2.0, "and neither does 1 + 1";
+    }
+}
+```
+
+**`step` is a column because the default-binding path is worth testing.** A
+node test has no sim file, so nothing else establishes the clock, and a node
+whose setting reads `sample_rate` (§10.4) cannot be configured without one.
+Supplying `param.fs` in every row would work and would never once exercise
+`fs = sample_rate` — which §10.4 exists to warn about, since coefficients
+designed at the wrong rate are silently wrong. Reaching a rate-derived setting
+with neither a `step` column nor a `step:` entry is `SE0470`; the node is
+unconfigurable, and saying so beats defaulting to a number nobody chose.
+
+The node's own `rate` (§6.2) needs nothing new. It is a reserved setting
+written through the channel every other column uses, so `param.rate` is an
+ordinary column, and §10.5's `sim.step()` reads what `step` supplied.
+
+#### Tests are not part of the model
+
+A `tests` section contributes nothing to a lowered model: no member, no
+schedule entry, no manifest line, no topology node. It is read only by
+`sec --test`, which emits and runs it separately. Adding tests to a block
+cannot change what that block compiles to, and the unit manifest (§15.6) is
+what holds that to account.
+
+#### Diagnostics
+
+| Code | Stage | Meaning |
+|---|---|---|
+| `SE0270` | 2 | Duplicate entry in `tests` |
+| `SE0271` | 2 | Unknown entry in `tests` |
+| `SE0272` | 2 | `~=` with no `within`, or `=` with one |
+| `SE0273` | 2 | Row arity does not match the set header |
+| `SE0274` | 2 | Row has no label |
+| `SE0360` | 3 | A column names no member of the node |
+| `SE0361` | 3 | A column is on the wrong side of the operator |
+| `SE0362` | 3 | An expected column names a method the node does not define |
+| `SE0470` | 4 | A set reaches a rate-derived setting with no `step` |
+
+A dimension error in a cell or a tolerance is the ordinary `SE0410`.
+
 ---
 
 ## 7. The elaboration expression language
@@ -3644,6 +3822,11 @@ of thing wearing the same name.
 | `SE0262` | 2 | Missing required `sim` entry |
 | `SE0263` | 2 | `sync` or `window` requires `mode: realtime` |
 | `SE0264` | 4 | Bad value for a `sim` entry (solver, mode, log level, `window` shorter than one frame) |
+| `SE0270` | 2 | Duplicate entry in `tests` |
+| `SE0271` | 2 | Unknown entry in `tests` |
+| `SE0272` | 2 | `~=` with no `within`, or `=` with one |
+| `SE0273` | 2 | Row arity does not match the set header |
+| `SE0274` | 2 | Row has no label |
 | `SE0301` | 3 | `package` declaration disagrees with the file's location |
 | `SE0302` | 3 | No public declaration matching the file name |
 | `SE0303` | 3 | Imported name collides |
@@ -3668,6 +3851,9 @@ of thing wearing the same name.
 | `SE0346` | 3 | `adjust()` in a node with no continuous states |
 | `SE0350` | 3 | Method parameter is not a declared input |
 | `SE0351` | 3 | Duplicate method parameter |
+| `SE0360` | 3 | A test column names no member of the node |
+| `SE0361` | 3 | A test column is on the wrong side of the operator |
+| `SE0362` | 3 | An expected column names a method the node does not define |
 | `SE0402` | 4 | Lossy literal conversion to an integer target |
 | `SE0410` | 4 | Incompatible units |
 | `SE0411` | 4 | Offset unit in a compound unit expression |
@@ -3698,6 +3884,7 @@ of thing wearing the same name.
 | `SE0451` | 4 | `sync` is not an integer multiple of `step` |
 | `SE0460` | 4 | Override target is ambiguous, or is an output |
 | `SE0461` | 4 | Recorded signal path is ambiguous |
+| `SE0470` | 4 | A set reaches a rate-derived setting with no `step` |
 | `SE0510` | 5 | Algebraic loop |
 | `SE0511` | 5 | Node is unreachable from the root |
 
@@ -3745,7 +3932,7 @@ node_def        = "node" IDENT "{" { node_item } "}" ;
 
 node_item       = settings_sec | units_sec | inputs_sec | outputs_sec | states_sec
                 | vars_sec | native_sec | declarations_sec | build_sec
-                | structure_sec
+                | structure_sec | tests_sec
                 | lifecycle_method
                 | helper_function ;
 
@@ -3754,6 +3941,23 @@ setting_decl    = IDENT ":" type_ref [ "=" expression ] ";" ;
 
 units_sec       = "units" "{" { unit_param } "}" ;      (* §6.2a *)
 unit_param      = IDENT ";" ;
+
+(* §6.13. `tests`, `set` and `within` are all contextual, not reserved. *)
+tests_sec       = "tests" "{" { tests_item } "}" ;
+tests_item      = step_entry | units_bind_sec | settings_bind_sec | test_set ;
+step_entry      = "step" ":" expression ";" ;
+units_bind_sec  = "units"    "{" { IDENT "=" unit_expr ";" } "}" ;
+settings_bind_sec = "settings" "{" { IDENT "=" expression ";" } "}" ;
+
+test_set        = "set" STRING "," given_list ( "=" | "~=" ) accessor_list
+                  [ "within" expression ] "{" { test_row } "}" ;
+given_list      = given { "," given } ;
+given           = "step" | accessor ;
+accessor_list   = accessor { "," accessor } ;
+accessor        = accessor_ns "." IDENT { "." IDENT | "[" INT "]" } ;
+accessor_ns     = "param" | "in" | "state" | "out" | "der" | "next"
+                | "adjust" | "var" ;
+test_row        = expression { "," expression } "," STRING ";" ;
 
 inputs_sec      = "inputs"  "{" { port_decl } "}" ;
 outputs_sec     = "outputs" "{" { port_decl } "}" ;
@@ -3934,8 +4138,10 @@ vars
 are additionally unavailable as member names (§6.11), because the generated code
 puts objects by those names in scope of bodies.
 
-Everything else — including every sim-file key, every build primitive, `when`, and
-every platform atom — is contextual and remains usable as an identifier.
+Everything else — including every sim-file key, every build primitive, `when`,
+every platform atom, and `tests`, `set` and `within` (§6.13) — is contextual and
+remains usable as an identifier. `tests` in particular *must* stay contextual:
+`package tests;` is a real package path in this repository's own suite.
 
 ## Appendix C — Known gaps and open issues
 

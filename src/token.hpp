@@ -35,6 +35,7 @@ enum class Tok {
     LBrace, RBrace, LParen, RParen, LBracket, RBracket,
     Semi, Comma, Colon, Dot, Equal,
     Arrow,      // -->
+    TildeEqual, // ~=  (§6.13)
     Plus, Minus, Star, Slash, Caret, Percent,
 };
 

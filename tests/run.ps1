@@ -315,7 +315,7 @@ $examples = @(
     # The same channel as `washout`, built from one vector block instead of
     # Split3 + three scalar blocks + Merge3. It is the acceptance case for
     # record settings (SPEC 6.2c), so it has to compile on every run.
-    @{ name = 'washout3';   sim = 'examples/washout/ClassicalFromScratch.sim';
+    @{ name = 'washout3';   sim = 'examples/washout/Classical.sim';
        roots = @('examples', 'stdlib') }
 )
 foreach ($ex in $examples) {
