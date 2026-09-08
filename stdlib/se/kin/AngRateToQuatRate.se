@@ -7,12 +7,16 @@ node AngRateToQuatRate {
 
     inputs  { 
         q: kin.Quat;  
-        w: math.Vec3(rad/sec); // Expressed in local coordinates.
+        w: math.Vec3(rad/s);   // Expressed in local (body) coordinates.
     }
-    outputs { qd: kin.Quat; }
+    outputs { qd: kin.QuatRate; }
 
-    output(q) {
-        // qd = 0.5 q w
+    // Both inputs are read, so both are listed: SPEC 8.3 makes the list the
+    // set of inputs the method reads, and the generated `In_output` omits
+    // anything left off it -- so a missing name is a C++ compile error at
+    // this line rather than a stale value.
+    output(q, w) {
+        // qd = 0.5 q (x) w
 
         const double qw = in.q.w;
         const double qx = in.q.x;

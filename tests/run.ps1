@@ -358,26 +358,13 @@ $smokeSkip = @(
     # Unfinished drafts that do not compile today, kept out so the check stays
     # green and the debt stays visible. Delete the entry, not the test, when the
     # block is finished.
-    'se.sig.WnZeta2Poly',   # pre-dates the "a unit is a type argument" unification
+    'se.sig.WnZeta2Poly'    # pre-dates the "a unit is a type argument" unification
                             # (b989ec4): still spells `wn (rad/s) double;`, gives
                             # `output(x)` an input its empty `inputs {}` does not
                             # declare, and writes Poly3's fields as a2/a1/a0
                             # where the type calls them c2/c1/c0.
-    'se.kin.AngRateToQuatRate'
-                            # unfinished: `w` is spelled `(rad/sec)`, which is not
-                            # a unit in Appendix A -- it is `rad/s` -- and
-                            # `output(q)` omits the `w` its body reads, which
-                            # SPEC 8.3 makes a C++ compile error rather than a
-                            # `sec` diagnostic.
-                            #
-                            # The bad unit used to CRASH `sec` rather than
-                            # diagnose -- a wire between two parametric record
-                            # ports carrying the same unknown unit dereferenced
-                            # a null record. Fixed now, with `tests/emit/RecNull`
-                            # holding the line, so this entry is an ordinary
-                            # unfinished-draft skip again: without it the smoke
-                            # emit FAILS, where before it died silently.
 )
+
 $smokeSettings = @{
     'se.sig.ScaleLimit'             = 'limit = 1.0(m);'
     'se.sig.ScaleLimit3'            = 'limit = { 1.0, 1.0, 1.0 };'
@@ -419,6 +406,23 @@ function Get-SmokeQuatSource() {
             "        $rv --> kq.v;")
     }
     return 'kq'
+}
+
+# A quaternion RATE source. Nothing in the library builds one out of literals,
+# and nothing should: q_dot is not four loose numbers either, it is an attitude
+# and a body rate put through the Hamilton product. That block is
+# AngRateToQuatRate, so the source for a QuatRate port is the one for a Quat
+# port with a rate hung off it.
+function Get-SmokeQuatRateSource() {
+    if (-not $smokeSrc.Contains('kqd')) {
+        $kq = Get-SmokeQuatSource
+        $wv = Get-SmokeVecSource 3 'rad/s'
+        $smokeSrc['kqd'] = @(
+            "        node kqd: se.kin.AngRateToQuatRate {};",
+            "        $kq --> kqd.q;",
+            "        $wv --> kqd.w;")
+    }
+    return 'kqd'
 }
 
 $smokeRoot = Join-Path $emitOut 'stdlib-smoke'
@@ -470,6 +474,8 @@ foreach ($f in (Get-ChildItem (Join-Path $root 'stdlib') -Recurse -Filter *.se |
                 $u = $Matches[2]
                 if ($uparams -contains $u) { $u = 'm' }
                 $src = Get-SmokeVecSource $n $u
+            } elseif ($parts[1] -match 'QuatRate') {
+                $src = Get-SmokeQuatRateSource
             } elseif ($parts[1] -match 'Quat') {
                 $src = Get-SmokeQuatSource
             }
@@ -882,6 +888,73 @@ if (-not $cl) {
             $script:pass++
         } else {
             Write-Host ("FAIL build/emit/Adjust : a column is off by " + $worst) `
+                -ForegroundColor Red
+            $script:fail++
+        }
+    }
+
+    # SPECIFICATION 6.4b -- se.kin.QuatIntegrator's jump map, in the closed
+    # attitude loop it exists for: a constant body rate through
+    # AngRateToQuatRate into the integrator and back to its own q input. The
+    # loop is schedulable only because the integrator's output() has an empty
+    # parameter list, so this is also the SPECIFICATION 8.5 sort root doing its
+    # job on a cycle that is otherwise all feedthrough.
+    #
+    # Two instances, because the two claims need opposite step sizes.
+    #
+    #   qiS   |w| = 3 rad/s about (1,2,2)/3, turning 0.015 rad per step, so RK4
+    #         is good to a nanoradian over the run and all four components can
+    #         be held against q(t) = (cos 1.5t, sin(1.5t)*(1,2,2)/3). Three
+    #         distinct vector components, so a transposed or mis-signed axis in
+    #         the Hamilton product moves a column. Says nothing about adjust():
+    #         its norm drift is around 1e-13.
+    #
+    #   nF.n  |w| = 120 rad/s about z, turning 0.6 rad per step, where RK4
+    #         amplifies by |R(0.6i)| = 0.99969 each step. With adjust() the norm
+    #         is pinned every step and this column holds at that single-step
+    #         value; without it, 200 steps compound to 0.93997. Sixty times the
+    #         residual, and verified by negative control before it was recorded.
+    if ($emitDirs.ContainsKey('QInt')) {
+        $qiDir = $emitDirs['QInt']
+        Push-Location $qiDir
+        & '.\build\QInt.exe' 2>&1 | Out-Null
+        $ran = ($LASTEXITCODE -eq 0)
+        Pop-Location
+        # |1 + z + z^2/2 + z^3/6 + z^4/24| at z = 0.6i, written out rather than
+        # recomputed: the plateau is a fact about RK4's stability polynomial.
+        $rho = 0.999690532114814
+        $worst = [double]::PositiveInfinity
+        $csv = Join-Path $qiDir 'qint.csv'
+        if ($ran -and (Test-Path $csv)) {
+            $worst = 0.0
+            foreach ($line in (Get-Content $csv | Select-Object -Skip 1)) {
+                if (-not $line) { continue }
+                $c = $line -split ','
+                $t = [double]$c[0]
+                $a = 1.5 * $t
+                $sn = [Math]::Sin($a)
+                $wantN = $rho
+                if ($t -eq 0.0) { $wantN = 1.0 }
+                # Each element parenthesised: in PowerShell the comma binds
+                # TIGHTER than the arithmetic operators, so `@(x, $sn / 3.0)`
+                # divides the ARRAY and throws op_Division on Object[] -- and
+                # then $want silently keeps whatever the previous block left in
+                # it, which is a passing-looking failure in some other column.
+                $want = @([Math]::Cos($a), ($sn / 3.0), (2.0 * $sn / 3.0),
+                          (2.0 * $sn / 3.0), $wantN)
+                for ($i = 0; $i -lt $want.Count; $i++) {
+                    $err = [Math]::Abs([double]$c[$i + 1] - $want[$i])
+                    if ($err -gt $worst) { $worst = $err }
+                }
+            }
+        }
+        if ($worst -lt 1e-8) {
+            Write-Host ("ok   build/emit/QInt : the attitude loop closes, matches " +
+                        "its closed form, and adjust() holds |q| against RK4, " +
+                        "max error " + $worst.ToString('E2')) -ForegroundColor Green
+            $script:pass++
+        } else {
+            Write-Host ("FAIL build/emit/QInt : a column is off by " + $worst) `
                 -ForegroundColor Red
             $script:fail++
         }

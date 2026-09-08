@@ -1,0 +1,18 @@
+// SPEC 6.4b -- `se.kin.QuatIntegrator`'s jump map, in the closed attitude loop
+// it exists for. See lib/qint/QInt.se for what each column has to read and why.
+sim QInt {
+    root: qint.QInt {};
+
+    step:     10 (ms);
+    solver:   rk4;
+    duration: 2 (s);
+
+    record: {
+        file: "qint.csv";
+        every: 10;                 // 10 Hz in the file, off a 100 Hz base step
+        signals {
+            qiS.q.w;  qiS.q.x;  qiS.q.y;  qiS.q.z;
+            nF.n;
+        }
+    }
+}

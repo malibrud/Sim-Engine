@@ -1,0 +1,89 @@
+// The attitude channel, closed: a constant body rate through
+// `se.kin.AngRateToQuatRate` into `se.kin.QuatIntegrator` and back again.
+//
+//     w --> a2q --> qd --> qi --> q
+//            ^                    |
+//            +--------------------+
+//
+// This is a genuine feedback loop and it is only schedulable because
+// `QuatIntegrator.output()` has an empty parameter list: `a2q.output(q, w)`
+// declares feedthrough on `q`, so something in the cycle has to be a sort root
+// (§8.5) or the whole thing is `SE0510`.
+//
+// TWO INSTANCES, because the two things worth checking need opposite step
+// sizes and one model cannot have both.
+//
+//   slow   |w| = 3 rad/s about (1,2,2)/3, so the quaternion turns 0.015 rad per
+//          step and RK4's phase error over the whole run is under a nanoradian.
+//          All four components are compared against the closed form
+//          q(t) = (cos 1.5t, sin(1.5t)*(1,2,2)/3), which is what checks the
+//          Hamilton product in `AngRateToQuatRate` -- three distinct vector
+//          components, so a transposed or mis-signed axis moves a column -- and
+//          the integration under it.
+//
+//          Its norm drift is around 1e-13 over the run, far too small to say
+//          anything about `adjust()`. That is the other instance's job.
+//
+//   fast   |w| = 120 rad/s about z, so the quaternion turns 0.6 rad per step.
+//          RK4's amplification there is |R(0.6i)| = 0.99969 per step, and 200
+//          steps of it costs 6% of the norm. `adjust()` renormalises after
+//          every step, so `fastn` must hold at that single-step value instead
+//          of decaying -- and the two readings are sixty times apart, which no
+//          tolerance absorbs.
+//
+//          Its `norm_tol` is opened up to 1e-3 ON PURPOSE. The default 1e-6 is
+//          right for a model whose step suits its bandwidth, and this one's
+//          deliberately does not; the contract firing here would be the
+//          contract being correct. Overriding it is what a setting is for.
+package qint;
+
+use se.math;
+use se.kin;
+
+node QInt {
+    outputs { q: kin.Quat; }
+
+    structure {
+        // --- slow: the attitude check --------------------------------------
+        node wS   : math.Merge3(rad/s) {};
+        node a2qS : kin.AngRateToQuatRate {};
+        node qiS  : kin.QuatIntegrator   {};
+
+        1.0 --> wS.x;
+        2.0 --> wS.y, wS.z;
+
+        wS   --> a2qS.w;
+        qiS  --> a2qS.q;      // closes the loop
+        a2qS --> qiS.qd;
+
+        // --- fast: the norm check ------------------------------------------
+        node wF   : math.Merge3(rad/s) {};
+        node a2qF : kin.AngRateToQuatRate {};
+        node qiF  : kin.QuatIntegrator   { norm_tol = 1.0e-3; };
+        node nF   : Norm4 {};
+
+        0.0   --> wF.x, wF.y;
+        120.0 --> wF.z;
+
+        wF   --> a2qF.w;
+        qiF  --> a2qF.q;
+        a2qF --> qiF.qd;
+        qiF  --> nF.q;        // fan-out: qiF already feeds a2qF
+
+        qiS --> self;
+    }
+}
+
+// File-private: the one number `QuatIntegrator` deliberately does not publish.
+// It is the state's norm as the SOLVER left it, not as `adjust()` leaves it --
+// `output()` runs at §9.6 step 2 and the jump map at step 7 -- which is exactly
+// the quantity that says whether the jump map is running at all.
+node Norm4 {
+    inputs  { q: kin.Quat; }
+    outputs { n: double(-); }
+
+    output(q) {
+        out.n = std::sqrt(in.q.w*in.q.w + in.q.x*in.q.x
+                        + in.q.y*in.q.y + in.q.z*in.q.z);
+    }
+}

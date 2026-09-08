@@ -1,0 +1,8 @@
+package se.kin;
+
+type QuatRate {
+    w: double(1/s);  // real term
+    x: double(1/s);  // i term
+    y: double(1/s);  // j term
+    z: double(1/s);  // k term
+}
