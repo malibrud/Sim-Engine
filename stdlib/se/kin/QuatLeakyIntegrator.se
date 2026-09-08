@@ -1,0 +1,134 @@
+// `QuatIntegrator` with the classical-washout leak folded in: integrates a body
+// rate into an attitude that decays back toward neutral.
+//
+//     q_dot = 1/2 q (x) ( w - leak * log q )
+//
+// This is the rotation channel's B14 -- the counterpart of the translational
+// channel's `s/(s+0.2)` high-pass -- and the whole reason it is ONE LEAF rather
+// than a graph is the bracket. Everything the leak needs happens in RATE space,
+// before the Hamilton product, so no step size appears anywhere in this block.
+//
+// WHY IT TAKES A BODY RATE AND NOT A `QuatRate`. The leak is an angular
+// velocity, physically: `leak * log q` is the rate at which the attitude is
+// being pulled back to neutral, in rad/s, and it has to be subtracted from `w`
+// BEFORE the product. Given q_dot already formed there is nowhere to put it
+// that is not another Hamilton product. So this block does the job
+// `AngRateToQuatRate` does, with one term added, and takes `w` directly.
+//
+// THAT IS ALSO WHY THERE IS NO LOOP. Written as a graph the channel is a cycle
+// -- q feeds the log that feeds the rate that feeds the integrator that
+// produces q -- and it is only schedulable because the integrator breaks it
+// (SPEC 8.5). Here the cycle is entirely inside one leaf, so the model graph
+// has no cycle in it at all and SPEC 8.6 never comes up. The cost is that the
+// leak law is fixed in this block rather than rewired per model, which is the
+// trade this node exists to make; the graph form is still available from
+// `QuatLog`, `math.Scale3`, `math.Diff3` and `QuatIntegrator`.
+//
+// WHAT `leak` IS, AND WHY IT IS `1/s`. Against a constant body rate the bracket
+// gives `theta_dot = w - leak*theta`, so the orientation is `theta(s) =
+// w(s)/(s + leak)` -- and against the TRUE orientation `w/s` that ratio is
+// `s/(s + leak)`, a first-order high pass with its corner at `leak`. So it is a
+// frequency, and the temptation is to declare it `(rad/s)` the way a corner
+// frequency usually is. That is dimensionally wrong here: `leak` multiplies
+// `log q`, which is in `rad`, and the product has to match `w` in `rad/s`. The
+// C++ this is ported from comments its 0.12 as rad/s and is wrong about it.
+//
+// THE DECAY IS LINEAR IN `theta = log q`, NOT IN `q`. Scaling the quaternion's
+// vector part toward zero and renormalising is the obvious cheap alternative
+// and it is a DIFFERENT FILTER: it decays `tan(theta/2)`, the Gibbs vector,
+// which agrees with this only in the small-angle limit and diverges from it
+// exactly where a motion platform's rotation channel is interesting.
+//
+// The log map here is `QuatLog`'s, and both of its load-bearing properties are
+// load-bearing again. The shortest-rotation flip is what makes "decay toward
+// neutral" mean the short way round -- without it an orientation past pi leaks
+// AWAY from neutral. Scale invariance is what lets the leak be correct on a
+// state that has drifted off the unit sphere since the last `adjust()`.
+//
+// The norm behaves as it does in `QuatIntegrator`, for the same reason and with
+// the same answer: `q_dot` stays orthogonal to `q` -- the leak term is a pure
+// quaternion like `w` is, so it changes the axis of the rate and not its
+// orthogonality -- so the norm is conserved by the flow, is a free mode of RK4,
+// and is pinned back every step by `adjust()` (SPEC 6.4b). See
+// `QuatIntegrator.se` for the full argument, including why `output()` does not
+// normalise as well.
+package se.kin;
+
+use se.math;
+use se.kin;
+
+node QuatLeakyIntegrator {
+
+    settings {
+        // Required, deliberately: a leaky integrator whose leak defaulted to
+        // zero would be an ordinary integrator wearing the wrong name, and the
+        // failure would be a cue that never washes out rather than a
+        // diagnostic. A model that wants no leak wants `QuatIntegrator`.
+        leak: double(1/s);
+
+        // As `QuatIntegrator.norm_tol`, and see its header for the scaling.
+        norm_tol: double(-) = 1.0e-6;
+    }
+
+    inputs  { w: math.Vec3(rad/s); }   // body rate, in local coordinates
+    outputs { q: kin.Quat; }
+
+    states {
+        continuous qw: double(-) = 1.0;   // identity
+        continuous qx: double(-) = 0.0;
+        continuous qy: double(-) = 0.0;
+        continuous qz: double(-) = 0.0;
+    }
+
+    derivative(w) {
+        const double qw = state.qw, qx = state.qx, qy = state.qy, qz = state.qz;
+
+        // log q, exactly as `QuatLog` computes it. The flip is applied to a
+        // COPY: it picks the shortest reading of the rotation, and the product
+        // below has to be taken against the state as it actually is.
+        double lw = qw, lx = qx, ly = qy, lz = qz;
+        if (lw < 0.0) { lw = -lw; lx = -lx; ly = -ly; lz = -lz; }
+
+        const double s = std::sqrt(lx*lx + ly*ly + lz*lz);
+        const double k = s > 1e-8 ? 2.0 * std::atan2(s, lw) / s : 2.0 / lw;
+
+        // The washout rate: the commanded rate, less the rate at which the
+        // accumulated orientation is being returned to neutral.
+        const double wx = in.w.x - param.leak * k * lx;
+        const double wy = in.w.y - param.leak * k * ly;
+        const double wz = in.w.z - param.leak * k * lz;
+
+        // q_dot = 1/2 q (x) w, Hamilton, body rate on the RIGHT -- the same
+        // convention `AngRateToQuatRate` uses and `Quat2Rot` pins.
+        der.qw = 0.5*( -qx*wx - qy*wy - qz*wz );
+        der.qx = 0.5*(  qw*wx + qy*wz - qz*wy );
+        der.qy = 0.5*(  qw*wy + qz*wx - qx*wz );
+        der.qz = 0.5*(  qw*wz + qx*wy - qy*wx );
+    }
+
+    // The jump map, identical to `QuatIntegrator`'s. See its header for why the
+    // contract reads the norm BEFORE the divide, and why the degenerate
+    // all-zero quaternion is left alone rather than turned into four NaNs.
+    adjust() {
+        const double n2 = state.qw*state.qw + state.qx*state.qx
+                        + state.qy*state.qy + state.qz*state.qz;
+
+        sim.check_near(std::sqrt(n2), 1.0, param.norm_tol,
+                       "one step's drift off the unit sphere is within tolerance");
+
+        if (n2 > 0.0) {
+            const double k = 1.0 / std::sqrt(n2);
+            adjust.qw = state.qw * k;
+            adjust.qx = state.qx * k;
+            adjust.qy = state.qy * k;
+            adjust.qz = state.qz * k;
+        }
+    }
+
+    output() {
+        out.q.w = state.qw;
+        out.q.x = state.qx;
+        out.q.y = state.qy;
+        out.q.z = state.qz;
+    }
+}

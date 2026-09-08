@@ -1,0 +1,44 @@
+// `se.kin.QuatLeakyIntegrator` against the closed form its leak law implies.
+//
+// Drive it with a CONSTANT body rate about a fixed axis and the SO(3) problem
+// collapses to a scalar one, exactly: `log q` starts at zero, so it starts
+// parallel to `w`, and the bracket `w - leak*log q` keeps it parallel forever.
+// Everything then lives in the plane spanned by 1 and the axis, and the angle
+// obeys
+//
+//     theta_dot = |w| - leak * theta        =>   theta(t) = (|w|/leak)(1 - e^-leak*t)
+//
+// with `q(t) = (cos(theta/2), sin(theta/2) * axis)`. That is a real closed form
+// for the whole block -- the log map, the leak, the Hamilton product and the
+// integration -- and not a restatement of any of them.
+//
+// |w| = 0.3 rad/s, leak = 0.2 /s, so theta rises to 1.5 rad and reaches 1.297
+// by t = 10 s. Both numbers are chosen: the steady state stays well under pi so
+// the shortest-rotation flip never engages and the principal branch is the
+// whole story, and 10 s is two time constants, enough that the exponential is
+// carrying the answer rather than the initial slope.
+//
+// WITHOUT the leak this column is theta = |w|t = 3 rad at t = 10 against
+// 1.297, so a dropped or mis-signed leak term is not a tolerance question.
+//
+// The axis is (1,2,2)/3 rather than a coordinate direction, so all four
+// components move and are mutually distinct: a transposed axis in the Hamilton
+// product, or a leak applied to the wrong component, moves a column.
+package qint;
+
+use se.math;
+use se.kin;
+
+node QLeak {
+    outputs { q: kin.Quat; }
+
+    structure {
+        node wv : math.Merge3(rad/s) {};
+        node qi : kin.QuatLeakyIntegrator { leak = 0.2 (1/s); };
+
+        0.1 --> wv.x;
+        0.2 --> wv.y, wv.z;
+
+        wv --> qi --> self;
+    }
+}

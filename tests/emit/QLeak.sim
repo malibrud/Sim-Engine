@@ -1,0 +1,15 @@
+// SPEC 6.4b -- `se.kin.QuatLeakyIntegrator`, the rotation channel's B14, against
+// the closed form a constant body rate gives it. See lib/qint/QLeak.se.
+sim QLeak {
+    root: qint.QLeak {};
+
+    step:     10 (ms);
+    solver:   rk4;
+    duration: 10 (s);
+
+    record: {
+        file: "qleak.csv";
+        every: 10;                 // 10 Hz in the file, off a 100 Hz base step
+        signals { qi.q.w;  qi.q.x;  qi.q.y;  qi.q.z; }
+    }
+}

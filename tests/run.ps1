@@ -371,6 +371,7 @@ $smokeSettings = @{
     'se.sig.ct.SecondOrderLowpass'  = 'wn = 1.0(rad/s); z = 1.0;'
     'se.sig.ct.SecondOrderLowpass2' = 'wn = 1.0(rad/s); z = 1.0;'
     'se.sig.dt.Butterworth'         = 'fc = 1.0(Hz);'
+    'se.kin.QuatLeakyIntegrator'    = 'leak = 0.1(1/s);'
     'se.sig.dt.Differentiator'      = 'wc = 1.0(rad/s);'
     'se.sig.dt.LowPass2'            = 'wn = 1.0(rad/s);'
     'se.sig.src.Ramp'               = 'slope = 1.0(m/s);'
@@ -955,6 +956,63 @@ if (-not $cl) {
             $script:pass++
         } else {
             Write-Host ("FAIL build/emit/QInt : a column is off by " + $worst) `
+                -ForegroundColor Red
+            $script:fail++
+        }
+    }
+
+    # SPECIFICATION 6.4b -- se.kin.QuatLeakyIntegrator, the rotation channel's
+    # B14, against a closed form that is not a restatement of the block.
+    #
+    # A CONSTANT body rate about a fixed axis collapses the SO(3) problem to a
+    # scalar one exactly: log q starts at zero, so it starts parallel to w, and
+    # the bracket w - leak*log q keeps it parallel forever. The angle then obeys
+    # theta_dot = |w| - leak*theta, so theta(t) = (|w|/leak)(1 - e^-leak*t) and
+    # q = (cos(theta/2), sin(theta/2)*axis) -- which checks the log map, the
+    # leak, the Hamilton product and the integration in one column set.
+    #
+    # |w| = 0.3 rad/s and leak = 0.2 /s, so theta rises to 1.5 rad and reaches
+    # 1.297 by t = 10 s. Well under pi throughout, so the shortest-rotation flip
+    # never engages; two time constants, so the exponential and not the initial
+    # slope is carrying the answer. Drop the leak term and the column reads
+    # theta = 3 rad instead of 1.297.
+    #
+    # The axis is (1,2,2)/3, so all four components move and are mutually
+    # distinct: a transposed axis, or a leak applied to the wrong component,
+    # moves a column rather than cancelling.
+    if ($emitDirs.ContainsKey('QLeak')) {
+        $qlDir = $emitDirs['QLeak']
+        Push-Location $qlDir
+        & '.\build\QLeak.exe' 2>&1 | Out-Null
+        $ran = ($LASTEXITCODE -eq 0)
+        Pop-Location
+        $worst = [double]::PositiveInfinity
+        $csv = Join-Path $qlDir 'qleak.csv'
+        if ($ran -and (Test-Path $csv)) {
+            $worst = 0.0
+            foreach ($line in (Get-Content $csv | Select-Object -Skip 1)) {
+                if (-not $line) { continue }
+                $c  = $line -split ','
+                $t  = [double]$c[0]
+                $th = (0.3 / 0.2) * (1.0 - [Math]::Exp(-0.2 * $t))
+                $sh = [Math]::Sin($th / 2.0)
+                # Parenthesised for the reason the QInt block spells out: in
+                # PowerShell the comma binds tighter than the arithmetic.
+                $want = @([Math]::Cos($th / 2.0), ($sh / 3.0),
+                          (2.0 * $sh / 3.0), (2.0 * $sh / 3.0))
+                for ($i = 0; $i -lt $want.Count; $i++) {
+                    $err = [Math]::Abs([double]$c[$i + 1] - $want[$i])
+                    if ($err -gt $worst) { $worst = $err }
+                }
+            }
+        }
+        if ($worst -lt 1e-8) {
+            Write-Host ("ok   build/emit/QLeak : the washout leak matches " +
+                        "(|w|/leak)(1 - e^-leak*t) on all four components, " +
+                        "max error " + $worst.ToString('E2')) -ForegroundColor Green
+            $script:pass++
+        } else {
+            Write-Host ("FAIL build/emit/QLeak : a column is off by " + $worst) `
                 -ForegroundColor Red
             $script:fail++
         }
