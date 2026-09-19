@@ -1,0 +1,20 @@
+// SPECIFICATION 6.13 -- the stage-2 rules of a `tests` section.
+package tests;
+
+node Tested {
+    inputs  { x: double(m); }
+    outputs { y: double(m); }
+
+    output(x) { out.y = 2.0 * in.x; }
+
+    tests {
+        step: 1 (ms);
+        step: 2 (ms);
+        bogus;
+        set "no tolerance", in.x ~= out.y { 1, 2, "SE0272"; }
+        set "a tolerance on =", in.x = out.y within 1 { 1, 2, "SE0272"; }
+        set "short row", in.x = out.y { 1, "SE0273"; }
+        set "unlabelled row", in.x = out.y { 1, 2; 3, 6, "the next row still parses"; }
+        set "no tolerance", in.x = out.y { 1, 2, "SE0270"; }
+    }
+}

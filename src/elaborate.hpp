@@ -83,7 +83,35 @@ public:
     bool run(const ast::SimFile& sim, const Source& sim_src, const std::string& sim_dir,
              Model& out);
 
+    // ─── §6.13 — node tests ──────────────────────────────────────────────────
+    // A node under test is elaborated as the root of a synthesised model, and
+    // unlike a sim file's root it may be parametric: the `tests { units {} }`
+    // preamble binds its units exactly as an instantiation's arguments would.
+    void set_root_units(std::vector<Unit> u) { root_units_ = std::move(u); }
+    // True once any expression evaluated `sample_rate` or `time_step` — how
+    // `sec --test` knows a set reached a rate-derived setting (SE0470).
+    bool rate_reached() const { return rate_reached_; }
+
+    // One scalar a test cell supplies or expects, already converted into the
+    // column's declared unit.
+    struct CellLeaf {
+        std::string key;          // "q.w" — the member path under the namespace
+        Unit unit;
+        std::string scalar;
+        double value = 0.0;
+    };
+    // Evaluates one cell against its column's type: a brace list destructures
+    // against a record exactly as §6.2c destructures a binding, and every leaf
+    // is unit-checked (SE0410) and converted by the same evaluator a setting
+    // default goes through. A cell must give every field it destructures into.
+    bool eval_cell(const ast::Expr* e, const Type& target, const std::string& key,
+                   const Source& src, Loc loc, const std::string& what,
+                   std::vector<CellLeaf>& out);
+
 private:
+    std::vector<Unit> root_units_;
+    bool rate_reached_ = false;
+
     // ─── The sim file ────────────────────────────────────────────────────────
     bool read_sim_entries(const ast::SimFile& sim, const Source& src, Model& m);
     bool load_settings_file(const std::string& path, const Source& from, Loc loc);

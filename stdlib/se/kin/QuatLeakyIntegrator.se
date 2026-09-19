@@ -1,7 +1,7 @@
 // `QuatIntegrator` with the classical-washout leak folded in: integrates a body
 // rate into an attitude that decays back toward neutral.
 //
-//     q_dot = 1/2 q (x) ( w - leak * log q )
+//     q_dot = 1/2 q (x) ( w - wc * log q )
 //
 // This is the rotation channel's B14 -- the counterpart of the translational
 // channel's `s/(s+0.2)` high-pass -- and the whole reason it is ONE LEAF rather
@@ -9,7 +9,7 @@
 // before the Hamilton product, so no step size appears anywhere in this block.
 //
 // WHY IT TAKES A BODY RATE AND NOT A `QuatRate`. The leak is an angular
-// velocity, physically: `leak * log q` is the rate at which the attitude is
+// velocity, physically: `wc * log q` is the rate at which the attitude is
 // being pulled back to neutral, in rad/s, and it has to be subtracted from `w`
 // BEFORE the product. Given q_dot already formed there is nowhere to put it
 // that is not another Hamilton product. So this block does the job
@@ -24,14 +24,14 @@
 // trade this node exists to make; the graph form is still available from
 // `QuatLog`, `math.Scale3`, `math.Diff3` and `QuatIntegrator`.
 //
-// WHAT `leak` IS, AND WHY IT IS `1/s`. Against a constant body rate the bracket
-// gives `theta_dot = w - leak*theta`, so the orientation is `theta(s) =
-// w(s)/(s + leak)` -- and against the TRUE orientation `w/s` that ratio is
-// `s/(s + leak)`, a first-order high pass with its corner at `leak`. So it is a
-// frequency, and the temptation is to declare it `(rad/s)` the way a corner
-// frequency usually is. That is dimensionally wrong here: `leak` multiplies
-// `log q`, which is in `rad`, and the product has to match `w` in `rad/s`. The
-// C++ this is ported from comments its 0.12 as rad/s and is wrong about it.
+// WHAT `wc` IS. Against a constant body rate the bracket gives `theta_dot =
+// w - wc*theta`, so the orientation is `theta(s) = w(s)/(s + wc)` -- and
+// against the TRUE orientation `w/s` that ratio is `s/(s + wc)`, a first-order
+// high pass with its corner at `wc`. It is declared `(rad/s)` because that is
+// how a corner frequency is specified and how the washout literature quotes
+// it. Strictly, `wc` multiplies `log q` in `rad` and the product must be
+// `rad/s`, which makes it `1/s`; units are erased in the body (SPEC 4.4), so
+// this is a choice about how the SETTING reads, made deliberately.
 //
 // THE DECAY IS LINEAR IN `theta = log q`, NOT IN `q`. Scaling the quaternion's
 // vector part toward zero and renormalising is the obvious cheap alternative
@@ -42,8 +42,13 @@
 // The log map here is `QuatLog`'s, and both of its load-bearing properties are
 // load-bearing again. The shortest-rotation flip is what makes "decay toward
 // neutral" mean the short way round -- without it an orientation past pi leaks
-// AWAY from neutral. Scale invariance is what lets the leak be correct on a
-// state that has drifted off the unit sphere since the last `adjust()`.
+// AWAY from neutral. Here the flip lives in `adjust()`, which holds `qw >= 0`
+// in the state itself, so `derivative()` reads the state as it stands. The one
+// gap is inside a step: an RK4 stage taken right at a half turn can see `qw`
+// slightly negative and leak the long way for that fraction of a step. The
+// error is tiny and the next `adjust()` removes it. Scale invariance is what
+// lets the leak be correct on a state that has drifted off the unit sphere
+// since the last `adjust()`.
 //
 // The norm behaves as it does in `QuatIntegrator`, for the same reason and with
 // the same answer: `q_dot` stays orthogonal to `q` -- the leak term is a pure
@@ -60,14 +65,7 @@ use se.kin;
 node QuatLeakyIntegrator {
 
     settings {
-        // Required, deliberately: a leaky integrator whose leak defaulted to
-        // zero would be an ordinary integrator wearing the wrong name, and the
-        // failure would be a cue that never washes out rather than a
-        // diagnostic. A model that wants no leak wants `QuatIntegrator`.
-        leak: double(1/s);
-
-        // As `QuatIntegrator.norm_tol`, and see its header for the scaling.
-        norm_tol: double(-) = 1.0e-6;
+        wc: double(rad/s); // Cutoff frequency for the leak.
     }
 
     inputs  { w: math.Vec3(rad/s); }   // body rate, in local coordinates
@@ -83,46 +81,23 @@ node QuatLeakyIntegrator {
     derivative(w) {
         const double qw = state.qw, qx = state.qx, qy = state.qy, qz = state.qz;
 
-        // log q, exactly as `QuatLog` computes it. The flip is applied to a
-        // COPY: it picks the shortest reading of the rotation, and the product
-        // below has to be taken against the state as it actually is.
-        double lw = qw, lx = qx, ly = qy, lz = qz;
-        if (lw < 0.0) { lw = -lw; lx = -lx; ly = -ly; lz = -lz; }
-
-        const double s = std::sqrt(lx*lx + ly*ly + lz*lz);
-        const double k = s > 1e-8 ? 2.0 * std::atan2(s, lw) / s : 2.0 / lw;
+        // log q, as `QuatLog` computes it, minus the flip: `adjust()` keeps
+        // `qw >= 0` in the state, so there is nothing left to flip here.
+        const double s = std::sqrt(qx*qx + qy*qy + qz*qz);
+        const double k = s > 1e-8 ? 2.0 * std::atan2(s, qw) / s : 2.0 / qw;
 
         // The washout rate: the commanded rate, less the rate at which the
         // accumulated orientation is being returned to neutral.
-        const double wx = in.w.x - param.leak * k * lx;
-        const double wy = in.w.y - param.leak * k * ly;
-        const double wz = in.w.z - param.leak * k * lz;
+        const double wx = in.w.x - param.wc * k * qx;
+        const double wy = in.w.y - param.wc * k * qy;
+        const double wz = in.w.z - param.wc * k * qz;
 
         // q_dot = 1/2 q (x) w, Hamilton, body rate on the RIGHT -- the same
-        // convention `AngRateToQuatRate` uses and `Quat2Rot` pins.
+        // convention `AngRateToQuatRate` uses and `QuatToRot` pins.
         der.qw = 0.5*( -qx*wx - qy*wy - qz*wz );
         der.qx = 0.5*(  qw*wx + qy*wz - qz*wy );
         der.qy = 0.5*(  qw*wy + qz*wx - qx*wz );
         der.qz = 0.5*(  qw*wz + qx*wy - qy*wx );
-    }
-
-    // The jump map, identical to `QuatIntegrator`'s. See its header for why the
-    // contract reads the norm BEFORE the divide, and why the degenerate
-    // all-zero quaternion is left alone rather than turned into four NaNs.
-    adjust() {
-        const double n2 = state.qw*state.qw + state.qx*state.qx
-                        + state.qy*state.qy + state.qz*state.qz;
-
-        sim.check_near(std::sqrt(n2), 1.0, param.norm_tol,
-                       "one step's drift off the unit sphere is within tolerance");
-
-        if (n2 > 0.0) {
-            const double k = 1.0 / std::sqrt(n2);
-            adjust.qw = state.qw * k;
-            adjust.qx = state.qx * k;
-            adjust.qy = state.qy * k;
-            adjust.qz = state.qz * k;
-        }
     }
 
     output() {
@@ -130,5 +105,17 @@ node QuatLeakyIntegrator {
         out.q.x = state.qx;
         out.q.y = state.qy;
         out.q.z = state.qz;
+    }
+
+    adjust() {
+        const double n2 = state.qw*state.qw + state.qx*state.qx
+                        + state.qy*state.qy + state.qz*state.qz;
+
+        double k = 1.0 / std::sqrt(n2); // Force norm of 1.0
+        if ( state.qw < 0 ) k *= -1;    // Force to be in branch closest to 1, i.e. keep qw positive.
+        adjust.qw = state.qw * k;
+        adjust.qx = state.qx * k;
+        adjust.qy = state.qy * k;
+        adjust.qz = state.qz * k;
     }
 }

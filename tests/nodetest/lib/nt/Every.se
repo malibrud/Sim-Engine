@@ -1,0 +1,55 @@
+// The node-test runner's own coverage (SPECIFICATION 6.13): one node that
+// every column namespace can reach, so each is exercised end to end -- the
+// given side through a setting pin, a state write and an input, the checked
+// side through all five of out, der, next, adjust and var. It is parametric,
+// so the preamble's unit binding is exercised too, and its first row converts
+// a `km` cell into the `m` its port is bound to.
+package nt;
+
+node Every {
+    units    { U; }
+    settings { k: double(-); off: double(U) = 0.0; }
+    inputs   { x: double(U); }
+    outputs  { y: double(U); }
+    states   { continuous s: double(U) = 0.0; discrete c: double(-) = 0.0; }
+    vars     { h: double(-); }
+
+    init()        { var.h = 0.5 * param.k; }
+    output(x)     { out.y = param.k * in.x + param.off + state.s; }
+    derivative(x) { der.s = in.x; }
+    next(x)       { next.c = state.c + 1.0; }
+    adjust()      { adjust.s = state.s > 1.0 ? 1.0 : state.s; }
+
+    tests {
+        units    { U = m; }
+        settings { k = 2; }
+
+        set "the gain applies, in the port's unit", in.x = out.y {
+            1 (km), 2000, "a km cell arrives in m";
+            3,      6,    "a bare cell takes the port's unit";
+        }
+        set "a setting column pins its row", param.k, in.x = out.y {
+            3, 1, 3, "k = 3 for this row only";
+        }
+        set "two setting columns pin together", param.k, param.off, in.x ~= out.y
+            within 1e-15 {
+            1, 10 (cm), 1, 1.1, "off is given in cm";
+        }
+        set "the state feeds the output", state.s, in.x = out.y {
+            1, 1, 3, "offset by the state";
+        }
+        set "the derivative is the input", in.x = der.s {
+            4, 4, "der.s = x";
+        }
+        set "next counts", state.c = next.c {
+            2, 3, "2 -> 3";
+        }
+        set "adjust clamps the state", state.s = adjust.s {
+            5,   1,   "clamped";
+            0.5, 0.5, "left alone";
+        }
+        set "init computes the var", param.k = var.h {
+            4, 2, "half of k";
+        }
+    }
+}

@@ -11,6 +11,8 @@
 //
 //      --parse            parse and report diagnostics (default)
 //      --emit             compile a .sim file and write the generated model
+//      --test             write a test program for each node's `tests` section
+//                         (§6.13), one subdirectory of -o per tested node
 //      --dump-ast         print the parsed AST
 //      --dump-tokens      print the token stream (does not parse)
 //      -I <dir>           add a root directory (§2.1); repeatable
@@ -50,6 +52,7 @@
 #include "../src/parser.hpp"
 #include "../src/resolve.hpp"
 #include "../src/schedule.hpp"
+#include "../src/testgen.hpp"
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -62,13 +65,14 @@
 namespace {
 
 enum class Kind { Model, Sim, Settings };
-enum class Mode { Parse, Emit, DumpAst, DumpTokens };
+enum class Mode { Parse, Emit, Test, DumpAst, DumpTokens };
 
 void usage(std::ostream& o) {
     o << "sec — sim-engine compiler\n\n"
          "usage: sec [options] <file>...\n\n"
          "  --parse            parse and report diagnostics (default)\n"
          "  --emit             compile a .sim file and write the generated model\n"
+         "  --test             write a test program per node `tests` section\n"
          "  --dump-ast         print the parsed AST\n"
          "  --dump-tokens      print the token stream (does not parse)\n"
          "  -I <dir>           add a root directory; repeatable\n"
@@ -214,6 +218,8 @@ int main(int argc, char** argv) {
             emit_opt.quiet = true;
         } else if (a == "--emit") {
             mode = Mode::Emit;
+        } else if (a == "--test") {
+            mode = Mode::Test;
         } else if (a == "--parse") {
             mode = Mode::Parse;
         } else if (a == "--dump-ast") {
@@ -260,6 +266,19 @@ int main(int argc, char** argv) {
             return 2;
         }
         const int rc = compile(files.front(), diag, roots, emit_opt);
+        diag.print_summary();
+        return rc;
+    }
+
+    if (mode == Mode::Test) {
+        se::TestGenOptions topt;
+        topt.out_dir = emit_opt.out_dir;
+        topt.quiet = emit_opt.quiet;
+        int rc = 0;
+        for (const std::string& path : files) {
+            const int r = se::generate_tests(path, diag, roots, topt);
+            if (r > rc) rc = r;
+        }
         diag.print_summary();
         return rc;
     }

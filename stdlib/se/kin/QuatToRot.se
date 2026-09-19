@@ -1,8 +1,8 @@
 // Unit quaternion -> the 3x3 rotation matrix of the same rotation.
 //
 // This block PINS the convention the rest of `se.kin` reads back: `R` is the
-// matrix that takes a LOCAL (body) vector to a GLOBAL one, so `Quat2Rot(a*b)`
-// is `Quat2Rot(a) * Quat2Rot(b)` and a quaternion product composes with its
+// matrix that takes a LOCAL (body) vector to a GLOBAL one, so `QuatToRot(a*b)`
+// is `QuatToRot(a) * QuatToRot(b)` and a quaternion product composes with its
 // right operand acting in the left operand's frame. Everything else here --
 // `QuatExp`'s sign convention included -- is only meaningful relative to that
 // choice, and it is made once, here.
@@ -15,7 +15,7 @@ package se.kin;
 
 use se.kin;
 
-node Quat2Rot {
+node QuatToRot {
 
     inputs  { q: kin.Quat;  }
     outputs { R: kin.Rot; }

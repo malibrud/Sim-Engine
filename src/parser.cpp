@@ -45,7 +45,7 @@ std::string closest(const std::string& word, const std::vector<const char*>& can
 const std::vector<const char*>& section_names() {
     static const std::vector<const char*> v = {
         "settings", "inputs", "outputs", "states", "vars",
-        "native",   "build",  "structure", "declarations", "units"};
+        "native",   "build",  "structure", "declarations", "units", "tests"};
     return v;
 }
 
@@ -1017,6 +1017,13 @@ bool Parser::parse_node_item(ast::NodeDef& node) {
 
         case Tok::Ident: {
             const Tok after = peek().kind;
+            // §6.13 — `tests` is contextual, not reserved: it is a section only
+            // where a section can start.
+            if (after == Tok::LBrace && tok_.text == "tests") {
+                if (!mark_section(node.sec_tests, "tests", loc)) return false;
+                advance();
+                return parse_tests(node.tests);
+            }
             if (after == Tok::LBrace) {
                 // `state { ... }` — a mistyped section, not a C++ function.
                 std::vector<Attachment> att;
@@ -1051,6 +1058,277 @@ bool Parser::parse_node_item(ast::NodeDef& node) {
 
         default:
             return parse_helper(node);
+    }
+}
+
+// ─── Tests (§6.13) ───────────────────────────────────────────────────────────
+
+bool Parser::parse_tests(ast::TestsSection& out) {
+    if (!expect(Tok::LBrace, "SE0201", "to open the `tests` section")) return false;
+
+    auto duplicate = [&](const char* what, Loc loc, Loc first) {
+        err("SE0270", loc, std::string("duplicate `") + what + "` in `tests`",
+            "already given",
+            {note(std::string("`") + what + "` first appears on line " +
+                  std::to_string(first.line)),
+             note("the preamble is shared by every set; a set that needs a different "
+                  "value names it as a column (\xc2\xa7""6.13)")});
+    };
+
+    while (!at(Tok::RBrace) && !at_end() && !give_up()) {
+        const std::uint32_t before = tok_.loc.offset;
+        const Loc loc = tok_.loc;
+
+        if (at(Tok::Ident) && tok_.text == "step" && peek().kind == Tok::Colon) {
+            if (out.has_step) {
+                duplicate("step", loc, out.step_loc);
+                recover_in_list(Tok::RBrace);
+            } else {
+                out.has_step = true;
+                out.step_loc = loc;
+                advance();
+                advance();  // :
+                if ((out.step = parse_expr()) == nullptr ||
+                    !expect(Tok::Semi, "SE0208", "after `step`"))
+                    recover_in_list(Tok::RBrace);
+            }
+        } else if (at(Tok::KwUnits)) {
+            if (out.sec_units.present) {
+                duplicate("units", loc, out.sec_units.loc);
+                recover_in_list(Tok::RBrace);
+            } else {
+                out.sec_units.present = true;
+                out.sec_units.loc = loc;
+                advance();
+                if (!expect(Tok::LBrace, "SE0201", "to open the unit bindings")) return false;
+                while (!at(Tok::RBrace) && !at_end() && !give_up()) {
+                    const std::uint32_t b2 = tok_.loc.offset;
+                    ast::UnitBinding ub;
+                    if (!at(Tok::Ident)) {
+                        err("SE0201", tok_.loc,
+                            std::string("expected a unit parameter name, found ") +
+                                describe(tok_.kind),
+                            "expected a unit parameter name");
+                        recover_in_list(Tok::RBrace);
+                    } else {
+                        ub.name = tok_.text;
+                        ub.loc = tok_.loc;
+                        advance();
+                        if (!expect(Tok::Equal, "SE0201", "after the unit parameter name")) {
+                            recover_in_list(Tok::RBrace);
+                        } else if ((ub.unit = at(Tok::LParen) ? parse_unit()
+                                                              : parse_unit_expr()) == nullptr) {
+                            recover_in_list(Tok::RBrace);
+                        } else if (!expect(Tok::Semi, "SE0208", "after the unit binding")) {
+                            recover_in_list(Tok::RBrace);
+                        } else {
+                            out.units.push_back(std::move(ub));
+                        }
+                    }
+                    if (tok_.loc.offset == b2 && !at(Tok::RBrace)) advance();
+                }
+                if (!expect(Tok::RBrace, "SE0201", "to close the unit bindings")) return false;
+            }
+        } else if (at(Tok::KwSettings)) {
+            if (out.sec_settings.present) {
+                duplicate("settings", loc, out.sec_settings.loc);
+                recover_in_list(Tok::RBrace);
+            } else {
+                out.sec_settings.present = true;
+                out.sec_settings.loc = loc;
+                advance();
+                if (!parse_bindings(out.settings)) recover_in_list(Tok::RBrace);
+            }
+        } else if (at(Tok::Ident) && tok_.text == "set") {
+            ast::TestSet set;
+            if (parse_test_set(set)) {
+                for (const ast::TestSet& s : out.sets) {
+                    if (s.claim != set.claim) continue;
+                    err("SE0270", set.claim_loc,
+                        "duplicate set \"" + set.claim + "\" in `tests`", "already claimed",
+                        {note("first claimed on line " + std::to_string(s.claim_loc.line)),
+                         note("a claim names its set in every failure report, so two sets "
+                              "with one claim could not be told apart (\xc2\xa7""6.13)")});
+                    break;
+                }
+                out.sets.push_back(std::move(set));
+            } else {
+                recover_in_list(Tok::RBrace);
+            }
+        } else {
+            err("SE0271", loc, std::string("unknown entry in `tests`: ") + describe(tok_.kind) +
+                                   (tok_.kind == Tok::Ident ? " `" + tok_.text + "`" : ""),
+                "not a `tests` entry",
+                {note("a `tests` section holds `step:`, `units { }`, `settings { }` and "
+                      "`set \"claim\", ... { rows }` (\xc2\xa7""6.13)")});
+            recover_in_list(Tok::RBrace);
+        }
+
+        if (tok_.loc.offset == before && !at(Tok::RBrace) && !at_end()) advance();
+    }
+    return expect(Tok::RBrace, "SE0201", "to close the `tests` section");
+}
+
+bool Parser::parse_test_column(ast::TestColumn& out) {
+    out.loc = tok_.loc;
+    if (at(Tok::Ident) && tok_.text == "step" && peek().kind != Tok::Dot) {
+        out.is_step = true;
+        advance();
+        return true;
+    }
+    static const std::vector<const char*> namespaces = {"param", "in",   "state",  "out",
+                                                        "der",   "next", "adjust", "var"};
+    if (!tok_.is_word() || !contains(namespaces, tok_.text)) {
+        err("SE0201", tok_.loc,
+            std::string("expected a column, found ") + describe(tok_.kind),
+            "expected `step` or an accessor",
+            {note("a column is `step` or one of param. in. state. out. der. next. adjust. "
+                  "var. (\xc2\xa7""6.13)")});
+        return false;
+    }
+    out.ns = tok_.text;
+    advance();
+    if (!expect(Tok::Dot, "SE0201", "after the accessor namespace")) return false;
+    do {
+        if (!tok_.is_word()) {
+            err("SE0201", tok_.loc,
+                std::string("expected a member name, found ") + describe(tok_.kind),
+                "expected a name");
+            return false;
+        }
+        out.segs.push_back(tok_.text);
+        out.loc.length = tok_.loc.offset + tok_.loc.length - out.loc.offset;
+        advance();
+        if (at(Tok::LBracket)) {
+            advance();
+            if (!at(Tok::Number) ||
+                tok_.text.find_first_not_of("0123456789") != std::string::npos) {
+                err("SE0201", tok_.loc,
+                    std::string("expected a non-negative integer index, found ") +
+                        describe(tok_.kind),
+                    "expected an index");
+                return false;
+            }
+            out.segs.back() += "[" + tok_.text + "]";
+            advance();
+            const Loc close = tok_.loc;
+            if (!expect(Tok::RBracket, "SE0201", "to close the index")) return false;
+            out.loc.length = close.offset + close.length - out.loc.offset;
+        }
+    } while (accept(Tok::Dot));
+    return true;
+}
+
+bool Parser::parse_test_set(ast::TestSet& out) {
+    out.loc = tok_.loc;
+    advance();  // set
+    if (!at(Tok::String)) {
+        err("SE0201", tok_.loc, std::string("expected the set's claim, found ") +
+                                    describe(tok_.kind),
+            "expected a string",
+            {note("a set is named by the claim its rows demonstrate (\xc2\xa7""6.13)")});
+        return false;
+    }
+    out.claim = tok_.text;
+    out.claim_loc = tok_.loc;
+    advance();
+
+    // The given columns run up to the operator, the expected columns up to
+    // `within` or the opening brace.
+    bool expected_side = false;
+    for (;;) {
+        if (!expect(Tok::Comma, "SE0201", expected_side ? nullptr : "after the claim"))
+            return false;
+        ast::TestColumn col;
+        if (!parse_test_column(col)) return false;
+        (expected_side ? out.expected : out.given).push_back(std::move(col));
+
+        if (at(Tok::Comma)) continue;
+        if (!expected_side && (at(Tok::Equal) || at(Tok::TildeEqual))) {
+            out.approx = at(Tok::TildeEqual);
+            out.op_loc = tok_.loc;
+            advance();
+            ast::TestColumn first;
+            if (!parse_test_column(first)) return false;
+            out.expected.push_back(std::move(first));
+            expected_side = true;
+            if (at(Tok::Comma)) continue;
+        }
+        break;
+    }
+    if (!expected_side) {
+        err("SE0201", tok_.loc,
+            std::string("expected `=` or `~=` in the set header, found ") + describe(tok_.kind),
+            "expected `=` or `~=`",
+            {note("the operator divides what is supplied from what is checked "
+                  "(\xc2\xa7""6.13)")});
+        return false;
+    }
+
+    Loc within_loc;
+    if (at(Tok::Ident) && tok_.text == "within") {
+        within_loc = tok_.loc;
+        advance();
+        if ((out.within = parse_expr()) == nullptr) return false;
+    }
+    if (out.approx && !out.within) {
+        err("SE0272", out.op_loc, "`~=` with no `within`", "no tolerance given",
+            {note("there is no default tolerance anywhere (\xc2\xa7""6.13)"),
+             help("close the header with `within <tolerance>`")});
+    } else if (!out.approx && out.within) {
+        err("SE0272", within_loc, "`=` with a `within` clause", "`=` compares bitwise",
+            {help("use `~=` for a toleranced comparison")});
+    }
+
+    if (!expect(Tok::LBrace, "SE0201", "to open the set's rows")) return false;
+    const std::size_t arity = out.given.size() + out.expected.size();
+    while (!at(Tok::RBrace) && !at_end() && !give_up()) {
+        const std::uint32_t before = tok_.loc.offset;
+        ast::TestRow row;
+        if (parse_test_row(row)) {
+            // An unlabelled row has already been reported (SE0274): one mistake,
+            // one diagnostic.
+            if (row.label_loc.length != 0 && row.cells.size() != arity) {
+                err("SE0273", row.loc,
+                    "row has " + std::to_string(row.cells.size()) + " value(s), but the set "
+                        "header names " + std::to_string(arity) + " column(s)",
+                    "wrong number of values",
+                    {note("every row supplies every column; a case that wants a different "
+                          "shape wants a different set (\xc2\xa7""6.13)")});
+            }
+            out.rows.push_back(std::move(row));
+        } else {
+            recover_in_list(Tok::RBrace);
+        }
+        if (tok_.loc.offset == before && !at(Tok::RBrace)) advance();
+    }
+    return expect(Tok::RBrace, "SE0201", "to close the set's rows");
+}
+
+bool Parser::parse_test_row(ast::TestRow& out) {
+    out.loc = tok_.loc;
+    for (;;) {
+        if (at(Tok::String)) {
+            out.label = tok_.text;
+            out.label_loc = tok_.loc;
+            advance();
+            return expect(Tok::Semi, "SE0208", "after the row's label");
+        }
+        ast::ExprPtr cell = parse_expr();
+        if (!cell) return false;
+        out.loc.length = tok_.loc.offset - out.loc.offset;
+        out.cells.push_back(std::move(cell));
+        if (accept(Tok::Comma)) continue;
+        if (at(Tok::Semi)) {
+            err("SE0274", out.loc, "row has no label", "expected `, \"label\"` before `;`",
+                {note("the label is the worked example's name, and what a failure report "
+                      "leads with (\xc2\xa7""6.13)")});
+            // The row is still well-formed up to here, so keep it: recovering
+            // past the `;` just consumed would swallow the NEXT row.
+            advance();
+            return true;
+        }
+        return expect(Tok::Comma, "SE0201", "between a row's values");
     }
 }
 

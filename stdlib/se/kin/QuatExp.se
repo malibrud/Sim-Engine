@@ -33,7 +33,7 @@
 // that is wrong by a factor of the step size.
 //
 // COORDINATE CONVENTION -- right-handed, matching `math.Vec3` and the rotation
-// matrix `se.kin.Quat2Rot` builds. As `Vec3` says, this is documentation: the
+// matrix `se.kin.QuatToRot` builds. As `Vec3` says, this is documentation: the
 // compiler does not model frames and cannot check that the vector arriving here
 // is expressed in the one the caller thinks it is.
 package se.kin;

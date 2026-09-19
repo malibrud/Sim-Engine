@@ -248,6 +248,61 @@ struct SectionMark {
     Loc loc;
 };
 
+// ─── Tests (§6.13) ───────────────────────────────────────────────────────────
+
+// One column of a set header: `step`, or an accessor such as `out.q.w`. `ns` is
+// the accessor's namespace and `segs` the member path under it, so `out.q.w`
+// is ns "out", segs {"q", "w"}. An element index rides on its segment as
+// `w1[3]`, exactly as a recorded column's does (§13.5).
+struct TestColumn {
+    bool is_step = false;
+    std::string ns;
+    std::vector<std::string> segs;
+    Loc loc;
+
+    std::string str() const {
+        if (is_step) return "step";
+        std::string s = ns;
+        for (const std::string& g : segs) s += "." + g;
+        return s;
+    }
+};
+
+struct TestRow {
+    std::vector<ExprPtr> cells;
+    std::string label;
+    Loc label_loc;
+    Loc loc;
+};
+
+struct TestSet {
+    std::string claim;
+    Loc claim_loc;
+    std::vector<TestColumn> given;
+    std::vector<TestColumn> expected;
+    bool approx = false;       // `~=` rather than `=`
+    Loc op_loc;
+    ExprPtr within;            // required with `~=`, forbidden with `=` (SE0272)
+    std::vector<TestRow> rows;
+    Loc loc;
+};
+
+struct UnitBinding {           // `U = m/s^2;` in a tests preamble
+    std::string name;
+    UnitPtr unit;
+    Loc loc;
+};
+
+struct TestsSection {
+    bool has_step = false;
+    ExprPtr step;
+    Loc step_loc;
+    SectionMark sec_units, sec_settings;
+    std::vector<UnitBinding> units;
+    std::vector<Binding> settings;
+    std::vector<TestSet> sets;
+};
+
 // ─── Definitions ─────────────────────────────────────────────────────────────
 
 // One unit parameter — a name that stands for a unit inside a node's port,
@@ -275,6 +330,7 @@ struct NodeDef {              // §6
     SectionMark sec_settings, sec_inputs, sec_outputs, sec_states, sec_vars;
     SectionMark sec_native, sec_declarations, sec_build, sec_structure;
     SectionMark sec_units;
+    SectionMark sec_tests;
 
     std::vector<UnitParamDecl> unit_params;
     std::vector<SettingDecl> settings;
@@ -288,6 +344,9 @@ struct NodeDef {              // §6
     Structure structure;
     std::vector<Method> methods;
     std::vector<Helper> helpers;
+    // §6.13 — read only by `sec --test`; contributes nothing to a lowered model,
+    // and so plays no part in `has_code()` either.
+    TestsSection tests;
 
     // Kind inference (§6.1). Reported, not stored as a decision: stage 3 owns
     // the leaf/composite conflict check.

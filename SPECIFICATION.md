@@ -2003,9 +2003,23 @@ ordinary column, and §10.5's `sim.step()` reads what `step` supplied.
 
 A `tests` section contributes nothing to a lowered model: no member, no
 schedule entry, no manifest line, no topology node. It is read only by
-`sec --test`, which emits and runs it separately. Adding tests to a block
-cannot change what that block compiles to, and the unit manifest (§15.6) is
-what holds that to account.
+`sec --test`. Adding tests to a block cannot change what that block compiles
+to, and the unit manifest (§15.6) is what holds that to account.
+
+#### Running tests
+
+`sec --test` **writes** a test program; it does not compile or run one. For
+each tested node it emits the node exactly as `--emit` would — as the root of
+a model whose class under test is the one any other model compiles — plus a
+`main` that fabricates each row, invokes the methods, and compares. The
+program exits non-zero if any row fails, and prints one line per set.
+
+The split is §12.4's, applied to tests: generation and building are separable,
+and `sec` never chooses, finds or invokes a compiler. Building the program is
+the same job as building any emitted model, done by the same reference build
+scripts, and running it needs nothing but the executable. A tool that does
+both in one step — a script, a build system, a future driver — sits above
+`sec`, not inside it.
 
 #### Diagnostics
 
@@ -2754,7 +2768,7 @@ run can tell you that the quaternion arriving on this wire drifted off the unit
 sphere at t = 4.31 s.
 
 ```
-node Quat2Rot {
+node QuatToRot {
     output(q) {
         sim.check_near(norm4(in.q), 1.0, 1e-9, "input quaternion is unit-norm");
         ...
@@ -2764,7 +2778,7 @@ node Quat2Rot {
 
 ```
 [    0.010500] error drive.q2r: contract failed: input quaternion is unit-norm;
-               got 1.0349, want 1, |err| 0.0349 > tol 1e-09  (se.kin.Quat2Rot, tick 10)
+               got 1.0349, want 1, |err| 0.0349 > tol 1e-09  (se.kin.QuatToRot, tick 10)
 ...
 [    2.000000] error sim: 1 contract(s) violated
 [    2.000000] error sim:   drive.q2r: input quaternion is unit-norm -- 8004 time(s),

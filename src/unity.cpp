@@ -19,6 +19,7 @@
 #include "elaborate.cpp"
 #include "schedule.cpp"
 #include "emit.cpp"
+#include "testgen.cpp"
 #include "runtime_src.cpp"
 
 #include "../tools/sec.cpp"

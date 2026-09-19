@@ -258,6 +258,7 @@ bool Elaborator::eval(const ast::Expr* e, const Source& src, const Env& env, Val
             // wants the reciprocal; deriving both from one number means they
             // cannot disagree.
             if (e->text == "sample_rate" || e->text == "time_step") {
+                rate_reached_ = true;
                 if (effective_rate_ <= 0.0) {
                     diag_.error("SE0413", src, e->loc,
                                 "`" + e->text + "` has no value here",
@@ -2579,6 +2580,38 @@ void Elaborator::resolve_log(const ast::LogBlock& block, const Source& src, Mode
 //  Driver
 // ═════════════════════════════════════════════════════════════════════════════
 
+bool Elaborator::eval_cell(const ast::Expr* e, const Type& target, const std::string& key,
+                           const Source& src, Loc loc, const std::string& what,
+                           std::vector<CellLeaf>& out) {
+    std::vector<Leafling> leaves;
+    if (!destructure(target, e, key, loc, src, what, leaves)) return false;
+    bool ok = true;
+    for (const Leafling& lf : leaves) {
+        if (!lf.expr) {
+            diag_.error("SE0423", src, e ? e->loc : loc,
+                        "this cell gives no value for `" + lf.key + "`", "field missing",
+                        {note("every row supplies every column in full; there are no holes "
+                              "(\xc2\xa7""6.13)")});
+            ok = false;
+            continue;
+        }
+        Value v;
+        if (!eval(lf.expr, src, Env{}, v)) {
+            ok = false;
+            continue;
+        }
+        double d = 0.0;
+        // A record column names the field that failed; a scalar one is the field.
+        const std::string site = lf.key == key ? what : what + ", field `" + lf.key + "`";
+        if (!coerce(v, lf.type, src, lf.loc, site.c_str(), d)) {
+            ok = false;
+            continue;
+        }
+        out.push_back(CellLeaf{lf.key, lf.type.unit, lf.type.scalar, d});
+    }
+    return ok;
+}
+
 bool Elaborator::run(const ast::SimFile& sim, const Source& sim_src,
                      const std::string& sim_dir, Model& m) {
     m.name = sim.name;
@@ -2621,13 +2654,14 @@ bool Elaborator::run(const ast::SimFile& sim, const Source& sim_src,
             continue;
         }
         // §6.2c — the root block binds a record the same way a `structure`
-        // binding does. The root has no unit arguments to substitute, so the
-        // declared type is already concrete.
+        // binding does. A sim file's root has no unit arguments to substitute;
+        // a node under test (§6.13) may, and they are bound here the same way.
+        const Type ttype = bind_type(target->type, root_units_);
         std::vector<Leafling> bl;
-        if (!destructure(target->type, b.value.get(), b.name, b.loc, sim_src,
+        if (!destructure(ttype, b.value.get(), b.name, b.loc, sim_src,
                          "setting `" + b.name + "`", bl)) {
             std::vector<Leafling> all;
-            destructure(target->type, nullptr, b.name, b.loc, sim_src,
+            destructure(ttype, nullptr, b.name, b.loc, sim_src,
                         "setting `" + b.name + "`", all);
             for (const Leafling& lf : all)
                 pinned.emplace(lf.key, Pin{0.0, ec_num(0.0), true});
@@ -2648,7 +2682,7 @@ bool Elaborator::run(const ast::SimFile& sim, const Source& sim_src,
         }
     }
 
-    instantiate(m.root, "", pinned, sim_src, root_entry->loc, 0, m);
+    instantiate(m.root, "", pinned, sim_src, root_entry->loc, 0, m, root_units_);
     if (m.leaves.empty()) {
         diag_.error("SE0511", sim_src, root_entry->loc,
                     "the model has no leaf nodes", "nothing to run",

@@ -1,0 +1,35 @@
+﻿error[SE0361]: `out.y` is on the wrong side of the operator
+  --> tests/nodetest/lib/nt/Cols.se:14:39
+   |
+14 |         set "a checked column given", out.y = in.x { 1, 2, "SE0361"; }
+   |                                       ^^^^^ a checked column, not a given one
+   = note: given: param. in. state. step -- checked: out. der. next. adjust. var. (§6.13)
+
+error[SE0361]: `in.x` is on the wrong side of the operator
+  --> tests/nodetest/lib/nt/Cols.se:14:47
+   |
+14 |         set "a checked column given", out.y = in.x { 1, 2, "SE0361"; }
+   |                                               ^^^^ a given column, not a checked one
+   = note: given: param. in. state. step -- checked: out. der. next. adjust. var. (§6.13)
+
+error[SE0360]: `in.z` names no member of `Cols`
+  --> tests/nodetest/lib/nt/Cols.se:15:29
+   |
+15 |         set "no such port", in.z = out.y { 1, 2, "SE0360"; }
+   |                             ^^^^ no input named `z`
+
+error[SE0362]: `adjust.s` is written by `adjust()`, which `Cols` does not define
+  --> tests/nodetest/lib/nt/Cols.se:16:46
+   |
+16 |         set "no adjust() to call", state.s = adjust.s { 1, 1, "SE0362"; }
+   |                                              ^^^^^^^^ nothing writes this
+
+error[SE0410]: incompatible units for column `in.x`
+  --> tests/nodetest/lib/nt/Cols.se:17:65
+   |
+17 |         set "a time where a length is declared", in.x = out.y { 1 (s), 1, "SE0410"; }
+   |                                                                 ^ `(s)` where `(m)` is declared
+   = note: value is s
+   = note: target is m
+
+5 errors emitted

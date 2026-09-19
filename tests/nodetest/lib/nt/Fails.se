@@ -1,0 +1,19 @@
+// A node test that MUST fail (SPECIFICATION 6.13). A runner that reports "ok"
+// for everything would pass every other case in the suite, so this one pins
+// the negative: the wrong row fails its set, the right row in the same set
+// does not mask it, and the run's exit status says so.
+package nt;
+
+node Fails {
+    inputs  { x: double(-); }
+    outputs { y: double(-); }
+
+    output(x) { out.y = 2.0 * in.x; }
+
+    tests {
+        set "doubling", in.x = out.y {
+            1, 2, "right";
+            1, 3, "wrong on purpose";
+        }
+    }
+}

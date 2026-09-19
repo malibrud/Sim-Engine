@@ -30,11 +30,6 @@
 //          every step, so `fastn` must hold at that single-step value instead
 //          of decaying -- and the two readings are sixty times apart, which no
 //          tolerance absorbs.
-//
-//          Its `norm_tol` is opened up to 1e-3 ON PURPOSE. The default 1e-6 is
-//          right for a model whose step suits its bandwidth, and this one's
-//          deliberately does not; the contract firing here would be the
-//          contract being correct. Overriding it is what a setting is for.
 package qint;
 
 use se.math;
@@ -59,7 +54,7 @@ node QInt {
         // --- fast: the norm check ------------------------------------------
         node wF   : math.Merge3(rad/s) {};
         node a2qF : kin.AngRateToQuatRate {};
-        node qiF  : kin.QuatIntegrator   { norm_tol = 1.0e-3; };
+        node qiF  : kin.QuatIntegrator   {};
         node nF   : Norm4 {};
 
         0.0   --> wF.x, wF.y;

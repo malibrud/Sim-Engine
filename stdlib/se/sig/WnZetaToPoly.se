@@ -1,6 +1,6 @@
 package se.sig;
 
-node WnZeta2Poly {
+node WnZetaToPoly {
     settings {
         wn  (rad/s) double;
         zeta: double(-); 

@@ -1,4 +1,4 @@
-# -----------------------------------------------------------------------------
+﻿# -----------------------------------------------------------------------------
 #  Test runner.
 #
 #  Stages 1-2, the parser:
@@ -128,6 +128,36 @@ foreach ($f in (Get-ChildItem -Path (Join-Path $root 'tests\ok') -File | Sort-Ob
 }
 foreach ($f in (Get-ChildItem -Path (Join-Path $root 'tests\err') -File | Sort-Object Name)) {
     if ($exts -contains $f.Extension) { Run-Case "tests/err/$($f.Name)" $true }
+}
+
+# SPECIFICATION 6.13 -- the stage-3 column errors, which only `sec --test`
+# reaches. Every set in Cols.se is wrong in exactly one way; all of them must be
+# reported, and nothing may be written.
+$colsOut = Join-Path $root 'build\test\cols'
+if (Test-Path $colsOut) { Remove-Item -Recurse -Force $colsOut }
+$colsActual = (& $sec --no-color --max-errors=0 --test -I 'tests/nodetest/lib' `
+                   -o ($colsOut.Replace('\', '/')) 'tests/nodetest/lib/nt/Cols.se' 2>&1 |
+               Out-String) -replace "`r`n", "`n"
+$colsCode = $LASTEXITCODE
+$colsExpected = Join-Path $root 'tests\nodetest\Cols.expected'
+if ($Update) {
+    Set-Content -Path $colsExpected -Value $colsActual -NoNewline -Encoding utf8
+    Write-Host "update tests/nodetest/Cols.expected"
+    $script:updated++
+} else {
+    $colsWant = ''
+    if (Test-Path $colsExpected) {
+        $colsWant = (Get-Content -Raw -Encoding UTF8 $colsExpected) -replace "`r`n", "`n"
+    }
+    if ($colsCode -eq 1 -and -not (Test-Path $colsOut) -and $colsWant -eq $colsActual) {
+        Write-Host "ok   tests/nodetest/lib/nt/Cols.se : column errors" -ForegroundColor Green
+        $script:pass++
+    } else {
+        Write-Host ("FAIL tests/nodetest/lib/nt/Cols.se : column errors, exit " + $colsCode) `
+            -ForegroundColor Red
+        Write-Host $colsActual
+        $script:fail++
+    }
 }
 
 # The worked example must always parse cleanly.
@@ -358,7 +388,7 @@ $smokeSkip = @(
     # Unfinished drafts that do not compile today, kept out so the check stays
     # green and the debt stays visible. Delete the entry, not the test, when the
     # block is finished.
-    'se.sig.WnZeta2Poly'    # pre-dates the "a unit is a type argument" unification
+    'se.sig.WnZetaToPoly'    # pre-dates the "a unit is a type argument" unification
                             # (b989ec4): still spells `wn (rad/s) double;`, gives
                             # `output(x)` an input its empty `inputs {}` does not
                             # declare, and writes Poly3's fields as a2/a1/a0
@@ -371,7 +401,8 @@ $smokeSettings = @{
     'se.sig.ct.SecondOrderLowpass'  = 'wn = 1.0(rad/s); z = 1.0;'
     'se.sig.ct.SecondOrderLowpass2' = 'wn = 1.0(rad/s); z = 1.0;'
     'se.sig.dt.Butterworth'         = 'fc = 1.0(Hz);'
-    'se.kin.QuatLeakyIntegrator'    = 'leak = 0.1(1/s);'
+    'se.kin.QuatLeakyIntegrator'    = 'wc = 0.1(rad/s);'
+    'se.sig.ct.LeakyIntegrator3'    = 'wc = 0.1(rad/s);'
     'se.sig.dt.Differentiator'      = 'wc = 1.0(rad/s);'
     'se.sig.dt.LowPass2'            = 'wn = 1.0(rad/s);'
     'se.sig.src.Ramp'               = 'slope = 1.0(m/s);'
@@ -635,6 +666,43 @@ if (-not $cl) {
             Write-Host $cfLog
             $script:fail++
         }
+    }
+
+    # SPECIFICATION 6.13 -- node tests, through tools/nodetest.ps1: the same
+    # emit/build/run a developer uses by hand, so the suite and the script
+    # cannot drift apart. The script finds every stdlib file with a `tests`
+    # section itself, so adding tests to a block never means editing this.
+    #
+    # tests/nodetest holds the runner's own cases: `Every` reaches every
+    # column namespace, and `Fails` MUST fail -- a runner that printed "ok" for
+    # everything would pass every other case here. The script is invoked in
+    # process: its `exit` returns here with $LASTEXITCODE set.
+    $nodetest = Join-Path $root 'tools/nodetest.ps1'
+    & $nodetest -I @('stdlib', 'tests/nodetest/lib') -Out 'build/test' `
+        'stdlib' 'tests/nodetest/lib/nt/Every.se'
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "ok   tools/nodetest.ps1 : every tested stdlib node, and nt.Every" `
+            -ForegroundColor Green
+        $script:pass++
+    } else {
+        Write-Host ("FAIL tools/nodetest.ps1 : node tests, exit " + $LASTEXITCODE) `
+            -ForegroundColor Red
+        $script:fail++
+    }
+    # Write-Host is the information stream (6) in PowerShell 5, so that is what
+    # has to be redirected for the output to be looked at.
+    $ntFail = (& $nodetest -I @('tests/nodetest/lib') -Out 'build/test' `
+                   'tests/nodetest/lib/nt/Fails.se' 6>&1 | Out-String)
+    $ntCode = $LASTEXITCODE
+    if ($ntCode -eq 1 -and $ntFail.Contains('FAIL nt.Fails : "doubling", 1 of 2 row(s)')) {
+        Write-Host "ok   tests/nodetest/lib/nt/Fails.se : a failing row fails its set and the run" `
+            -ForegroundColor Green
+        $script:pass++
+    } else {
+        Write-Host ("FAIL tests/nodetest/lib/nt/Fails.se : expected exit 1 and the failing " +
+                    "row, got exit " + $ntCode) -ForegroundColor Red
+        Write-Host $ntFail
+        $script:fail++
     }
 
     # build.ps1 is the third emitted script, and an emitted script nobody runs
@@ -941,8 +1009,12 @@ if (-not $cl) {
                 # divides the ARRAY and throws op_Division on Object[] -- and
                 # then $want silently keeps whatever the previous block left in
                 # it, which is a passing-looking failure in some other column.
-                $want = @([Math]::Cos($a), ($sn / 3.0), (2.0 * $sn / 3.0),
-                          (2.0 * $sn / 3.0), $wantN)
+                # adjust() holds qw >= 0, and cos(1.5t) crosses zero at
+                # t = pi/3, so past there the state is -q(t): same rotation.
+                $sg = 1.0
+                if ([Math]::Cos($a) -lt 0.0) { $sg = -1.0 }
+                $want = @(($sg * [Math]::Cos($a)), ($sg * $sn / 3.0),
+                          ($sg * 2.0 * $sn / 3.0), ($sg * 2.0 * $sn / 3.0), $wantN)
                 for ($i = 0; $i -lt $want.Count; $i++) {
                     $err = [Math]::Abs([double]$c[$i + 1] - $want[$i])
                     if ($err -gt $worst) { $worst = $err }
@@ -966,12 +1038,12 @@ if (-not $cl) {
     #
     # A CONSTANT body rate about a fixed axis collapses the SO(3) problem to a
     # scalar one exactly: log q starts at zero, so it starts parallel to w, and
-    # the bracket w - leak*log q keeps it parallel forever. The angle then obeys
-    # theta_dot = |w| - leak*theta, so theta(t) = (|w|/leak)(1 - e^-leak*t) and
+    # the bracket w - wc*log q keeps it parallel forever. The angle then obeys
+    # theta_dot = |w| - wc*theta, so theta(t) = (|w|/wc)(1 - e^-wc*t) and
     # q = (cos(theta/2), sin(theta/2)*axis) -- which checks the log map, the
     # leak, the Hamilton product and the integration in one column set.
     #
-    # |w| = 0.3 rad/s and leak = 0.2 /s, so theta rises to 1.5 rad and reaches
+    # |w| = 0.3 rad/s and wc = 0.2 rad/s, so theta rises to 1.5 rad and reaches
     # 1.297 by t = 10 s. Well under pi throughout, so the shortest-rotation flip
     # never engages; two time constants, so the exponential and not the initial
     # slope is carrying the answer. Drop the leak term and the column reads
@@ -1008,7 +1080,7 @@ if (-not $cl) {
         }
         if ($worst -lt 1e-8) {
             Write-Host ("ok   build/emit/QLeak : the washout leak matches " +
-                        "(|w|/leak)(1 - e^-leak*t) on all four components, " +
+                        "(|w|/wc)(1 - e^-wc*t) on all four components, " +
                         "max error " + $worst.ToString('E2')) -ForegroundColor Green
             $script:pass++
         } else {

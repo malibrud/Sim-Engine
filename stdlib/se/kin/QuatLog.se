@@ -27,8 +27,8 @@
 // angle, and at |q| slightly over one it leaves the domain of `acos` entirely.
 //
 // That invariance is also why this block does NOT assert its input is
-// unit-norm, though SPEC 10.6 uses exactly that contract on `Quat2Rot` as its
-// worked example. The difference is real: `Quat2Rot`'s matrix formula assumes
+// unit-norm, though SPEC 10.6 uses exactly that contract on `QuatToRot` as its
+// worked example. The difference is real: `QuatToRot`'s matrix formula assumes
 // unit norm and is wrong without it, so the claim belongs there. Here the norm
 // cancels, and asserting it would be asserting a fact about the caller that
 // this block was deliberately written not to need.

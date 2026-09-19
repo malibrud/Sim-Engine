@@ -1,0 +1,19 @@
+// Stage-3 column errors (SPECIFICATION 6.13): each set is wrong in exactly one
+// way, and `sec --test` must report all of them and write nothing.
+package nt;
+
+node Cols {
+    inputs  { x: double(m); }
+    outputs { y: double(m); }
+    states  { continuous s: double(m) = 0.0; }
+
+    output(x)     { out.y = in.x + state.s; }
+    derivative(x) { der.s = in.x; }
+
+    tests {
+        set "a checked column given", out.y = in.x { 1, 2, "SE0361"; }
+        set "no such port", in.z = out.y { 1, 2, "SE0360"; }
+        set "no adjust() to call", state.s = adjust.s { 1, 1, "SE0362"; }
+        set "a time where a length is declared", in.x = out.y { 1 (s), 1, "SE0410"; }
+    }
+}

@@ -1,0 +1,53 @@
+﻿error[SE0270]: duplicate `step` in `tests`
+  --> tests/err/tests.se:12:9
+   |
+12 |         step: 2 (ms);
+   |         ^^^^ already given
+   = note: `step` first appears on line 11
+   = note: the preamble is shared by every set; a set that needs a different value names it as a column (§6.13)
+
+error[SE0271]: unknown entry in `tests`: an identifier `bogus`
+  --> tests/err/tests.se:13:9
+   |
+13 |         bogus;
+   |         ^^^^^ not a `tests` entry
+   = note: a `tests` section holds `step:`, `units { }`, `settings { }` and `set "claim", ... { rows }` (§6.13)
+
+error[SE0272]: `~=` with no `within`
+  --> tests/err/tests.se:14:34
+   |
+14 |         set "no tolerance", in.x ~= out.y { 1, 2, "SE0272"; }
+   |                                  ^^ no tolerance given
+   = note: there is no default tolerance anywhere (§6.13)
+   = help: close the header with `within <tolerance>`
+
+error[SE0272]: `=` with a `within` clause
+  --> tests/err/tests.se:15:46
+   |
+15 |         set "a tolerance on =", in.x = out.y within 1 { 1, 2, "SE0272"; }
+   |                                              ^^^^^^ `=` compares bitwise
+   = help: use `~=` for a toleranced comparison
+
+error[SE0273]: row has 1 value(s), but the set header names 2 column(s)
+  --> tests/err/tests.se:16:41
+   |
+16 |         set "short row", in.x = out.y { 1, "SE0273"; }
+   |                                         ^ wrong number of values
+   = note: every row supplies every column; a case that wants a different shape wants a different set (§6.13)
+
+error[SE0274]: row has no label
+  --> tests/err/tests.se:17:46
+   |
+17 |         set "unlabelled row", in.x = out.y { 1, 2; 3, 6, "the next row still parses"; }
+   |                                              ^^^^ expected `, "label"` before `;`
+   = note: the label is the worked example's name, and what a failure report leads with (§6.13)
+
+error[SE0270]: duplicate set "no tolerance" in `tests`
+  --> tests/err/tests.se:18:13
+   |
+18 |         set "no tolerance", in.x = out.y { 1, 2, "SE0270"; }
+   |             ^^^^^^^^^^^^^^ already claimed
+   = note: first claimed on line 14
+   = note: a claim names its set in every failure report, so two sets with one claim could not be told apart (§6.13)
+
+7 errors emitted

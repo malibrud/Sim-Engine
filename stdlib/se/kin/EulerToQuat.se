@@ -1,0 +1,73 @@
+// SAE Euler angles -> the unit quaternion of the same attitude.
+//
+// `e` is (roll, pitch, heading) = (x, y, z), applied Z-Y-X: heading about z,
+// then pitch about the new y, then roll about the newest x. As a product,
+//
+//     q = qz(h) (x) qy(p) (x) qx(r),    qa(t) = (cos(t/2), sin(t/2) * a)
+//
+// and `QuatToRot(q)` is the local-to-global direction-cosine matrix.
+//
+// Invariants:
+//   - |q| = 1 for every input.
+//   - One nonzero angle t about one axis gives (cos(t/2), sin(t/2) * axis),
+//     which is `QuatExp` of that rotation vector.
+//   - Adding 2*pi to any angle negates q: the same rotation, other sign. The
+//     output is NOT held to qw >= 0.
+//
+// Examples, as (w, x, y, z) with c = cos(45 deg) = sqrt(1/2):
+//   e = ( 0,      0,      0      )   q = ( 1,   0,   0,   0   )   identity
+//   e = ( 90 deg, 0,      0      )   q = ( c,   c,   0,   0   )   roll
+//   e = ( 0,      90 deg, 0      )   q = ( c,   0,   c,   0   )   pitch
+//   e = ( 0,      0,      90 deg )   q = ( c,   0,   0,   c   )   heading
+//   e = ( 0,      0,      180 deg)   q = ( 0,   0,   0,   1   )   half turn
+//   e = ( 90 deg, 0,      90 deg )   q = ( 1/2, 1/2, 1/2, 1/2 )   order matters
+package se.kin;
+
+use se.math;
+use se.kin;
+
+node EulerToQuat {
+
+    inputs  { e: math.Vec3(rad);  }
+    outputs { q: kin.Quat; }
+
+    output(e) {
+        const double r = in.e.x;
+        const double p = in.e.y;
+        const double h = in.e.z;
+
+        // Precompute sin and cos terms
+        const double sr = std::sin(0.5*r), cr = std::cos(0.5*r);
+        const double sp = std::sin(0.5*p), cp = std::cos(0.5*p);
+        const double sh = std::sin(0.5*h), ch = std::cos(0.5*h);
+
+        out.q.w = cr*cp*ch + sr*sp*sh;
+        out.q.x = sr*cp*ch - cr*sp*sh;
+        out.q.y = cr*sp*ch + sr*cp*sh;
+        out.q.z = cr*cp*sh - sr*sp*ch;
+    }
+
+    tests {
+        set "zero angles give the identity, exactly", in.e = out.q {
+            { 0, 0, 0 }, { 1, 0, 0, 0 }, "identity";
+        }
+
+        set "one angle is a rotation about its own axis", in.e ~= out.q within 1e-15 {
+            {  90 (deg), 0,        0         }, { sqrt(0.5), sqrt(0.5), 0,         0         }, "roll";
+            {  0,        90 (deg), 0         }, { sqrt(0.5), 0,         sqrt(0.5), 0         }, "pitch";
+            {  0,        0,        90 (deg)  }, { sqrt(0.5), 0,         0,         sqrt(0.5) }, "heading";
+            {  0,        0,        180 (deg) }, { 0,         0,         0,         1         }, "half turn";
+            { -90 (deg), 0,        0         }, { sqrt(0.5), -sqrt(0.5), 0,        0         }, "negative roll";
+        }
+
+        set "the angles compose Z-Y-X", in.e ~= out.q within 1e-15 {
+            { 90 (deg), 0,        90 (deg) }, { 0.5,  0.5, 0.5, 0.5 }, "roll and heading";
+            { 0,        90 (deg), 90 (deg) }, { 0.5, -0.5, 0.5, 0.5 }, "pitch and heading";
+        }
+
+        set "adding a full turn negates q", in.e ~= out.q within 1e-15 {
+            { 0, 0, 360 (deg) }, { -1, 0, 0, 0 }, "heading";
+            { 360 (deg), 0, 0 }, { -1, 0, 0, 0 }, "roll";
+        }
+    }
+}

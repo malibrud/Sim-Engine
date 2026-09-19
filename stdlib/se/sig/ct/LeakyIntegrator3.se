@@ -1,0 +1,32 @@
+package se.sig.ct;
+
+use se.math;
+
+node LeakyIntegrator3 {
+    units{ U; }
+
+    settings {
+        wc: double(rad/s); // Corner of 1/(s + wc); rad/s by convention, see QuatLeakyIntegrator.
+    }
+
+    inputs  { vd: math.Vec3(U); }
+    outputs { v: math.Vec3(U*s); }
+
+    states {
+        continuous x: double(U*s) = 0.0;
+        continuous y: double(U*s) = 0.0;
+        continuous z: double(U*s) = 0.0;
+    }
+
+    derivative(vd) {
+        der.x = in.vd.x - param.wc * state.x;
+        der.y = in.vd.y - param.wc * state.y;
+        der.z = in.vd.z - param.wc * state.z;
+    }
+
+    output() {
+        out.v.x = state.x;
+        out.v.y = state.y;
+        out.v.z = state.z;
+    }
+}

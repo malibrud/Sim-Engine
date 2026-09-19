@@ -102,6 +102,12 @@ private:
     bool parse_method(ast::NodeDef& node);
     bool parse_helper(ast::NodeDef& node);
     bool mark_section(ast::SectionMark& m, const char* name, Loc loc);
+    // §6.13 — the `tests` section: a preamble of `step:`, `units {}` and
+    // `settings {}`, then named sets of rows.
+    bool parse_tests(ast::TestsSection& out);
+    bool parse_test_set(ast::TestSet& out);
+    bool parse_test_column(ast::TestColumn& out);
+    bool parse_test_row(ast::TestRow& out);
 
     // ─── Sim file ────────────────────────────────────────────────────────────
     bool parse_sim_entry(ast::SimFile& out);

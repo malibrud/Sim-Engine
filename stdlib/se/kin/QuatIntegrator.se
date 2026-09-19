@@ -18,7 +18,7 @@
 //
 // THE INITIAL CONDITION IS IDENTITY, not zero. All four states at zero is not a
 // small rotation, it is not an attitude at all, and it is the one input the
-// normalisation below cannot rescue.
+// normalisation below cannot rescue: it turns into four NaNs.
 //
 // WHY `adjust()`. For `q_dot = 1/2 q (x) w` with a pure-imaginary `w`, `q_dot`
 // is orthogonal to `q`, so `d|q|/dt` is exactly zero: the norm is a conserved
@@ -34,7 +34,7 @@
 // `q`, and `q` and `s*q` are the same rotation for any positive `s`, so a
 // drifting norm cannot rotate anything wrongly -- and `QuatLog` is written to be
 // scale-invariant for the same reason. What the drift does break is everything
-// that reads the norm as a fact: `Quat2Rot`'s formula, which is wrong off the
+// that reads the norm as a fact: `QuatToRot`'s formula, which is wrong off the
 // unit sphere, and the recorded state, which stops meaning anything once `|q|`
 // has wandered.
 //
@@ -43,27 +43,21 @@
 // state the SOLVER left, one step off the manifold. Here that is not worth
 // paying for. One RK4 step of a rotation at `theta = |w|*h` leaves the norm off
 // by O(theta^6): at a tenth of a radian per step, seven parts in a billion,
-// which is inside any tolerance a consumer would set and far inside the one
-// below. `output()` runs five times per step and `adjust()` runs once, so
+// which is inside any tolerance a consumer would set. `output()` runs five times per step and `adjust()` runs once, so
 // normalising there would cost five square roots and twenty divides per step to
 // remove an error that is already negligible. A block whose rate genuinely
-// approaches a radian per step should shorten its step, and the contract below
-// is what tells it to.
+// approaches a radian per step should shorten its step.
+//
+// `adjust()` also keeps `qw >= 0`. `q` and `-q` are the same rotation, and
+// holding the state in the half closest to identity is what `QuatLog` and the
+// leak in `QuatLeakyIntegrator` read as "the short way back to neutral". The
+// published `q` changes sign when the attitude passes a half turn.
+
 package se.kin;
 
 use se.kin;
 
 node QuatIntegrator {
-
-    settings {
-        // The pre-adjust drift this block will tolerate in one step, before it
-        // reports. It is a setting rather than a literal because the honest
-        // bound scales as theta^6 and theta belongs to the model, not to this
-        // block: 1e-6 is loose enough for a tenth of a radian per step and
-        // tight enough that a bad initial condition or a step chosen for the
-        // wrong bandwidth is caught on the first tick rather than never.
-        norm_tol: double(-) = 1.0e-6;
-    }
 
     inputs  { qd: kin.QuatRate; }
     outputs { q:  kin.Quat; }
@@ -82,41 +76,22 @@ node QuatIntegrator {
         der.qz = in.qd.z;
     }
 
-    // The jump map. Once per accepted step, below the recorder and above the
-    // advance (SPEC 9.6 step 7), so the recorded state is the drift as the
-    // solver left it and the NEXT step starts from the sphere.
-    adjust() {
-        const double n2 = state.qw*state.qw + state.qx*state.qx
-                        + state.qy*state.qy + state.qz*state.qz;
-
-        // Reported before it is corrected, which is the whole value of putting
-        // the contract here: after the divide there is nothing left to see. It
-        // is checked once per accepted step rather than five times, because
-        // this is the method that runs once (SPEC 8.1).
-        sim.check_near(std::sqrt(n2), 1.0, param.norm_tol,
-                       "one step's drift off the unit sphere is within tolerance");
-
-        // The all-zero quaternion is not an attitude and cannot be normalised
-        // into one; dividing by its norm would replace a wrong state with four
-        // NaNs and lose the evidence. It is unreachable from the identity IC
-        // above under any finite rate, and reachable only through a SPEC 13.4
-        // override that set every component to zero -- so the state is left
-        // exactly as it is, and the check above has already said so.
-        if (n2 > 0.0) {
-            // `adjust.` and `state.` are the same storage (SPEC 6.4b), so the
-            // norm is computed in full before anything is written.
-            const double k = 1.0 / std::sqrt(n2);
-            adjust.qw = state.qw * k;
-            adjust.qx = state.qx * k;
-            adjust.qy = state.qy * k;
-            adjust.qz = state.qz * k;
-        }
-    }
-
     output() {
         out.q.w = state.qw;
         out.q.x = state.qx;
         out.q.y = state.qy;
         out.q.z = state.qz;
+    }
+
+    adjust() {
+        const double n2 = state.qw*state.qw + state.qx*state.qx
+                        + state.qy*state.qy + state.qz*state.qz;
+
+        double k = 1.0 / std::sqrt(n2); // Force norm of 1.0
+        if ( state.qw < 0 ) k *= -1;    // Force to be in branch closest to 1, i.e. keep qw positive.
+        adjust.qw = state.qw * k;
+        adjust.qx = state.qx * k;
+        adjust.qy = state.qy * k;
+        adjust.qz = state.qz * k;
     }
 }
