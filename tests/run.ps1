@@ -342,10 +342,10 @@ foreach ($f in (Get-ChildItem -Path (Join-Path $root 'tests\emit') -File -Filter
 $examples = @(
     @{ name = 'drivetrain'; sim = 'examples/drivetrain/Drivetrain.sim'; roots = @('examples') },
     @{ name = 'washout';    sim = 'examples/washout/Washout.sim';       roots = @('examples', 'stdlib') },
-    # The same channel as `washout`, built from one vector block instead of
-    # Split3 + three scalar blocks + Merge3. It is the acceptance case for
-    # record settings (SPEC 6.2c), so it has to compile on every run.
-    @{ name = 'washout3';   sim = 'examples/washout/Classical.sim';
+    # The same washout, DRIVEN: a rectangular pulse into the X axis, recorded
+    # at 100 Hz off a 1 kHz step. It is the example that exercises a source, a
+    # record block and a log block together, so it has to compile on every run.
+    @{ name = 'pulsex';     sim = 'examples/washout/PulseX.sim';
        roots = @('examples', 'stdlib') }
 )
 foreach ($ex in $examples) {

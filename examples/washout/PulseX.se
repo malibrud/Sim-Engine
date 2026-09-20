@@ -11,7 +11,7 @@ node PulseX {
         node pulse: sig.src.RectPulse (m/s^2);
         node ain: math.Merge3(m/s^2);
         node win: math.Merge3(rad/s);
-        node wash: washout.ClassicalFromScratch {
+        node wash: washout.Classical {
         };
 
         pulse --> ain.x;

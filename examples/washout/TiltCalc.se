@@ -15,13 +15,15 @@ node TiltCalc {
         accRate: math.Vec2(m/s^3); 
     }
     outputs  { 
-        tilt:     math.Vec2(rad); 
-        tiltRate: math.Vec2(rad/s); 
+        tilt:     math.Vec3(rad); 
+        tiltRate: math.Vec3(rad/s); 
     }
 
     output(acc, accRate) {
         tiltOf(  in.acc.x,  in.accRate.x, out.tilt.y, out.tiltRate.y ); // Acceleration into x is mocked by a positive pitch about the y axis.
         tiltOf( -in.acc.y, -in.accRate.y, out.tilt.x, out.tiltRate.x ); // Acceleration into y is mocked by a negative roll about the x axis.
+        out.tilt.z     = 0.0;
+        out.tiltRate.z = 0.0;
     }
 
     void tiltOf( double acc, double accRate, double& angle, double& angleRate ) const {

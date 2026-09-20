@@ -1,27 +1,41 @@
-// Classical washout, translational channel — built from ONE vector block.
+// Classical washout — the three-channel motion-cueing filter, from the library.
 //
-// The same channel as `Classical.se`, written the other way round, and the two
-// are meant to be read side by side. `Classical.se` predates record settings: it
-// reaches the scalar signal library through `Split3` -> three `ScaleLimit`
-// instances -> `Merge3`, because there was no way to give one block three
-// per-axis gains. This file gives them to it directly (§6.2c).
+// A motion platform has a metre of travel and a vehicle has a road. The
+// classical washout is how the first stands in for the second: sustained
+// acceleration is cued by LEANING the platform into gravity (the tilt channel),
+// transient acceleration is cued by MOVING it and then sliding it back below
+// the perception threshold (the translational channel), and rotation is cued by
+// turning it and letting the turn decay (the rotation channel).
 //
-// Six nodes and eleven wires become three nodes and four wires, and the three
-// axes' parameters stop being three unrelated instances that a reader has to
-// notice are meant to move together. The high-pass makes the same point a
-// second time: `Classical.se` spends three `ct.Biquad` instances on one
-// design, where `ct.SecondOrderSystem3` takes it once (§6.2c).
+// Ported from the C++ in the `washout` repo, block for block, with the library
+// doing the filtering: `sig.ScaleLimit3` for the per-axis gain and clamp,
+// `sig.ct.SecondOrderSystem3` and `ct.FirstOrderSystem3` for the high passes,
+// `ct.LeakyIntegrator3` and `ct.Integrator3` for the two integrations, and
+// `kin.QuatLeakyIntegrator` for the rotation channel's washout attitude.
 //
-// NOTE that `gain` and `limit` below are wide open at {1, 1, 1} and
-// {10, 10, 10} m/s^2, which effectively disables the scale-limit: this file
-// is currently tuned to look at the high-pass response on its own. The
-// per-axis argument in the settings comment is about what those numbers are
-// FOR, not what they are set to here.
+// THE CHANNELS, and what each output means:
 //
-// The gravity term is the same argument once more, one section along: `grav` is
-// wired straight off the settings block (§6.9.2). The alternative is three
-// `se.sig.src.Constant` instances -- it is scalar-only -- and a `Merge3`, which
-// is four nodes and four wires to say a number this file already writes down.
+//   translational   ain -> scale/limit -> f = a - g -> local high pass ->
+//                   global high pass -> `aout`, then integrated to `vout` and
+//                   `pout`. The high passes are why a step in `ain` comes out
+//                   as a pulse: the platform moves, then washes back.
+//
+//   tilt            the X and Y accelerations, low passed, become the steady
+//                   lean that stands in for them -- `TiltCalc` inverts
+//                   a = g*sin(tilt) -- and `kin.EulerToQuat` puts that lean in
+//                   the form the attitude channel wants: `qtilt`.
+//
+//   rotation        win -> scale/limit -> high pass -> a quaternion integrator
+//                   whose leak returns it to neutral: `qwash`.
+//
+// THE ATTITUDE OUTPUTS ARE NOT YET COMPOSED. The C++ this is ported from forms
+// one commanded orientation, `qCmd = qWash (x) qTilt`, and reads the gravity
+// coupling and the commanded body rates off it. Doing that here needs blocks
+// `se.kin` does not have yet -- a quaternion product, and rotating a vector by
+// a quaternion -- so this node publishes the two halves and leaves the
+// composition to whoever needs it. The translational channel is correspondingly
+// one step simpler than the C++: it subtracts a CONSTANT `grav` rather than
+// gravity resolved through the commanded attitude.
 //
 // COORDINATE CONVENTION -- SAE, matching `se.math.Vec3`: X forward/north, Y
 // right/east, Z down.
@@ -40,8 +54,9 @@ package washout;
 
 use se.math;
 use se.sig;
+use se.kin;
 
-node ClassicalFromScratch {
+node Classical {
     settings {
         trnGain:  math.Vec3(-)      = { 1.0, 1.0, 1.0 };
         trnLimit: math.Vec3(m/s^2)  = { 10.0, 10.0, 10.0 };
@@ -50,19 +65,29 @@ node ClassicalFromScratch {
 
         rotGain: math.Vec3(-)      = { 1.0, 1.0, 1.0 };
         rotLimit: math.Vec3(rad/s) = { 2.0, 2.0, 2.0 };
+        // The rotation channel's washout corner: how fast the accumulated
+        // attitude returns to neutral. `ROT_LEAK` in the C++.
+        rotLeak: double(rad/s) = 0.12;
 
         grav:  math.Vec3(m/s^2)  = { 0.0, 0.0, 9.80665 };
         headPos: math.Vec3(m) = { 0.0, 0.0, 0.0 };
     }
 
-    inputs  { 
+    inputs  {
         ain:  math.Vec3(m/s^2); // kinematic acceleration, vehicle body frame,
                                 //   gravity-free -- see the note above
         win:  math.Vec3(rad/s); // Local angular velocity
-    }   
+    }
     // High-passed, so whatever DC `sf` carries is gone by the time it gets
     // here: the constant -g contributes a startup transient and nothing else.
-    outputs { aout: math.Vec3(m/s^2); }   // commanded platform acceleration
+    outputs {
+        aout: math.Vec3(m/s^2);// commanded platform acceleration
+        vout: math.Vec3(m/s);  // commanded platform velocity
+        pout: math.Vec3(m);    // commanded platform position
+
+        qwash: kin.Quat;       // washed-out attitude, rotation channel
+        qtilt: kin.Quat;       // the tilt-coordination lean
+    }
 
     structure {
 
@@ -80,6 +105,7 @@ node ClassicalFromScratch {
             z = 1.4;
         };
         node tiltCalc: TiltCalc {};
+        node tiltQuat: kin.EulerToQuat {};
 
         //----------------------------------
         // Rotation Channel Nodes
@@ -90,10 +116,17 @@ node ClassicalFromScratch {
             limit = param.rotLimit;
         };
 
-        node rotLocalFilt: sig.ct.SecondOrderSystem3 (m/s^2) {
+        node rotLocalFilt: sig.ct.SecondOrderSystem3 (rad/s) {
             // s^2 / (s^2 + 2*zeta*wn*s + wn^2), wn = 1.02 rad/s, zeta = 1.0
             A = { 1.0, 2.04, 1.0404 };
             B = { 1.0, 0.0,  0.0  };
+        };
+
+        // The leak is the whole rotation channel's washout: `QuatIntegrator`
+        // with the return-to-neutral folded in, so the cycle stays inside one
+        // leaf and this graph has none.
+        node rotQ: kin.QuatLeakyIntegrator {
+            wc = param.rotLeak;
         };
 
         //----------------------------------
@@ -112,19 +145,36 @@ node ClassicalFromScratch {
             B = { 1.0, 0.0,  0.0  };
         };
 
-        node transGlobalFilt: sig.ct.FirstOrderSystem3 (m/s^2) {
+        node transGlobalAcc: sig.ct.FirstOrderSystem3 (m/s^2) {
             A = { 1.0, 0.2 };
             B = { 1.0, 0.0 };
         };
+
+        node transGlobalVel: sig.ct.LeakyIntegrator3 (m/s^2) {
+            wc = 0.2(rad/s);
+        };
+
+        node transGlobalPos: sig.ct.Integrator3 (m/s);
+
+        //----------------------------------
+        // Signal Flow Connections
+        //----------------------------------
 
         // Tilt Channel
         self.ain --> xyAccel --> tiltScale --> tiltLocalFilt;
                                                tiltLocalFilt.vout  --> tiltCalc.acc;
                                                tiltLocalFilt.voutd --> tiltCalc.accRate;
+        tiltCalc.tilt --> tiltQuat --> self.qtilt;
+
+        // Rotational Channel
+        self.win --> rotScale --> rotLocalFilt --> rotQ --> self.qwash;
 
         // Translational Channel
         self.ain --> transScale  --> sf.a;
         param.grav               --> sf.b;
-        sf --> transLocalFilt --> transGlobalFilt --> self;
+        sf --> transLocalFilt --> transGlobalAcc --> transGlobalVel --> transGlobalPos;
+                                  transGlobalAcc                                       --> self.aout;
+                                                     transGlobalVel                    --> self.vout;
+                                                                        transGlobalPos --> self.pout;
     }
 }
