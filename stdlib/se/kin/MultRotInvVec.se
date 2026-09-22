@@ -1,12 +1,27 @@
+// Rotate a vector by the INVERSE of a rotation matrix: `u = R^T v`, global to
+// local (body). The inverse of `MulRotVec`, taking the same matrix `QuatToRot`
+// produces -- you do not transpose it first, this block is the transpose.
+//
+// A rotation matrix is orthonormal, so the transpose IS the inverse and there is
+// no division here. That holds only while `R` really is a rotation: build one
+// from a non-unit quaternion and `MulRotVec` composed with this block scales
+// instead of round-tripping. Nothing checks it, for the reason `QuatLog` gives.
+//
+// NAME THE OPERATION, NOT THE FRAME. The C++ this ports from spells this
+// `globalToLocal`, then calls it on a washout attitude with an argument that is
+// not in the global frame at all. What the block knows is "undo this rotation";
+// which frames that moves between is the call site's business.
+//
+// See `MulRotVec` for why the unit is a parameter here but fixed in `QuatExp`.
 package se.kin;
 
 use se.kin;
 use se.math;
 
-node MulRotVec {
+node MultRotInvVec {
     units { U; }
 
-    inputs  { 
+    inputs  {
         R: kin.Rot;
         v: math.Vec3(U); // Global vector to be transformed.
     }
@@ -18,10 +33,37 @@ node MulRotVec {
         // u = R^T v
         const auto& R = in.R;
         const auto& v = in.v;
-        auto& u = out.v;
+        auto& u = out.u;
 
         u.x = R.R00*v.x + R.R10*v.y + R.R20*v.z;
         u.y = R.R01*v.x + R.R11*v.y + R.R21*v.z;
         u.z = R.R02*v.x + R.R12*v.y + R.R22*v.z;
+    }
+
+    tests {
+        units { U = m; }
+
+        set "the identity matrix leaves the vector alone, exactly", in.R, in.v = out.u {
+            { 1, 0, 0,  0, 1, 0,  0, 0, 1 }, { 1, 2, 3 }, { 1, 2, 3 }, "identity";
+            { 1, 0, 0,  0, 1, 0,  0, 0, 1 }, { 0, 0, 0 }, { 0, 0, 0 }, "zero vector";
+        }
+
+        // Columns of R, not rows. `MulRotVec` sends this same permutation to
+        // { 3, 1, 2 }; if these two rows ever agree, one of the two blocks has
+        // been written twice.
+        set "each output component takes a COLUMN of R", in.R, in.v = out.u {
+            { 0, 0, 1,  1, 0, 0,  0, 1, 0 }, { 1, 2, 3 }, { 2, 3, 1 }, "columns are e_y, e_z, e_x";
+        }
+
+        // The same R_z(90 deg) that `MulRotVec` tests, undone.
+        set "a quarter turn about z is undone", in.R, in.v = out.u {
+            { 0, -1, 0,  1, 0, 0,  0, 0, 1 }, { 0, 1, 0 }, { 1,  0, 0 }, "y -> x";
+            { 0, -1, 0,  1, 0, 0,  0, 0, 1 }, { 1, 0, 0 }, { 0, -1, 0 }, "x -> -y";
+            { 0, -1, 0,  1, 0, 0,  0, 0, 1 }, { 0, 0, 1 }, { 0,  0, 1 }, "z is the axis, so z is fixed";
+        }
+
+        set "a cell converts into the port's unit", in.R, in.v = out.u {
+            { 1, 0, 0,  0, 1, 0,  0, 0, 1 }, { 1 (km), 0, 0 }, { 1000, 0, 0 }, "a km cell arrives in m";
+        }
     }
 }

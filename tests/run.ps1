@@ -457,6 +457,21 @@ function Get-SmokeQuatRateSource() {
     return 'kqd'
 }
 
+# A rotation-MATRIX source, for the ports whose type is `kin.Rot`. The same
+# argument again: nine loose doubles are not a rotation, and `QuatToRot` is the
+# one block in the library that makes one -- it is where the local-to-global
+# convention is pinned -- so the source for a `Rot` port is the source for a
+# `Quat` port put through it.
+function Get-SmokeRotSource() {
+    if (-not $smokeSrc.Contains('kr')) {
+        $kq = Get-SmokeQuatSource
+        $smokeSrc['kr'] = @(
+            "        node kr: se.kin.QuatToRot {};",
+            "        $kq --> kr.q;")
+    }
+    return 'kr'
+}
+
 $smokeRoot = Join-Path $emitOut 'stdlib-smoke'
 if (Test-Path $smokeRoot) { Remove-Item -Recurse -Force $smokeRoot }
 $smokePkg = Join-Path $smokeRoot 'smoke'
@@ -510,6 +525,8 @@ foreach ($f in (Get-ChildItem (Join-Path $root 'stdlib') -Recurse -Filter *.se |
                 $src = Get-SmokeQuatRateSource
             } elseif ($parts[1] -match 'Quat') {
                 $src = Get-SmokeQuatSource
+            } elseif ($parts[1] -match 'Rot') {
+                $src = Get-SmokeRotSource
             }
             $smokeWires.Add("        $src --> ${ident}.${port};")
         }

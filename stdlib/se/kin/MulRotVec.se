@@ -1,3 +1,19 @@
+// Rotate a vector by a rotation matrix: `u = R v`, local (body) to global.
+//
+// `R` comes from `QuatToRot`, which pins the direction -- its matrix is
+// local-to-global -- so this is the forward block and `MultRotInvVec` is its
+// inverse. Taking a `kin.Rot` rather than a `kin.Quat` keeps the one place a
+// quaternion becomes a matrix in `QuatToRot`, and lets an attitude that is used
+// in both directions, as a commanded washout orientation is, build its matrix
+// once and feed both blocks.
+//
+// THE UNIT IS A PARAMETER here, where `QuatExp` and `QuatLog` fix theirs at
+// `rad`. That is the same rule, not an exception to it: `QuatExp`'s header
+// argues a rotation vector IS an angle and can be nothing else, and names
+// `math.Norm3` and `math.Cross3` as the contrasting case, where the caller
+// genuinely has a dimension to choose. A vector being rotated is that case. A
+// rotation is dimension-preserving and dimension-agnostic, and this same block
+// turns m/s^2 and rad/s in the washout.
 package se.kin;
 
 use se.kin;
@@ -6,7 +22,7 @@ use se.math;
 node MulRotVec {
     units { U; }
 
-    inputs  { 
+    inputs  {
         R: kin.Rot;
         v: math.Vec3(U); // Local vector to be transformed.
     }
@@ -18,10 +34,38 @@ node MulRotVec {
         // u = R v
         const auto& R = in.R;
         const auto& v = in.v;
-        auto& u = out.v;
+        auto& u = out.u;
 
         u.x = R.R00*v.x + R.R01*v.y + R.R02*v.z;
         u.y = R.R10*v.x + R.R11*v.y + R.R12*v.z;
         u.z = R.R20*v.x + R.R21*v.y + R.R22*v.z;
+    }
+
+    tests {
+        units { U = m; }
+
+        set "the identity matrix leaves the vector alone, exactly", in.R, in.v = out.u {
+            { 1, 0, 0,  0, 1, 0,  0, 0, 1 }, { 1, 2, 3 }, { 1, 2, 3 }, "identity";
+            { 1, 0, 0,  0, 1, 0,  0, 0, 1 }, { 0, 0, 0 }, { 0, 0, 0 }, "zero vector";
+        }
+
+        // Rows of R, not columns -- this is the row that separates `R v` from
+        // `R^T v`. The transpose of this same permutation is asserted in
+        // `MultRotInvVec` and gives { 2, 3, 1 }. If the two ever agree, one of
+        // the two blocks has been written twice.
+        set "each output component takes a ROW of R", in.R, in.v = out.u {
+            { 0, 0, 1,  1, 0, 0,  0, 1, 0 }, { 1, 2, 3 }, { 3, 1, 2 }, "rows are e_z, e_x, e_y";
+        }
+
+        // R_z(90 deg) = [[0,-1,0],[1,0,0],[0,0,1]].
+        set "a quarter turn about z carries x into y", in.R, in.v = out.u {
+            { 0, -1, 0,  1, 0, 0,  0, 0, 1 }, { 1, 0, 0 }, {  0, 1, 0 }, "x -> y";
+            { 0, -1, 0,  1, 0, 0,  0, 0, 1 }, { 0, 1, 0 }, { -1, 0, 0 }, "y -> -x";
+            { 0, -1, 0,  1, 0, 0,  0, 0, 1 }, { 0, 0, 1 }, {  0, 0, 1 }, "z is the axis, so z is fixed";
+        }
+
+        set "a cell converts into the port's unit", in.R, in.v = out.u {
+            { 1, 0, 0,  0, 1, 0,  0, 0, 1 }, { 1 (km), 0, 0 }, { 1000, 0, 0 }, "a km cell arrives in m";
+        }
     }
 }

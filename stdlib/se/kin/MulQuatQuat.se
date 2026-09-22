@@ -1,11 +1,23 @@
+// The Hamilton product of two quaternions, `q = q1 (x) q2`.
+//
+// ORDER IS NOT A DETAIL. The product does not commute, and the two spellings
+// differ by which frame the second rotation is taken in: `q2` acts in the frame
+// `q1` has already established, so `R(q1 (x) q2) = R(q1) R(q2)` with the
+// local-to-global `R` that `QuatToRot` pins. Composing a washout attitude with a
+// tilt lean as `qWash (x) qTilt` therefore leans the platform in its own turned
+// frame; the reverse leans it in the inertial one. That is a different machine,
+// and it looks identical on a plot until the heading is large.
+//
+// Unit quaternions in give a unit quaternion out, to rounding -- the product of
+// two unit quaternions is exact in norm -- so nothing here renormalises, for the
+// same reason `QuatLog` gives for not asserting it.
 package se.kin;
 
 use se.kin;
 
-node MulRotVec {
-    units { U; }
+node MulQuatQuat {
 
-    inputs  { 
+    inputs  {
         q1: kin.Quat;
         q2: kin.Quat;
     }
@@ -13,15 +25,52 @@ node MulRotVec {
         q: kin.Quat;
     }
 
-    output(R, v) {
+    output(q1, q2) {
         // q = q1 q2
         const auto& q1 = in.q1;
         const auto& q2 = in.q2;
         auto& q = out.q;
 
-        v.w = q1.w*q2.w - q1.x*q2.x - q1.y*q2.y - q1.z*q2.z;
-        v.x = q1.w*q2.x + q1.x*q2.w + q1.y*q2.z - q1.z*q2.y;
-        v.y = q1.w*q2.y + q1.y*q2.w + q1.z*q2.x - q1.x*q2.z;
-        v.z = q1.w*q2.z + q1.z*q2.w + q1.x*q2.y - q1.y*q2.x;
+        q.w = q1.w*q2.w - q1.x*q2.x - q1.y*q2.y - q1.z*q2.z;
+        q.x = q1.w*q2.x + q1.x*q2.w + q1.y*q2.z - q1.z*q2.y;
+        q.y = q1.w*q2.y + q1.y*q2.w + q1.z*q2.x - q1.x*q2.z;
+        q.z = q1.w*q2.z + q1.z*q2.w + q1.x*q2.y - q1.y*q2.x;
+    }
+
+    tests {
+        set "the identity is a two-sided identity, exactly", in.q1, in.q2 = out.q {
+            { 1, 0, 0, 0 }, { 1, 0, 0, 0 }, { 1, 0, 0, 0 }, "identity times identity";
+            { 1, 0, 0, 0 }, { 0, 1, 0, 0 }, { 0, 1, 0, 0 }, "identity on the left";
+            { 0, 0, 1, 0 }, { 1, 0, 0, 0 }, { 0, 0, 1, 0 }, "identity on the right";
+        }
+
+        // i j = k, j k = i, k i = j, i i = -1. Between them these pin every sign
+        // in the product: get one term wrong and at least one row moves.
+        set "the basis elements multiply as i, j, k", in.q1, in.q2 = out.q {
+            { 0, 1, 0, 0 }, { 0, 0, 1, 0 }, {  0, 0, 0, 1 }, "i j = k";
+            { 0, 0, 1, 0 }, { 0, 0, 0, 1 }, {  0, 1, 0, 0 }, "j k = i";
+            { 0, 0, 0, 1 }, { 0, 1, 0, 0 }, {  0, 0, 1, 0 }, "k i = j";
+            { 0, 1, 0, 0 }, { 0, 1, 0, 0 }, { -1, 0, 0, 0 }, "i i = -1";
+            { 0, 0, 0, 1 }, { 0, 0, 0, 1 }, { -1, 0, 0, 0 }, "k k = -1, two half turns";
+        }
+
+        set "the product does not commute", in.q1, in.q2 = out.q {
+            { 0, 0, 1, 0 }, { 0, 1, 0, 0 }, { 0, 0, 0, -1 }, "j i = -k, not +k";
+        }
+
+        set "rotations about a shared axis add their angles", in.q1, in.q2 ~= out.q within 1e-15 {
+            { sqrt(0.5), 0, 0, sqrt(0.5) }, { sqrt(0.5), 0, 0,  sqrt(0.5) }, { 0, 0, 0, 1 }, "90 + 90 about z is a half turn";
+            { sqrt(0.5), 0, 0, sqrt(0.5) }, { sqrt(0.5), 0, 0, -sqrt(0.5) }, { 1, 0, 0, 0 }, "90 - 90 about z is the identity";
+        }
+
+        // The cross-check that pins the ORDER against another block rather than
+        // against this one's own arithmetic. `EulerToQuat` composes Z-Y-X as
+        // qz(h) (x) qy(p) (x) qx(r), and its own tests assert these two outputs
+        // for { 90, 0, 90 } and { 0, 90, 90 } degrees. Feeding it the factors has
+        // to reproduce them. Swap the two operand columns and both rows fail.
+        set "the factors of EulerToQuat compose in this order", in.q1, in.q2 ~= out.q within 1e-15 {
+            { sqrt(0.5), 0, 0, sqrt(0.5) }, { sqrt(0.5), sqrt(0.5), 0, 0 }, { 0.5,  0.5, 0.5, 0.5 }, "qz(90) qx(90) = roll and heading";
+            { sqrt(0.5), 0, 0, sqrt(0.5) }, { sqrt(0.5), 0, sqrt(0.5), 0 }, { 0.5, -0.5, 0.5, 0.5 }, "qz(90) qy(90) = pitch and heading";
+        }
     }
 }
