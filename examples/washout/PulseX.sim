@@ -10,8 +10,27 @@ sim Washout {
         every: 10;           // 100 Hz in the file, off a 1 kHz base step
 
         signals {
+            // The drive: 1 m/s^2 into X for the first second.
             pulse.y;
+
+            // The translational channel, the axis the pulse is on. The three
+            // together are the whole cue: `aout` is what the platform is asked
+            // to do, and `vout`/`pout` are where that leaves it -- both must
+            // come back toward zero, or the platform runs out of rail.
             wash.aout.x;
+            wash.vout.x;
+            wash.pout.x;
+
+            // Z, which nothing drives: the startup transient of the constant
+            // -g inside `sf`, washing out and staying out. A column that
+            // should be flat after the first second, and says so.
+            wash.aout.z;
+
+            // The tilt channel's answer to the same pulse: the sustained lean
+            // that stands in for the acceleration the high pass threw away.
+            // Acceleration into X is cued by a positive pitch about Y.
+            wash.tiltCalc.tilt.y;
+
             // sim.utilization;
             // sim.overrun_pct;
         }
