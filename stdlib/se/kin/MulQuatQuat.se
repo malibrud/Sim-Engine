@@ -1,0 +1,27 @@
+package se.kin;
+
+use se.kin;
+
+node MulRotVec {
+    units { U; }
+
+    inputs  { 
+        q1: kin.Quat;
+        q2: kin.Quat;
+    }
+    outputs {
+        q: kin.Quat;
+    }
+
+    output(R, v) {
+        // q = q1 q2
+        const auto& q1 = in.q1;
+        const auto& q2 = in.q2;
+        auto& q = out.q;
+
+        v.w = q1.w*q2.w - q1.x*q2.x - q1.y*q2.y - q1.z*q2.z;
+        v.x = q1.w*q2.x + q1.x*q2.w + q1.y*q2.z - q1.z*q2.y;
+        v.y = q1.w*q2.y + q1.y*q2.w + q1.z*q2.x - q1.x*q2.z;
+        v.z = q1.w*q2.z + q1.z*q2.w + q1.x*q2.y - q1.y*q2.x;
+    }
+}

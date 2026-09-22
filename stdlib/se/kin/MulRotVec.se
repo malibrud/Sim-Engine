@@ -1,0 +1,27 @@
+package se.kin;
+
+use se.kin;
+use se.math;
+
+node MulRotVec {
+    units { U; }
+
+    inputs  { 
+        R: kin.Rot;
+        v: math.Vec3(U); // Local vector to be transformed.
+    }
+    outputs {
+        u: math.Vec3(U); // Global vector computed.
+    }
+
+    output(R, v) {
+        // u = R v
+        const auto& R = in.R;
+        const auto& v = in.v;
+        auto& u = out.v;
+
+        u.x = R.R00*v.x + R.R01*v.y + R.R02*v.z;
+        u.y = R.R10*v.x + R.R11*v.y + R.R12*v.z;
+        u.z = R.R20*v.x + R.R21*v.y + R.R22*v.z;
+    }
+}
