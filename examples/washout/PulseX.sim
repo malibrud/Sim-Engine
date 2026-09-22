@@ -10,24 +10,36 @@ sim Washout {
         every: 10;           // 100 Hz in the file, off a 1 kHz base step
 
         signals {
-            // The drive: 1 m/s^2 into X for the first second.
+            // The drive: 1 m/s^2 into X, held for 10 s of a 20 s run.
+            // Long enough that the cue reaches steady state twice -- once
+            // under the pulse and once after it -- which a short pulse
+            // never gets to.
             pulse.y;
 
-            // The translational channel, the axis the pulse is on. The three
-            // together are the whole cue: `aout` is what the platform is asked
-            // to do, and `vout`/`pout` are where that leaves it -- both must
-            // come back toward zero, or the platform runs out of rail.
+            // The translational channel, the axis the pulse is on. It
+            // answers each EDGE and nothing in between: `aout.x` leaves at
+            // the full 1 m/s^2, washes back through zero, and is under
+            // 0.01 by t = 2.3 with eight seconds of pulse still to go --
+            // then does the mirror image at the release. `vout`/`pout` are
+            // where that leaves the platform, and both must come back
+            // toward zero or it runs out of rail; here the whole ride is
+            // 13 cm, -0.074 m to +0.060 m.
             wash.aout.x;
             wash.vout.x;
             wash.pout.x;
 
-            // Z, which nothing drives: the startup transient of the constant
-            // -g inside `sf`, washing out and staying out. A column that
-            // should be flat after the first second, and says so.
+            // Z, which nothing drives: the startup transient of the
+            // constant -g inside `sf`. It leaves at -9.80665, overshoots
+            // positive, and is under 0.05 by t = 2.6. A column that should
+            // be flat for the rest of the run, and says so.
             wash.aout.z;
 
-            // The tilt channel's answer to the same pulse: the sustained lean
-            // that stands in for the acceleration the high pass threw away.
+            // The tilt channel, and a 10 s pulse is long enough to show
+            // the steady state: the lean settles at 0.1021 rad (5.85 deg)
+            // and HOLDS there while the high pass washes X away, so from
+            // about t = 2.5 the tilt is carrying the cue by itself. That
+            // is the whole point of the channel, and it checks out --
+            // g*sin(0.1021) = 1.000 m/s^2, the acceleration commanded.
             // Acceleration into X is cued by a positive pitch about Y.
             wash.tiltCalc.tilt.y;
 

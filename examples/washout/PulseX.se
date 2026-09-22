@@ -5,10 +5,15 @@ use se.sig;
 
 node PulseX {
     settings {
+        duration: double(s) = 10.0;
+        amplitude: double(m/s^2) = 1.0;
     }
 
     structure {
-        node pulse: sig.src.RectPulse (m/s^2);
+        node pulse: sig.src.RectPulse (m/s^2) {
+            t_duration = param.duration;
+            amplitude = param.amplitude;
+        };
         node ain: math.Merge3(m/s^2);
         node win: math.Merge3(rad/s);
         node wash: washout.Classical {
