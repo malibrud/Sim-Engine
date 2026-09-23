@@ -1,7 +1,7 @@
 // Rotate a vector by a rotation matrix: `u = R v`, local (body) to global.
 //
 // `R` comes from `QuatToRot`, which pins the direction -- its matrix is
-// local-to-global -- so this is the forward block and `MultRotInvVec` is its
+// local-to-global -- so this is the forward block and `MulRotInvVec` is its
 // inverse. Taking a `kin.Rot` rather than a `kin.Quat` keeps the one place a
 // quaternion becomes a matrix in `QuatToRot`, and lets an attitude that is used
 // in both directions, as a commanded washout orientation is, build its matrix
@@ -51,7 +51,7 @@ node MulRotVec {
 
         // Rows of R, not columns -- this is the row that separates `R v` from
         // `R^T v`. The transpose of this same permutation is asserted in
-        // `MultRotInvVec` and gives { 2, 3, 1 }. If the two ever agree, one of
+        // `MulRotInvVec` and gives { 2, 3, 1 }. If the two ever agree, one of
         // the two blocks has been written twice.
         set "each output component takes a ROW of R", in.R, in.v = out.u {
             { 0, 0, 1,  1, 0, 0,  0, 1, 0 }, { 1, 2, 3 }, { 3, 1, 2 }, "rows are e_z, e_x, e_y";

@@ -18,7 +18,7 @@ package se.kin;
 use se.kin;
 use se.math;
 
-node MultRotInvVec {
+node MulRotInvVec {
     units { U; }
 
     inputs  {

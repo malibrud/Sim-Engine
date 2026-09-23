@@ -1,5 +1,9 @@
-// Drives the translational channel from the root boundary: a host writes the
-// specific force into `sig.in`, reads the commanded platform acceleration back.
+// Drives the washout from the root boundary: a host writes the vehicle's
+// KINEMATIC, gravity-free body acceleration into `ain` and its body angular rate
+// into `win`, and reads the commanded platform motion back from `aout`, `vout`,
+// `pout`. Not specific force -- a vehicle at rest and level drives `ain` with
+// {0, 0, 0}; see the boundary note in `Classical.se` for why, and for the -2 g
+// that reading it the other way round produces.
 sim Washout {
     root: washout.Classical {};
 
