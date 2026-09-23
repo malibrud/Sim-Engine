@@ -43,6 +43,20 @@ sim Washout {
             // Acceleration into X is cued by a positive pitch about Y.
             wash.tiltCalc.tilt.y;
 
+            // The commanded attitude, and here it is the tilt and nothing
+            // else: `win` is zero, so the washout attitude never leaves
+            // identity, `qCmd = qWash (x) qTilt` is `qTilt`, and the pitch
+            // comes back out of the quaternion as the lean that went in --
+            // `ecmd.y` equals `tilt.y` on every row as printed. Its body rate
+            // is the tilt's own, `cos(roll) * pitch'` with no roll, so
+            // `wcmd.y` is `tiltCalc.tiltRate.y`: it peaks at 0.092 rad/s by
+            // t = 0.3 as the lean builds and decays to zero without crossing
+            // it -- the tilt low pass is overdamped -- then does the same
+            // negative at the release. Neither column moves the ones above --
+            // nothing reads the commanded attitude there yet.
+            wash.ecmd.y;
+            wash.wcmd.y;
+
             // sim.utilization;
             // sim.overrun_pct;
         }

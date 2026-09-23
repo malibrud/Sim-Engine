@@ -1,0 +1,34 @@
+// Reid & Nahon's longitudinal (surge) standard test, as the washout repo's
+// validation suite drives it: `longitudinal_accel` in validation/maneuvers.h,
+// golden run validation/golden/Classical__longitudinal_accel.csv.
+//
+// A 2 m/s^2 forward acceleration from t = 0, held 10 s, vehicle level. The
+// suite's README says 1.0; the code, and so the golden, say 2.0.
+package washout;
+
+use se.math;
+use se.sig;
+
+node LongitudinalAccel {
+    settings {
+        duration:  double(s)     = 10.0;
+        amplitude: double(m/s^2) = 2.0;
+    }
+
+    structure {
+        node pulse: sig.src.RectPulse (m/s^2) {
+            t_duration = param.duration;
+            amplitude  = param.amplitude;
+        };
+        node ain: math.Merge3(m/s^2);
+        node win: math.Merge3(rad/s);
+        node wash: washout.Classical {};
+
+        pulse --> ain.x;
+        0.0 --> ain.y, ain.z;
+        0.0 --> win.x, win.y, win.z;
+
+        ain --> wash.ain;
+        win --> wash.win;
+    }
+}

@@ -346,6 +346,15 @@ $examples = @(
     # at 100 Hz off a 1 kHz step. It is the example that exercises a source, a
     # record block and a log block together, so it has to compile on every run.
     @{ name = 'pulsex';     sim = 'examples/washout/PulseX.sim';
+       roots = @('examples', 'stdlib') },
+    # Three of Reid & Nahon's standard tests, to overlay on the washout repo's
+    # golden runs. They share RN85.settings, so they also keep a `.settings`
+    # source with record-field overrides compiling.
+    @{ name = 'rn85long';   sim = 'examples/washout/LongitudinalAccel.sim';
+       roots = @('examples', 'stdlib') },
+    @{ name = 'rn85vert';   sim = 'examples/washout/VerticalAccel.sim';
+       roots = @('examples', 'stdlib') },
+    @{ name = 'rn85yaw';    sim = 'examples/washout/YawRate.sim';
        roots = @('examples', 'stdlib') }
 )
 foreach ($ex in $examples) {

@@ -1,0 +1,60 @@
+// Reid & Nahon's surge test, to overlay on the washout repo's golden run
+// validation/golden/Classical__longitudinal_accel.csv. Same drive, same 40 s,
+// same 100 Hz in the file, same g (RN85.settings).
+//
+// The golden is a DISCRETE run: 100 Hz filters by the bilinear transform, so its
+// sample i sits about half a sample (5 ms) later in continuous time than this
+// file's row i. Everything below that says "overlays" was measured against it,
+// and the half sample is the whole of the difference.
+sim LongitudinalAccel {
+    root: washout.LongitudinalAccel {};
+
+    step:     1 (ms);
+    solver:   rk4;
+    duration: 40 (s);
+
+    settings: "RN85.settings";
+
+    record: {
+        file:  "longitudinal_accel.csv";
+        every: 10;           // 100 Hz, the golden's rate
+
+        signals {
+            // The drive: 2 m/s^2 forward, 0-10 s.
+            pulse.y;
+
+            // The translational channel -- golden `out_acc_x`, `out_vel_x`,
+            // `out_pos_x`. These do NOT overlay yet and are not meant to:
+            // the golden adds gravity through the commanded attitude to the
+            // specific force (R&N block B11) and this node does not until the
+            // next commit. Both wash X out during the hold -- under 0.002 by
+            // t = 10 -- and differ in the shape of the transients: the
+            // undershoot is -0.195 at t = 0.55 here against -0.328 at t = 0.46
+            // in the golden, and the ride ends 2.4 mm from home here against
+            // 2.4 cm.
+            wash.aout.x;
+            wash.vout.x;
+            wash.pout.x;
+
+            // The commanded attitude -- golden `out_roll (PHIS)`,
+            // `out_pitch (THETAS)`, `out_yaw (PSIS)`, and these DO overlay.
+            // Pitch leans nose-up to asin(2/9.81) = 0.2053 rad, 99% there by
+            // t = 3.7, holds it for the rest of the pulse, and comes back
+            // after it: 3e-5 rad from the golden once the half sample is
+            // allowed for, 9e-4 without. Roll and heading are zero in both.
+            wash.ecmd.x;
+            wash.ecmd.y;
+            wash.ecmd.z;
+
+            // Its body rate -- golden `out_p (PS)`, `out_q (QS)`,
+            // `out_r (RS)`. Pure tilt rate here: 0.183 rad/s at t = 0.29 and
+            // -0.186 at t = 10.28. The release peak is the larger because the
+            // arcsine's slope, 1/cos(tilt), is steeper at 0.2 rad than at 0,
+            // and the golden shows the same 0.186. 3e-4 rad/s from it
+            // half-shifted, 8e-4 away from the two edges.
+            wash.wcmd.x;
+            wash.wcmd.y;
+            wash.wcmd.z;
+        }
+    }
+}

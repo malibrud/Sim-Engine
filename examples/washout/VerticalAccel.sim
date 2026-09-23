@@ -1,0 +1,50 @@
+// Reid & Nahon's heave test, to overlay on the washout repo's golden run
+// validation/golden/Classical__vertical_accel.csv. Same drive, same 40 s,
+// same 100 Hz in the file, same g (RN85.settings). See LongitudinalAccel.sim
+// for the half sample between the golden's rows and these.
+sim VerticalAccel {
+    root: washout.VerticalAccel {};
+
+    step:     1 (ms);
+    solver:   rk4;
+    duration: 40 (s);
+
+    settings: "RN85.settings";
+
+    record: {
+        file:  "vertical_accel.csv";
+        every: 10;           // 100 Hz, the golden's rate
+
+        signals {
+            // The drive: 2 m/s^2 along +Z, which is DOWN, 0-10 s.
+            pulse.y;
+
+            // The translational channel -- golden `out_acc_z`, `out_vel_z`,
+            // `out_pos_z` -- and the clearest view there is of what the next
+            // commit changes. `aout.z` starts at -7.81 = 2 - 9.81: the step
+            // on top of the constant -g inside `sf`, both passed by the high
+            // passes as one step. The golden starts at +1.91, the step alone,
+            // because its gravity coupling adds g back through the commanded
+            // attitude, and level that cancels -g exactly. So the -g is all
+            // of the difference: the golden's `out_acc_z` is this node's
+            // LongitudinalAccel `aout.x` -- the same 2 m/s^2 through the same
+            // filters, with no g in it -- to 9e-4 half-shifted. The -g
+            // transient is also why `pout.z` dips to -0.47 m at t = 1.4 here,
+            // where the golden's never leaves +-0.15 m.
+            wash.aout.z;
+            wash.vout.z;
+            wash.pout.z;
+
+            // The commanded attitude and its rate: zero on every row, exactly,
+            // here and in the golden. Z has no tilt to lean into -- `TiltCalc`
+            // takes X and Y only -- so heave is cued by translation alone. A
+            // nonzero cell in any of these six is a leak between channels.
+            wash.ecmd.x;
+            wash.ecmd.y;
+            wash.ecmd.z;
+            wash.wcmd.x;
+            wash.wcmd.y;
+            wash.wcmd.z;
+        }
+    }
+}

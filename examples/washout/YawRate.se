@@ -1,0 +1,35 @@
+// Reid & Nahon's yaw standard test, as the washout repo's validation suite
+// drives it: `yaw_rate` in validation/maneuvers.h, golden run
+// validation/golden/Classical__yaw_rate.csv.
+//
+// A 0.4 rad/s yaw rate from t = 0, held 10 s -- positive about +Z, which is
+// down in SAE, so a turn to the right. No acceleration: yaw does not tilt
+// gravity, so this is the one standard test that is purely rotational.
+package washout;
+
+use se.math;
+use se.sig;
+
+node YawRate {
+    settings {
+        duration:  double(s)     = 10.0;
+        amplitude: double(rad/s) = 0.4;
+    }
+
+    structure {
+        node pulse: sig.src.RectPulse (rad/s) {
+            t_duration = param.duration;
+            amplitude  = param.amplitude;
+        };
+        node ain: math.Merge3(m/s^2);
+        node win: math.Merge3(rad/s);
+        node wash: washout.Classical {};
+
+        0.0 --> ain.x, ain.y, ain.z;
+        pulse --> win.z;
+        0.0 --> win.x, win.y;
+
+        ain --> wash.ain;
+        win --> wash.win;
+    }
+}

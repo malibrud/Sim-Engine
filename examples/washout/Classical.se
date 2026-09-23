@@ -23,19 +23,29 @@
 //   tilt            the X and Y accelerations, low passed, become the steady
 //                   lean that stands in for them -- `TiltCalc` inverts
 //                   a = g*sin(tilt) -- and `kin.EulerToQuat` puts that lean in
-//                   the form the attitude channel wants: `qtilt`.
+//                   the form the attitude channel wants: `qTilt`.
 //
 //   rotation        win -> scale/limit -> high pass -> a quaternion integrator
-//                   whose leak returns it to neutral: `qwash`.
+//                   whose leak returns it to neutral: `qWash`.
 //
-// THE ATTITUDE OUTPUTS ARE NOT YET COMPOSED. The C++ this is ported from forms
-// one commanded orientation, `qCmd = qWash (x) qTilt`, and reads the gravity
-// coupling and the commanded body rates off it. Doing that here needs blocks
-// `se.kin` does not have yet -- a quaternion product, and rotating a vector by
-// a quaternion -- so this node publishes the two halves and leaves the
-// composition to whoever needs it. The translational channel is correspondingly
-// one step simpler than the C++: it subtracts a CONSTANT `grav` rather than
-// gravity resolved through the commanded attitude.
+// THE COMMANDED ATTITUDE is the two composed, `qCmd = qWash (x) qTilt`, and it
+// leaves as `qcmd`, as Euler angles `ecmd`, and with its body rate `wcmd`. The
+// tilt is on the RIGHT: it leans the platform within the frame the rotation
+// channel has already turned it to, which is the C++'s choice and the reason
+// `MulQuatQuat`'s header gives for order mattering. Its body rate follows:
+//
+//     wcmd = R(qTilt)^T * (w_hp - wc*log qWash)  +  w_tilt
+//
+// the washout's own rate, carried through the tilt into the commanded frame,
+// plus the tilt's rate. `rotQ.wleak` supplies the leak half of the first term
+// and `kin.EulerRateToAngRate` the second; each factor is its own node so each
+// can be read against washout_Classical.h:365-398.
+//
+// The translational channel does not use `qCmd` yet: it subtracts a CONSTANT
+// `grav`, where the C++ adds gravity resolved through the commanded attitude to
+// cancel the cue the tilt already gives. Until it does, a sustained X or Y
+// acceleration is cued twice -- once by the lean and once, until the high
+// passes wash it, by the platform.
 //
 // COORDINATE CONVENTION -- SAE, matching `se.math.Vec3`: X forward/north, Y
 // right/east, Z down.
@@ -85,8 +95,9 @@ node Classical {
         vout: math.Vec3(m/s);  // commanded platform velocity
         pout: math.Vec3(m);    // commanded platform position
 
-        qwash: kin.Quat;       // washed-out attitude, rotation channel
-        qtilt: kin.Quat;       // the tilt-coordination lean
+        qcmd: kin.Quat;        // commanded platform attitude, qWash (x) qTilt
+        ecmd: math.Vec3(rad);  // the same, as SAE (roll, pitch, heading)
+        wcmd: math.Vec3(rad/s);// commanded platform body rate
     }
 
     structure {
@@ -130,6 +141,19 @@ node Classical {
         };
 
         //----------------------------------
+        // Commanded Attitude Nodes
+        //----------------------------------
+
+        node qCmd: kin.MulQuatQuat {};            // qWash (x) qTilt
+        node eCmd: kin.QuatToEuler {};
+
+        node wWash:  math.Diff3 (rad/s);          // w_hp - wc*log qWash
+        node tiltR:  kin.QuatToRot {};
+        node wWashT: kin.MulRotInvVec (rad/s);    // R(qTilt)^T * wWash
+        node wTilt:  kin.EulerRateToAngRate {};
+        node wCmd:   math.Sum3 (rad/s);
+
+        //----------------------------------
         // Translational Channel Nodes
         //----------------------------------
 
@@ -164,11 +188,27 @@ node Classical {
         self.ain --> xyAccel --> tiltScale --> tiltLocalFilt;
                                                tiltLocalFilt.vout  --> tiltCalc.acc;
                                                tiltLocalFilt.voutd --> tiltCalc.accRate;
-        tiltCalc.tilt --> tiltQuat --> self.qtilt;
+        tiltCalc.tilt --> tiltQuat;
 
         // Rotational Channel
         self.win --> rotScale --> rotLocalFilt --> rotQ;
-        rotQ.q --> self.qwash;
+
+        // Commanded Attitude
+        rotQ.q   --> qCmd.q1;
+        tiltQuat --> qCmd.q2;
+        qCmd --> self.qcmd;
+        qCmd --> eCmd --> self.ecmd;
+
+        // Commanded Body Rate
+        rotLocalFilt  --> wWash.a;
+        rotQ.wleak    --> wWash.b;
+        tiltQuat --> tiltR --> wWashT.R;
+        wWash                --> wWashT.v;
+        tiltCalc.tilt     --> wTilt.e;
+        tiltCalc.tiltRate --> wTilt.ed;
+        wWashT --> wCmd.a;
+        wTilt  --> wCmd.b;
+        wCmd --> self.wcmd;
 
         // Translational Channel
         self.ain --> transScale  --> sf.a;

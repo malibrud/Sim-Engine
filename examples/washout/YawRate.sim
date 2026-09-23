@@ -1,0 +1,60 @@
+// Reid & Nahon's yaw test, to overlay on the washout repo's golden run
+// validation/golden/Classical__yaw_rate.csv. Same drive, same 40 s, same
+// 100 Hz in the file, same g (RN85.settings). See LongitudinalAccel.sim for the
+// half sample between the golden's rows and these.
+//
+// The one standard test that is purely rotational, and so the one that drives
+// the rotation channel's washout attitude at all: `win` is zero in every other
+// example here.
+sim YawRate {
+    root: washout.YawRate {};
+
+    step:     1 (ms);
+    solver:   rk4;
+    duration: 40 (s);
+
+    settings: "RN85.settings";
+
+    record: {
+        file:  "yaw_rate.csv";
+        every: 10;           // 100 Hz, the golden's rate
+
+        signals {
+            // The drive: 0.4 rad/s about +Z -- a right turn in SAE -- 0-10 s.
+            pulse.y;
+
+            // Z, which nothing translational drives. The golden's translation
+            // columns are zero on every row; this one carries only the startup
+            // transient of the constant -g inside `sf` -- from -9.81, and
+            // enough to take `pout.z` to -0.59 m at t = 1.4. The next commit's
+            // gravity coupling cancels it, and then these three are zero too.
+            wash.aout.z;
+            wash.vout.z;
+            wash.pout.z;
+
+            // The commanded attitude -- golden `out_roll`, `out_pitch`,
+            // `out_yaw` -- and the rotation washout's own shape. Heading turns
+            // right to 0.133 rad by t = 0.88 and is washed back while the rate
+            // still holds, overshooting to -0.023 at t = 6.6; at the release
+            // it swings -0.149 at t = 10.9 and rings back out. Every one of
+            // those extremes is in the golden one sample EARLIER, 0.87, 6.57,
+            // 10.86: its washout attitude is a per-step update
+            // `qWash (x) exp(w dt)` that has already taken sample i's rate
+            // when it reports sample i. Allowing that one sample the two agree
+            // to 1e-4 rad; not allowing it, to 1e-3. Roll and pitch are zero in
+            // both -- a yaw rate leans nothing.
+            wash.ecmd.x;
+            wash.ecmd.y;
+            wash.ecmd.z;
+
+            // Its body rate -- golden `out_p`, `out_q`, `out_r`. The high pass
+            // passes the step whole, so `wcmd.z` starts at the full 0.4 and
+            // decays through zero to -0.064 at t = 1.8 while the drive still
+            // holds; the release mirrors it. 2e-3 rad/s from the golden, all
+            // of it the half sample on a rate falling 0.37 rad/s^2 at t = 0.5.
+            wash.wcmd.x;
+            wash.wcmd.y;
+            wash.wcmd.z;
+        }
+    }
+}
