@@ -1,0 +1,96 @@
+// Unit quaternion -> SAE Euler angles of the same attitude. The inverse of
+// `EulerToQuat`, in the same convention: `e` is (roll, pitch, heading) =
+// (x, y, z), applied Z-Y-X, so `EulerToQuat(QuatToEuler(q))` is `q` or `-q`.
+//
+//     roll    = atan2( 2(wx + yz), 1 - 2(x^2 + y^2) )
+//     pitch   = asin ( 2(wy - zx) )
+//     heading = atan2( 2(wz + xy), 1 - 2(y^2 + z^2) )
+//
+// Every term is quadratic in `q`, so `q` and `-q` give the same angles, as
+// they must: they are the same rotation. Roll and heading come back in
+// (-pi, pi], pitch in [-pi/2, pi/2].
+//
+// THE FORMULA ASSUMES |q| = 1, and this block says so as a contract (SPEC
+// 10.6). The `1 - 2(...)` terms stand in for `w^2 + x^2 - y^2 - z^2` and its
+// kin, which is an identity only on the unit sphere. `QuatLog` makes the
+// opposite choice and argues for it: there the norm cancels, so asserting it
+// would be claiming something the block does not need. Here it does not
+// cancel, so the claim belongs here, the way SPEC 10.6's example puts it on
+// `QuatToRot`.
+//
+// THE TOLERANCE IS 1e-6, NOT 1e-9, and it is sized against the integrator, not
+// against rounding. A contract is checked at every solver stage (SPEC 10.6),
+// and an RK4 stage state `q + (h/2) q_dot` leaves the sphere by about
+// `(h|w|/4)^2 / 2` before `adjust()` ever sees it: 1.3e-7 at a 1 ms step and
+// the washout's 2 rad/s rate limit, 1.3e-5 at 10 ms. That drift moves the
+// angles by the same order, so it is harmless, and a check that fired on it
+// would fail correct runs. The misuse worth catching -- a quaternion that is
+// not an attitude at all reaching this port -- is off by order one.
+//
+// GIMBAL LOCK. At pitch = +-90 deg roll and heading stop being separately
+// defined -- only their sum or difference is -- and both atan2 arguments go to
+// zero, so each angle is whatever the rounding makes it. Nothing is done about
+// that, as nothing is in the C++ this is ported from: the output is an angle
+// report, not something integrated. Rounding can also carry the asin argument
+// just past 1 there, which is what the clamp is for; without it the pitch is
+// NaN at exactly the attitude where it is most obviously 90 deg.
+package se.kin;
+
+use se.math;
+use se.kin;
+
+node QuatToEuler {
+
+    inputs  { q: kin.Quat; }
+    outputs { e: math.Vec3(rad); }
+
+    output(q) {
+        const double qw = in.q.w;
+        const double qx = in.q.x;
+        const double qy = in.q.y;
+        const double qz = in.q.z;
+
+        sim.check_near(std::sqrt(qw*qw + qx*qx + qy*qy + qz*qz), 1.0, 1e-6,
+                       "input quaternion is unit-norm");
+
+        const double sp = 2.0*(qw*qy - qz*qx);
+
+        out.e.x = std::atan2(2.0*(qw*qx + qy*qz), 1.0 - 2.0*(qx*qx + qy*qy));
+        out.e.y = std::asin(std::fmax(-1.0, std::fmin(1.0, sp)));
+        out.e.z = std::atan2(2.0*(qw*qz + qx*qy), 1.0 - 2.0*(qy*qy + qz*qz));
+    }
+
+    tests {
+        set "the identity gives zero angles, exactly", in.q = out.e {
+            { 1, 0, 0, 0 }, { 0, 0, 0 }, "identity";
+        }
+
+        // `EulerToQuat`'s single-axis rows, read back.
+        set "a rotation about one axis is that one angle", in.q ~= out.e within 1e-15 {
+            { sqrt(0.5),  sqrt(0.5), 0,         0         }, {  90 (deg), 0,        0         }, "roll";
+            { sqrt(0.5),  0,         0,         sqrt(0.5) }, {  0,        0,        90 (deg)  }, "heading";
+            { sqrt(0.5), -sqrt(0.5), 0,         0         }, { -90 (deg), 0,        0         }, "negative roll";
+            { 0,          0,         0,         1         }, {  0,        0,        180 (deg) }, "half turn";
+        }
+
+        // And its Z-Y-X rows. The second is also gimbal lock, so only the
+        // first is asserted in full.
+        set "the angles come back Z-Y-X", in.q ~= out.e within 1e-15 {
+            { 0.5, 0.5, 0.5, 0.5 }, { 90 (deg), 0, 90 (deg) }, "roll and heading";
+        }
+
+        set "q and -q are the same attitude", in.q ~= out.e within 1e-15 {
+            {  0.5,  0.5,  0.5,  0.5 }, { 90 (deg), 0, 90 (deg) }, "negated";
+            { -sqrt(0.5), -sqrt(0.5), 0, 0 }, { 90 (deg), 0, 0 }, "negated roll";
+        }
+
+        // 2*(c*c) rounds to 1 + 2^-52 here: past asin's domain by one ulp.
+        // Roll and heading are unasserted -- at this attitude they are
+        // rounding (see the header).
+        set "pitch at 90 deg is held in asin's domain", in.q ~= out.e.y within 1e-15 {
+            { sqrt(0.5), 0, sqrt(0.5), 0 },  90 (deg), "pitch up";
+            { sqrt(0.5), 0, -sqrt(0.5), 0 }, -90 (deg), "pitch down";
+            { 0.5, -0.5, 0.5, 0.5 },         90 (deg), "pitch and heading";
+        }
+    }
+}

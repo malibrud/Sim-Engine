@@ -1,0 +1,79 @@
+﻿// SAE Euler-angle rates -> the body angular rate they describe, at the
+// attitude `e`, in `EulerToQuat`'s convention: (roll, pitch, heading) =
+// (x, y, z), applied Z-Y-X.
+//
+//     wx = roll'                     - sin(pitch)            * heading'
+//     wy = cos(roll) * pitch'        + sin(roll) * cos(pitch) * heading'
+//     wz = -sin(roll) * pitch'       + cos(roll) * cos(pitch) * heading'
+//
+// Each Euler rate is a spin about its own axis as that axis sits after the
+// rotations applied before it, resolved into the body: roll' about body x as
+// it is, pitch' about the y axis before the roll, heading' about the z axis
+// before both. Heading itself appears nowhere, and so is not read.
+//
+// ONLY THIS DIRECTION EXISTS, ON PURPOSE. The matrix above is polynomial in
+// sines and cosines and is defined at every attitude. Its inverse, body rate to
+// Euler rates, carries `tan(pitch)` and `1/cos(pitch)` and is singular at
+// +-90 deg -- Reid & Nahon's TT matrix, which is exactly what the C++ this is
+// ported from redesigned its rotation channel to get away from. At 90 deg
+// pitch this block still has an answer: a heading rate there IS a roll rate,
+// with the sign of the pitch's sine against it. That is gimbal lock seen from
+// the side where it costs nothing.
+//
+// The washout's tilt channel is the caller that needs it: `TiltCalc` produces
+// the lean as Euler angles with their rates, and the platform's commanded body
+// rate needs the lean's contribution as a body rate. With heading' = 0 this
+// reduces to the C++'s `(roll', cos(roll)*pitch', -sin(roll)*pitch')`.
+package se.kin;
+
+use se.math;
+
+node EulerRateToAngRate {
+
+    inputs  {
+        e:  math.Vec3(rad);     // (roll, pitch, heading)
+        ed: math.Vec3(rad/s);   // their rates
+    }
+    outputs { w: math.Vec3(rad/s); }   // body rate, in local coordinates
+
+    output(e, ed) {
+        const double sr = std::sin(in.e.x), cr = std::cos(in.e.x);
+        const double sp = std::sin(in.e.y), cp = std::cos(in.e.y);
+
+        const double rd = in.ed.x;
+        const double pd = in.ed.y;
+        const double hd = in.ed.z;
+
+        out.w.x = rd             - sp * hd;
+        out.w.y = cr * pd + sr * cp * hd;
+        out.w.z = -sr * pd + cr * cp * hd;
+    }
+
+    tests {
+        set "level, the rates are the body rate, exactly", in.e, in.ed = out.w {
+            { 0, 0, 0 }, { 1, 2, 3 }, { 1, 2, 3 }, "level";
+        }
+
+        set "a roll rate is a body x rate at any attitude", in.e, in.ed ~= out.w within 1e-15 {
+            { 30 (deg), -20 (deg), 70 (deg) }, { 1, 0, 0 }, { 1, 0, 0 }, "tilted";
+            { 90 (deg),  90 (deg),  0       }, { 1, 0, 0 }, { 1, 0, 0 }, "at gimbal lock";
+        }
+
+        // The C++'s tilt body rate, with heading' = 0: (roll', cos(roll)*pitch',
+        // -sin(roll)*pitch'). cos(30 deg) = sqrt(0.75).
+        set "a rolled pitch rate tips into body z", in.e, in.ed ~= out.w within 1e-15 {
+            { 30 (deg), 0, 0 }, { 0.5, 1, 0 }, { 0.5, sqrt(0.75), -0.5 }, "rolled 30 deg";
+            { 90 (deg), 0, 0 }, { 0,   1, 0 }, { 0,   0,          -1   }, "rolled 90 deg";
+        }
+
+        set "at 90 deg of pitch a heading rate is a roll rate", in.e, in.ed ~= out.w within 1e-15 {
+            { 0,  90 (deg), 0 }, { 0, 0, 1 }, { -1, 0, 0 }, "pitched up";
+            { 0, -90 (deg), 0 }, { 0, 0, 1 }, {  1, 0, 0 }, "pitched down";
+        }
+
+        set "heading is not read", in.e, in.ed ~= out.w within 1e-15 {
+            { 0.3, -0.2, 0   }, { 0.1, 0.2, 0.3 }, { 0.1 - sin(-0.2) * 0.3, cos(0.3) * 0.2 + sin(0.3) * cos(-0.2) * 0.3, -sin(0.3) * 0.2 + cos(0.3) * cos(-0.2) * 0.3 }, "heading 0";
+            { 0.3, -0.2, 2.5 }, { 0.1, 0.2, 0.3 }, { 0.1 - sin(-0.2) * 0.3, cos(0.3) * 0.2 + sin(0.3) * cos(-0.2) * 0.3, -sin(0.3) * 0.2 + cos(0.3) * cos(-0.2) * 0.3 }, "heading 2.5 rad";
+        }
+    }
+}

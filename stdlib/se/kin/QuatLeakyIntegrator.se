@@ -24,6 +24,17 @@
 // trade this node exists to make; the graph form is still available from
 // `QuatLog`, `math.Scale3`, `math.Diff3` and `QuatIntegrator`.
 //
+// THE LEAK IS PUBLISHED AS `wleak`, and ONLY the leak. A caller that needs the
+// attitude's own body rate -- the washout does, for its commanded rates -- has
+// `w - wleak`, and forms it with a `math.Diff3` from the same `w` it feeds in.
+// Publishing that difference directly would save the caller one node and cost
+// every caller the property this block exists for: `output()` would have to
+// read `in.w`, which makes `w` feedthrough (SPEC 8.3), and a graph that closes
+// a path from `q` back to `w` through anything algebraic becomes an algebraic
+// loop. `wleak` is a function of the state alone, so `output()` still reads no
+// inputs and the node still breaks every loop it sits in. Both methods take
+// the law from `leakOf()`, so the leak published is the leak integrated.
+//
 // WHAT `wc` IS. Against a constant body rate the bracket gives `theta_dot =
 // w - wc*theta`, so the orientation is `theta(s) = w(s)/(s + wc)` -- and
 // against the TRUE orientation `w/s` that ratio is `s/(s + wc)`, a first-order
@@ -43,7 +54,7 @@
 // load-bearing again. The shortest-rotation flip is what makes "decay toward
 // neutral" mean the short way round -- without it an orientation past pi leaks
 // AWAY from neutral. Here the flip lives in `adjust()`, which holds `qw >= 0`
-// in the state itself, so `derivative()` reads the state as it stands. The one
+// in the state itself, so `leakOf()` reads the state as it stands. The one
 // gap is inside a step: an RK4 stage taken right at a half turn can see `qw`
 // slightly negative and leak the long way for that fraction of a step. The
 // error is tiny and the next `adjust()` removes it. Scale invariance is what
@@ -69,7 +80,10 @@ node QuatLeakyIntegrator {
     }
 
     inputs  { w: math.Vec3(rad/s); }   // body rate, in local coordinates
-    outputs { q: kin.Quat; }
+    outputs {
+        q:     kin.Quat;
+        wleak: math.Vec3(rad/s);       // wc * log q: the rate the leak removes
+    }
 
     states {
         continuous qw: double(-) = 1.0;   // identity
@@ -81,16 +95,14 @@ node QuatLeakyIntegrator {
     derivative(w) {
         const double qw = state.qw, qx = state.qx, qy = state.qy, qz = state.qz;
 
-        // log q, as `QuatLog` computes it, minus the flip: `adjust()` keeps
-        // `qw >= 0` in the state, so there is nothing left to flip here.
-        const double s = std::sqrt(qx*qx + qy*qy + qz*qz);
-        const double k = s > 1e-8 ? 2.0 * std::atan2(s, qw) / s : 2.0 / qw;
+        double lx, ly, lz;
+        leakOf(qw, qx, qy, qz, lx, ly, lz);
 
         // The washout rate: the commanded rate, less the rate at which the
         // accumulated orientation is being returned to neutral.
-        const double wx = in.w.x - param.wc * k * qx;
-        const double wy = in.w.y - param.wc * k * qy;
-        const double wz = in.w.z - param.wc * k * qz;
+        const double wx = in.w.x - lx;
+        const double wy = in.w.y - ly;
+        const double wz = in.w.z - lz;
 
         // q_dot = 1/2 q (x) w, Hamilton, body rate on the RIGHT -- the same
         // convention `AngRateToQuatRate` uses and `QuatToRot` pins.
@@ -105,6 +117,21 @@ node QuatLeakyIntegrator {
         out.q.x = state.qx;
         out.q.y = state.qy;
         out.q.z = state.qz;
+
+        leakOf(state.qw, state.qx, state.qy, state.qz,
+               out.wleak.x, out.wleak.y, out.wleak.z);
+    }
+
+    // The leak law, `wc * log q`, in the one place both methods read it from.
+    // log q is `QuatLog`'s, minus the flip: `adjust()` keeps `qw >= 0` in the
+    // state, so there is nothing left to flip here.
+    void leakOf(double qw, double qx, double qy, double qz,
+                double& lx, double& ly, double& lz) const {
+        const double s = std::sqrt(qx*qx + qy*qy + qz*qz);
+        const double k = s > 1e-8 ? 2.0 * std::atan2(s, qw) / s : 2.0 / qw;
+        lx = param.wc * k * qx;
+        ly = param.wc * k * qy;
+        lz = param.wc * k * qz;
     }
 
     adjust() {
@@ -117,5 +144,32 @@ node QuatLeakyIntegrator {
         adjust.qx = state.qx * k;
         adjust.qy = state.qy * k;
         adjust.qz = state.qz * k;
+    }
+
+    tests {
+        set "at neutral there is nothing to leak, exactly", param.wc, state.qw, state.qx, state.qy, state.qz = out.wleak {
+            0.12, 1, 0, 0, 0, { 0, 0, 0 }, "identity";
+            5.0,  1, 0, 0, 0, { 0, 0, 0 }, "whatever the corner";
+        }
+
+        set "with no corner there is no leak, exactly", param.wc, state.qw, state.qx, state.qy, state.qz = out.wleak {
+            0, sqrt(0.5), 0, 0, sqrt(0.5), { 0, 0, 0 }, "a quarter turn about z";
+            0, 0.5, 0.5, 0.5, 0.5,         { 0, 0, 0 }, "off every axis";
+        }
+
+        // A quarter turn about z is log q = (0, 0, pi/2); the leak is wc times
+        // that, pulling back about the same axis.
+        set "the leak is wc times the rotation vector", param.wc, state.qw, state.qx, state.qy, state.qz ~= out.wleak within 1e-15 {
+            0.12, sqrt(0.5), 0, 0,  sqrt(0.5), { 0, 0,  0.18849555921538758 }, "a quarter turn about z";
+            0.12, sqrt(0.5), 0, 0, -sqrt(0.5), { 0, 0, -0.18849555921538758 }, "and back";
+        }
+
+        // The same state, driven by a unit roll rate. The bracket is
+        // (1, 0, -0.1885...), and q_dot = 1/2 q (x) that.
+        set "the derivative integrates w less the published leak", param.wc, state.qw, state.qx, state.qy, state.qz, in.w ~= der.qw, der.qx, der.qy, der.qz within 1e-15 {
+            0.12, sqrt(0.5), 0, 0, sqrt(0.5), { 1, 0, 0 },
+                0.5 * sqrt(0.5) * 0.18849555921538758, 0.5 * sqrt(0.5), 0.5 * sqrt(0.5), -0.5 * sqrt(0.5) * 0.18849555921538758,
+                "a roll rate at a quarter turn of heading";
+        }
     }
 }

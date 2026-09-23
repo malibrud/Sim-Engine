@@ -39,6 +39,7 @@ node QLeak {
         0.1 --> wv.x;
         0.2 --> wv.y, wv.z;
 
-        wv --> qi --> self;
+        wv --> qi;
+        qi.q --> self;
     }
 }

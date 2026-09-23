@@ -167,7 +167,8 @@ node Classical {
         tiltCalc.tilt --> tiltQuat --> self.qtilt;
 
         // Rotational Channel
-        self.win --> rotScale --> rotLocalFilt --> rotQ --> self.qwash;
+        self.win --> rotScale --> rotLocalFilt --> rotQ;
+        rotQ.q --> self.qwash;
 
         // Translational Channel
         self.ain --> transScale  --> sf.a;
