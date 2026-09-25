@@ -23,13 +23,20 @@ sim YawRate {
             // The drive: 0.4 rad/s about +Z -- a right turn in SAE -- 0-10 s.
             pulse.y;
 
-            // Z, which nothing translational drives. The golden's translation
-            // columns are zero on every row; this one carries only the startup
-            // transient of the constant -g inside `sf` -- from -9.81, and
-            // enough to take `pout.z` to -0.72 m at t = 1.85. The next commit's
-            // gravity coupling cancels it, and then these three are zero too.
+            // The translational channel, which nothing here drives: all nine
+            // columns are zero on every row, exactly, here and in the golden.
+            // A pure yaw leaves gravity where it was, so the gravity term is
+            // exactly {0, 0, g} and cancels the -g inside `sf` to the bit; and
+            // with nothing to rotate, the frame rotation has nothing to move.
+            // A nonzero cell here is a leak between channels.
+            wash.aout.x;
+            wash.aout.y;
             wash.aout.z;
+            wash.vout.x;
+            wash.vout.y;
             wash.vout.z;
+            wash.pout.x;
+            wash.pout.y;
             wash.pout.z;
 
             // The commanded attitude -- golden `out_roll`, `out_pitch`,

@@ -26,13 +26,31 @@ sim Slalom {
             drive.r;
             drive.ay;
 
-            // Translation -- golden `out_acc_y`, `out_vel_y`, `out_pos_y` --
-            // does NOT overlay until the next commit's gravity coupling, as in
-            // SteadyCornering: -0.290 m to +0.252 m here, -0.227 m to +0.308 m
-            // in the golden.
+            // Translation, all nine columns, overlaying the golden as in
+            // SteadyCornering. Y swings from -0.227 m at t = 5.36 to +0.308 m
+            // at t = 17.93 and ends 0.073 m out; 7.1e-3 m/s^2, 6.2e-4 m/s and
+            // 1.9e-4 m from the golden allowing its half sample.
+            //
+            // X and Z are the finding. YawCornerLeftRight shows the off-axis
+            // drift keeping its sign through a reversal; here there are seven
+            // reversals and the lean, the heading and the push flip together
+            // every time, so what the frame rotation puts into inertial X and
+            // Z is RECTIFIED -- mostly one-signed for 20 s. The first-order
+            // global high pass turns a sustained acceleration into a
+            // sustained velocity, and the platform walks: 4.60 m low and
+            // 3.98 m forward at t = 30, still moving. That is the classical
+            // washout's, not this port's -- the golden does it too, Z to
+            // 4.6e-4 m -- and X is 0.9% from it, 3.6e-2 m, the golden's
+            // one-sample heading lead again (SteadyCornering.sim).
+            wash.aout.x;
             wash.aout.y;
+            wash.aout.z;
+            wash.vout.x;
             wash.vout.y;
+            wash.vout.z;
+            wash.pout.x;
             wash.pout.y;
+            wash.pout.z;
 
             // The commanded attitude. 2.5 s is too short for the tilt to settle
             // at 0.3108: roll reaches -0.2956 by the first flip, and +-0.2816

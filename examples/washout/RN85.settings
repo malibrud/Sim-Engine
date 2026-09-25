@@ -1,14 +1,12 @@
-// The Reid & Nahon standard tests' gravity, shared by the three case sims.
+// The washout repo's gravity, shared by the golden-case sims.
 //
 // The golden runs they are overlaid on were made with the washout repo's
 // default, g = 9.81 m/s^2; `Classical` defaults to standard gravity, 9.80665.
-// The difference is small, but it is in every tilt angle (asin(a/g)) and in the
-// -g inside `sf`, so it would be a real, if tiny, disagreement that has nothing
-// to do with the model.
+// The difference is small, but it is in every tilt angle (asin(a/g)), in the -g
+// inside `sf` and in the gravity term that cancels it, so it would be a real, if
+// tiny, disagreement that has nothing to do with the model.
 //
-// It lives in TWO settings: `Classical` does not flow its `grav` down into
-// `TiltCalc`, whose `G` has its own default. They agree only because both
-// defaults happen to be the same number. `grav` is a record, and an override
-// addresses one field of it at a time (SE0460); only Z is nonzero.
-wash.grav.z     = 9.81 (m/s^2);
-wash.tiltCalc.G = 9.81 (m/s^2);
+// One setting: `Classical` flows `grav.z` down into `TiltCalc`'s `G`, so this
+// reaches the lean as well. `grav` is a record, and an override addresses one
+// field of it at a time (SE0460); only Z is nonzero.
+wash.grav.z = 9.81 (m/s^2);

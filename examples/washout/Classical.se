@@ -15,10 +15,11 @@
 //
 // THE CHANNELS, and what each output means:
 //
-//   translational   ain -> scale/limit -> f = a - g -> local high pass ->
-//                   global high pass -> `aout`, then integrated to `vout` and
-//                   `pout`. The high passes are why a step in `ain` comes out
-//                   as a pulse: the platform moves, then washes back.
+//   translational   ain -> scale/limit -> f = a - g -> + gravity through the
+//                   commanded attitude -> local high pass -> into the inertial
+//                   frame -> global high pass -> `aout`, then integrated to
+//                   `vout` and `pout`. The high passes are why a step in `ain`
+//                   comes out as a pulse: the platform moves, then washes back.
 //
 //   tilt            the X and Y accelerations, low passed, become the steady
 //                   lean that stands in for them -- `TiltCalc` inverts
@@ -41,11 +42,35 @@
 // and `kin.EulerRateToAngRate` the second; each factor is its own node so each
 // can be read against washout_Classical.h:365-398.
 //
-// The translational channel does not use `qCmd` yet: it subtracts a CONSTANT
-// `grav`, where the C++ adds gravity resolved through the commanded attitude to
-// cancel the cue the tilt already gives. Until it does, a sustained X or Y
-// acceleration is cued twice -- once by the lean and once, until the high
-// passes wash it, by the platform.
+// THE TRANSLATIONAL CHANNEL READS THE COMMANDED ATTITUDE TWICE, through one
+// matrix, `cmdR`, as `MulRotVec`'s header anticipates.
+//
+// First, the gravity term, Reid & Nahon block B11 (washout_Classical.h:417-427):
+// gravity resolved into the commanded frame, R(qCmd)^T * grav, is ADDED to the
+// specific force before the local high pass. Level, it is {0, 0, g} and cancels
+// `sf`'s -g exactly, so a platform at rest drives nothing. Leaned, its X and Y
+// parts are the share of gravity the lean already puts on the occupant -- the
+// tilt channel's cue -- and adding it takes that cue back out of this channel,
+// so a sustained acceleration is cued once, by the lean, and not a second time
+// by the platform. It goes BESIDE `sf`, in `a1`, and does not replace `sf`'s
+// constant: f + R^T g, not a - R^T g. The two agree level; leaned, the second
+// DOUBLES the cue it was meant to cancel, and the CSV still looks plausible.
+//
+// Second, the frame, block B13 (washout_Classical.h:435-436): the local high
+// pass works in the platform frame, where the occupant feels it, and its output
+// is rotated by R(qCmd) into the inertial frame before the global high pass. So
+// `aout`, `vout` and `pout` are the platform's motion in the fixed frame it
+// moves in, and a leaning platform moves along axes nothing drove -- surge
+// puts heave into Z (LongitudinalAccel.sim records it).
+//
+// ONE DELIBERATE DIVERGENCE from the C++: `transScale` scales and limits the
+// gravity-free `ain`, before `sf`. The C++ scales specific force, gravity
+// included, and adds the gravity term unscaled -- K*(a - g) + R^T g, where this
+// node has K*a - g + R^T g. They are identical at the default K = 1, which is
+// every golden run. With K != 1 the C++ leaves (1 - K)*g in the high pass at
+// rest and clips gravity itself against the limit -- harmless at its
+// 100 m/s^2, not at this node's 10. Here the acceleration is scaled on its own,
+// and a platform at rest and level drives nothing at any gain.
 //
 // COORDINATE CONVENTION -- SAE, matching `se.math.Vec3`: X forward/north, Y
 // right/east, Z down.
@@ -55,8 +80,11 @@
 // form the specific force an accelerometer would read, f = a - g, which at rest
 // and level is {0, 0, -9.80665}. So the 1 g lives INSIDE this node and never at
 // its boundary. Reading it the other way round -- and the earlier draft of this
-// comment did -- makes `sf` come out at -2 g, which the high-pass then washes
-// away, so nothing downstream complains and the CSV looks fine.
+// comment did -- makes `sf` come out at -2 g, of which the gravity term cancels
+// one. The other is a -g step at t = 0 that the high passes wash away, so a
+// wrongly driven run shows `aout.z` leaving at -9.8 and settling, which looks
+// like a startup transient rather than a mistake. A correctly driven one at
+// rest and level shows nothing at all.
 //
 // The compiler does not check any of this and cannot (see `Vec3.se`); the
 // contract with whoever drives the boundary is this comment and nothing else.
@@ -88,12 +116,12 @@ node Classical {
                                 //   gravity-free -- see the note above
         win:  math.Vec3(rad/s); // Local angular velocity
     }
-    // High-passed, so whatever DC `sf` carries is gone by the time it gets
-    // here: the constant -g contributes a startup transient and nothing else.
+    // The translational three are in the INERTIAL frame (B13 above), not the
+    // platform's.
     outputs {
-        aout: math.Vec3(m/s^2);// commanded platform acceleration
-        vout: math.Vec3(m/s);  // commanded platform velocity
-        pout: math.Vec3(m);    // commanded platform position
+        aout: math.Vec3(m/s^2);// commanded platform acceleration, inertial
+        vout: math.Vec3(m/s);  // commanded platform velocity, inertial
+        pout: math.Vec3(m);    // commanded platform position, inertial
 
         qcmd: kin.Quat;        // commanded platform attitude, qWash (x) qTilt
         ecmd: math.Vec3(rad);  // the same, as SAE (roll, pitch, heading)
@@ -115,7 +143,13 @@ node Classical {
             wn = 3.1(rad/s);
             z = 1.4;
         };
-        node tiltCalc: TiltCalc {};
+        // The lean inverts a = g*sin(tilt), and the gravity term cancels
+        // grav*sin(tilt) of it: one g, or a sustained acceleration leaves
+        // a*(1 - grav/G) in the translational channel. So `G` is not its own
+        // setting here but `grav`'s, and overriding `grav.z` reaches it.
+        node tiltCalc: TiltCalc {
+            G = param.grav.z;
+        };
         node tiltQuat: kin.EulerToQuat {};
 
         //----------------------------------
@@ -161,7 +195,13 @@ node Classical {
             gain  = param.trnGain;
             limit = param.trnLimit;
         };
-        node sf: math.Diff3 (m/s^2);
+        node sf: math.Diff3 (m/s^2);             // f = a - g
+
+        // The commanded attitude, as a matrix, for both reads of it.
+        node cmdR:     kin.QuatToRot {};
+        node gBody:    kin.MulRotInvVec (m/s^2); // R(qCmd)^T * grav     B11
+        node a1:       math.Sum3 (m/s^2);        // f + R(qCmd)^T * grav
+        node toGlobal: kin.MulRotVec (m/s^2);    // platform -> inertial B13
 
         node transLocalFilt: sig.ct.SecondOrderSystem3 (m/s^2) {
             // s^2 / (s^2 + 2*zeta*wn*s + wn^2), wn = 3.1 rad/s, zeta = 1.4
@@ -219,9 +259,15 @@ node Classical {
         // Translational Channel
         self.ain --> transScale  --> sf.a;
         param.grav               --> sf.b;
-        sf --> transLocalFilt --> transGlobalAcc --> transGlobalVel --> transGlobalPos;
-                                  transGlobalAcc                                       --> self.aout;
-                                                     transGlobalVel                    --> self.vout;
-                                                                        transGlobalPos --> self.pout;
+        qCmd --> cmdR;
+                 cmdR --> gBody.R;    param.grav --> gBody.v;
+        sf    --> a1.a;
+        gBody --> a1.b;
+        a1 --> transLocalFilt --> toGlobal.v;
+                 cmdR     --> toGlobal.R;
+        toGlobal --> transGlobalAcc --> transGlobalVel --> transGlobalPos;
+                     transGlobalAcc                                       --> self.aout;
+                                        transGlobalVel                    --> self.vout;
+                                                           transGlobalPos --> self.pout;
     }
 }

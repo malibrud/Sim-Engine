@@ -10,37 +10,43 @@ sim Washout {
         every: 10;           // 100 Hz in the file, off a 1 kHz base step
 
         signals {
-            // The drive: 1 m/s^2 into X, held for 10 s of a 20 s run.
-            // Long enough that the cue reaches steady state twice -- once
-            // under the pulse and once after it -- which a short pulse
+            // The drive: 2 m/s^2 into X, held for 10 s of a 20 s run --
+            // LongitudinalAccel's drive, at standard gravity and in half the
+            // run. Long enough that the cue reaches steady state twice --
+            // once under the pulse and once after it -- which a short pulse
             // never gets to.
             pulse.y;
 
             // The translational channel, the axis the pulse is on. It
             // answers each EDGE and nothing in between: `aout.x` leaves at
-            // the full 1 m/s^2, washes back through zero, and is under
-            // 0.01 by t = 2.3 with eight seconds of pulse still to go --
-            // then does the mirror image at the release. `vout`/`pout` are
-            // where that leaves the platform, and both must come back
+            // the full 2 m/s^2, undershoots to -0.328 at t = 0.47, and is
+            // under 0.02 by t = 3.1 with seven seconds of pulse still to go
+            // -- then does the mirror image at the release. `vout`/`pout`
+            // are where that leaves the platform, and both must come back
             // toward zero or it runs out of rail; here the whole ride is
-            // 14 cm, +0.074 m at t = 1.85 to -0.062 m at t = 12.0.
+            // 16 cm, +0.079 m at t = 0.86 to -0.078 m at t = 10.83, and it
+            // ends 2.8 cm from home.
             wash.aout.x;
             wash.vout.x;
             wash.pout.x;
 
-            // Z, which nothing drives: the startup transient of the
-            // constant -g inside `sf`. It leaves at -9.80665, overshoots
-            // positive, and is under 0.05 by t = 2.6. A column that should
-            // be flat for the rest of the run, and says so.
+            // Z, which nothing drives. At rest and level the gravity term
+            // cancels the -g inside `sf` exactly, so nothing happens here at
+            // startup. What Z carries is the frame rotation: the platform
+            // leans while the X transients play out, so part of each lands in
+            // inertial Z -- under 0.015 through the onset, while the lean is
+            // still building, and 0.41 at the release, t = 10, where the X
+            // transient arrives with the full lean on.
             wash.aout.z;
 
             // The tilt channel, and a 10 s pulse is long enough to show
-            // the steady state: the lean settles at 0.1021 rad (5.85 deg)
-            // and HOLDS there while the high pass washes X away, so from
-            // about t = 2.5 the tilt is carrying the cue by itself. That
-            // is the whole point of the channel, and it checks out --
-            // g*sin(0.1021) = 1.000 m/s^2, the acceleration commanded.
-            // Acceleration into X is cued by a positive pitch about Y.
+            // the steady state: the lean settles at 0.2054 rad (11.8 deg),
+            // 99% there by t = 3.7, and HOLDS there while the translational
+            // channel lets X go, so from then on the tilt is carrying the cue
+            // by itself. That is the whole point of the channel, and it
+            // checks out -- g*sin(0.2054) = 2.000 m/s^2, the acceleration
+            // commanded. Acceleration into X is cued by a positive pitch
+            // about Y.
             wash.tiltCalc.tilt.y;
 
             // The commanded attitude, and here it is the tilt and nothing
@@ -49,11 +55,12 @@ sim Washout {
             // comes back out of the quaternion as the lean that went in --
             // `ecmd.y` equals `tilt.y` on every row as printed. Its body rate
             // is the tilt's own, `cos(roll) * pitch'` with no roll, so
-            // `wcmd.y` is `tiltCalc.tiltRate.y`: it peaks at 0.092 rad/s by
-            // t = 0.3 as the lean builds and decays to zero without crossing
+            // `wcmd.y` is `tiltCalc.tiltRate.y`: it peaks at 0.183 rad/s at
+            // t = 0.29 as the lean builds and decays to zero without crossing
             // it -- the tilt low pass is overdamped -- then does the same
-            // negative at the release. Neither column moves the ones above --
-            // nothing reads the commanded attitude there yet.
+            // negative at the release, -0.186 at t = 10.28. The attitude is
+            // also what the translational channel above reads, twice: its
+            // gravity term and its frame rotation.
             wash.ecmd.y;
             wash.wcmd.y;
 

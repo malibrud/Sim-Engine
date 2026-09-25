@@ -27,13 +27,27 @@ sim YawCornerLeftRight {
             r.y;
             ay.y;
 
-            // Translation -- golden `out_acc_y`, `out_vel_y`, `out_pos_y` --
-            // does NOT overlay until the next commit's gravity coupling, as in
-            // SteadyCornering: -0.222 m to +0.284 m here, -0.198 m to +0.119 m
-            // in the golden.
+            // Translation, all nine columns, overlaying the golden as in
+            // SteadyCornering. Y goes to +0.119 m at t = 7.80 and -0.198 m at
+            // t = 17.80 and ends 3.5 mm from home; 3.0e-3 m/s^2, 3.1e-4 m/s
+            // and 5.5e-5 m from the golden allowing its half sample.
+            //
+            // The off-axis drift does NOT cancel between the two turns: a
+            // left turn leans and turns the other way AND pushes the other
+            // way, so each product that lands in X and Z has the same sign
+            // as the right turn's. The platform ends 0.504 m low and 0.432 m
+            // forward, twice SteadyCornering's one turn. Z is 4.7e-5 m from
+            // the golden; X is 1% from it, 4.9e-3 m, which is again the
+            // golden's one-sample heading lead (SteadyCornering.sim).
+            wash.aout.x;
             wash.aout.y;
+            wash.aout.z;
+            wash.vout.x;
             wash.vout.y;
+            wash.vout.z;
+            wash.pout.x;
             wash.pout.y;
+            wash.pout.z;
 
             // The commanded attitude. Roll leans to +0.3102 for the left turn
             // and -0.3102 for the right -- 5 s is not quite long enough for the

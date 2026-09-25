@@ -19,22 +19,29 @@ sim VerticalAccel {
             // The drive: 2 m/s^2 along +Z, which is DOWN, 0-10 s.
             pulse.y;
 
-            // The translational channel -- golden `out_acc_z`, `out_vel_z`,
-            // `out_pos_z` -- and the clearest view there is of what the next
-            // commit changes. `aout.z` starts at -7.81 = 2 - 9.81: the step
-            // on top of the constant -g inside `sf`, both passed by the high
-            // passes as one step. The golden starts at +1.91, the step alone,
-            // because its gravity coupling adds g back through the commanded
-            // attitude, and level that cancels -g exactly. So the -g is all
-            // of the difference: the golden's `out_acc_z`, `out_vel_z` and
-            // `out_pos_z` are this node's LongitudinalAccel `aout.x`, `vout.x`
-            // and `pout.x` -- the same 2 m/s^2 through the same filters, with
-            // no g in it -- to 1.8e-3, 1.9e-4 and 3.1e-5 once the half sample
-            // is allowed for, away from the two edges. The -g transient is
-            // also why `pout.z` dips to -0.58 m at t = 1.85 here, where the
-            // golden's stays between -0.12 m and +0.15 m.
+            // The translational channel -- golden `out_acc_*`, `out_vel_*`,
+            // `out_pos_*` -- on all three axes, and all nine overlay.
+            //
+            // Z is the pure high-pass response, the one the other cases are
+            // variations on. The platform never leans, so the gravity term is
+            // {0, 0, g} throughout and cancels the -g inside `sf` exactly: the
+            // channel sees the 2 m/s^2 step alone, `aout.z` leaves at the full
+            // 2 (the golden's first row, half a sample later, at 1.91), and
+            // the platform goes down to 0.148 m at t = 1.85 and up to -0.124 m
+            // at t = 11.98 and ends 0.5 mm from home. 1.8e-3 m/s^2, 1.9e-4 m/s
+            // and 3.1e-5 m from the golden once its half sample is allowed
+            // for, away from the two edges.
+            //
+            // X and Y: zero on every row, in both. With no lean there is no
+            // frame rotation to move anything off the driven axis.
+            wash.aout.x;
+            wash.aout.y;
             wash.aout.z;
+            wash.vout.x;
+            wash.vout.y;
             wash.vout.z;
+            wash.pout.x;
+            wash.pout.y;
             wash.pout.z;
 
             // The commanded attitude and its rate: zero on every row, exactly,

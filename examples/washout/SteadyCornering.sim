@@ -29,15 +29,37 @@ sim SteadyCornering {
             r.y;
             ay.y;
 
-            // The translational channel -- golden `out_acc_y`, `out_vel_y`,
-            // `out_pos_y`. These do NOT overlay yet, for LongitudinalAccel's
-            // reason: the golden's gravity coupling (R&N B11) takes the lean
-            // back out of the lateral cue, and this node does not until the
-            // next commit. Here the platform ranges from -0.187 m to +0.222 m;
-            // the golden's, from -0.097 m to +0.118 m.
+            // The translational channel -- golden `out_acc_*`, `out_vel_*`,
+            // `out_pos_*` -- on all three axes, and all nine overlay.
+            //
+            // Y, the driven axis, shaped by the gravity term as surge's X is:
+            // out to 0.118 m at t = 2.86, back to -0.097 m at t = 12.81, and
+            // 0.082 m at the end. 2.9e-3 m/s^2, 2.8e-4 m/s and 5.3e-5 m from
+            // the golden once its half sample is allowed for, away from the
+            // edges.
+            //
+            // Z is the roll's frame rotation, as in LongitudinalAccel: the
+            // lateral transients land partly in inertial Z, and the platform
+            // ends 0.252 m low. 8.1e-4, 8.7e-5 and 2.7e-5 from the golden.
+            //
+            // X is the HEADING's frame rotation: the rotation washout has
+            // turned the platform when the lateral transients arrive, so part
+            // of them lands in inertial X, and the platform ends 0.214 m
+            // forward. This column alone is about 1% from the golden --
+            // 2.7e-3 m/s^2, 3.4e-4 m/s, 2.4e-3 m -- and it is not a timing
+            // offset: the golden rotates with its heading, which leads by a
+            // sample (YawRate.sim), and a heading error times the lateral
+            // acceleration IS an X acceleration. Taking that product out of
+            // the X residual leaves 1.9e-4 m/s^2.
+            wash.aout.x;
             wash.aout.y;
+            wash.aout.z;
+            wash.vout.x;
             wash.vout.y;
+            wash.vout.z;
+            wash.pout.x;
             wash.pout.y;
+            wash.pout.z;
 
             // The commanded attitude -- golden `out_roll`, `out_pitch`,
             // `out_yaw`.

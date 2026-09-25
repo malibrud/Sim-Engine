@@ -6,7 +6,7 @@ use se.sig;
 node PulseX {
     settings {
         duration: double(s) = 10.0;
-        amplitude: double(m/s^2) = 1.0;
+        amplitude: double(m/s^2) = 2.0;
     }
 
     structure {

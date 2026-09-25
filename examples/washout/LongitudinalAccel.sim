@@ -23,22 +23,38 @@ sim LongitudinalAccel {
             // The drive: 2 m/s^2 forward, 0-10 s.
             pulse.y;
 
-            // The translational channel -- golden `out_acc_x`, `out_vel_x`,
-            // `out_pos_x`. These do NOT overlay yet and are not meant to:
-            // the golden adds gravity through the commanded attitude to the
-            // specific force (R&N block B11) and this node does not until the
-            // next commit. Without it, surge translation here is the golden's
-            // HEAVE translation, to 3e-5 m -- the same step through the same
-            // filters, see VerticalAccel.sim -- so the whole gap to the golden
-            // surge is that coupling. Both wash X out during the hold -- under
-            // 0.002 by t = 10 -- and differ in the shape of the transients:
-            // the undershoot is -0.195 at t = 0.55 here against -0.328 at
-            // t = 0.46 in the golden, the platform goes out to 0.148 m at
-            // t = 1.85 here against 0.079 m at t = 0.85, and the ride ends
-            // 0.5 mm from home here against 2.4 cm.
+            // The translational channel -- golden `out_acc_*`, `out_vel_*`,
+            // `out_pos_*` -- on all three axes, and all nine overlay.
+            //
+            // X: 1.9e-3 m/s^2, 1.8e-4 m/s and 3.6e-5 m from the golden once
+            // its half sample is allowed for, away from the two edges. The
+            // gravity term is what shapes it. Without that term this was the
+            // golden HEAVE run, the same step through the same filters; with
+            // it, the lean's share of gravity comes back out of the channel
+            // as the lean builds, so `aout.x` undershoots to -0.328 at
+            // t = 0.47, the platform goes out to 0.079 m at t = 0.86, and the
+            // ride ends 2.4 cm from home -- all three as in the golden.
+            //
+            // Z is the frame rotation, and nothing drives it. It starts while
+            // the lean builds under the onset transient -- 0.049 m by t = 10
+            // -- and the release transient arrives with the full lean on, so
+            // more of it lands in inertial Z: 0.41 m/s^2 at t = 10. A
+            // transient rotated while the rotation changes has lost the zero
+            // net area the local high pass gave it, so the first-order global
+            // high pass brings the velocity home and not the position: the
+            // platform ends 0.116 m low (+Z is down) and stays there, in both
+            // runs, to 1.2e-5 m.
+            //
+            // Y: zero on every row, in both.
             wash.aout.x;
+            wash.aout.y;
+            wash.aout.z;
             wash.vout.x;
+            wash.vout.y;
+            wash.vout.z;
             wash.pout.x;
+            wash.pout.y;
+            wash.pout.z;
 
             // The commanded attitude -- golden `out_roll (PHIS)`,
             // `out_pitch (THETAS)`, `out_yaw (PSIS)`, and these DO overlay.
