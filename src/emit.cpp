@@ -2189,6 +2189,9 @@ std::string Emitter::main_cpp(const std::string& header_name) {
 //  Mermaid rather than Graphviz because it renders with nothing installed —
 //  GitHub, VS Code, any markdown preview — and because it is text, so it
 //  diffs and can be a checked expectation exactly as the manifest already is.
+//  "Nothing installed" holds only for a fenced block inside a `.md`, not for
+//  a bare `.mmd`, so `emit()` writes it inside a ```mermaid fence; this
+//  function returns the diagram alone and the fence is added at the write.
 //  Both formats are a printer over this one walk, so a `--dot` twin later is
 //  a second printer and not a second traversal.
 
@@ -2803,7 +2806,8 @@ bool emit(Diagnostics& diag, const Model& m, const EmitOptions& opt) {
         ok = write_file(diag, path(main_name), e.main_cpp(header_name), opt.quiet) && ok;
     ok = write_file(diag, path(opt.stem + ".units.txt"), e.manifest(), opt.quiet) && ok;
     if (opt.write_topology)
-        ok = write_file(diag, path(opt.stem + ".topology.mmd"), e.topology(), opt.quiet) && ok;
+        ok = write_file(diag, path(opt.stem + ".topology.md"),
+                        "```mermaid\n" + e.topology() + "```\n", opt.quiet) && ok;
     if (opt.write_runtime) {
         ok = write_file(diag, path("state_ref.hpp"), state_ref_hpp(), opt.quiet) && ok;
         ok = write_file(diag, path("se_runtime.hpp"), se_runtime_hpp(), opt.quiet) && ok;

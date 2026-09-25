@@ -6,7 +6,8 @@
 //      <name>.generated.hpp   the model, the schedule, the host API
 //      <name>.main.cpp        the batch driver, and nothing else
 //      <name>.units.txt       the unit manifest — load-bearing, not docs (§15.6)
-//      <name>.topology.mmd    the signal-flow graph, as a Mermaid diagram
+//      <name>.topology.md     the signal-flow graph, a Mermaid diagram in a
+//                             markdown fence
 //      state_ref.hpp          fixed engine runtime header (§15.5)
 //      se_runtime.hpp         fixed engine runtime header
 //      build.bat / .ps1 / .sh the direct reference build (§12.4), one per

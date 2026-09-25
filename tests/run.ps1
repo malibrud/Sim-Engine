@@ -298,14 +298,33 @@ function Check-Manifest($stem, $outDir) {
 # The emitter cannot express one any more, and this is the assertion that it
 # stays that way -- a golden-file diff would not catch it being reintroduced
 # somewhere new, because the diff would just be accepted on -Update.
+#
+# The file is markdown with the diagram in a ```mermaid fence, so it renders in
+# any markdown preview. The fence is checked here and stripped, and the lint and
+# the golden both see the bare diagram -- the goldens are the diagram, not the
+# wrapper.
 function Check-Topology($stem, $outDir) {
-    $produced = Join-Path $outDir 'Sim.topology.mmd'
+    $produced = Join-Path $outDir 'Sim.topology.md'
     if (-not (Test-Path $produced)) {
-        Write-Host "FAIL tests/emit/$stem : no Sim.topology.mmd was written" -ForegroundColor Red
+        Write-Host "FAIL tests/emit/$stem : no Sim.topology.md was written" -ForegroundColor Red
         $script:fail++
         return
     }
-    $lines = Get-Content $produced
+    $text = (Get-Content -Raw -Encoding UTF8 $produced) -replace "`r`n", "`n"
+    $open = "``````mermaid`n"
+    $close = "``````"
+    if (-not ($text.StartsWith($open) -and $text.TrimEnd("`n").EndsWith("`n" + $close))) {
+        Write-Host ("FAIL tests/emit/$stem.topology : not a single ``````mermaid fence " +
+                    "from the first line to the last") -ForegroundColor Red
+        $script:fail++
+        return
+    }
+    Write-Host "ok   tests/emit/$stem.topology : fenced as markdown" -ForegroundColor Green
+    $script:pass++
+    $body = $text.TrimEnd("`n")
+    $body = $body.Substring($open.Length, $body.Length - $open.Length - $close.Length)
+
+    $lines = $body -split "`n"
     $bare = @($lines | Where-Object { $_ -eq '%%' })
     if ($bare.Count -gt 0) {
         Write-Host ("FAIL tests/emit/$stem.topology : " + $bare.Count +
@@ -318,10 +337,10 @@ function Check-Topology($stem, $outDir) {
 
     $expected = Join-Path $root ("tests\emit\" + $stem + '.topology')
     if (-not (Test-Path $expected)) { return }
-    # -Encoding UTF8 for the manifest's reason: sec writes BOM-less UTF-8 and
-    # PowerShell 5.1 would otherwise decode it as the ANSI codepage.
-    $actual = (Get-Content -Raw -Encoding UTF8 $produced) -replace "`r`n", "`n"
-    Compare-Text "tests/emit/$stem.topology" $expected $actual
+    # Read above with -Encoding UTF8 for the manifest's reason: sec writes
+    # BOM-less UTF-8 and PowerShell 5.1 would otherwise decode it as the ANSI
+    # codepage.
+    Compare-Text "tests/emit/$stem.topology" $expected $body
 }
 
 $emitDirs = @{}

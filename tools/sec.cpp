@@ -22,7 +22,7 @@
 //      --no-main          do not write <stem>.main.cpp (embed in your own host)
 //      --no-runtime       do not write state_ref.hpp / se_runtime.hpp
 //      --no-build         do not write build.bat / build.ps1 / build.sh
-//      --no-topology      do not write <stem>.topology.mmd
+//      --no-topology      do not write <stem>.topology.md
 //      --kind=<k>         force model | sim | settings, ignoring the extension
 //      --max-errors=<n>   diagnostic cap (default 20; 0 means no cap)
 //      --no-color         plain output
@@ -82,7 +82,7 @@ void usage(std::ostream& o) {
          "  --no-main          do not write <stem>.main.cpp\n"
          "  --no-runtime       do not write state_ref.hpp / se_runtime.hpp\n"
          "  --no-build         do not write build.bat / .ps1 / .sh\n"
-         "  --no-topology      do not write <stem>.topology.mmd\n"
+         "  --no-topology      do not write <stem>.topology.md\n"
          "  --kind=<k>         force model | sim | settings\n"
          "  --max-errors=<n>   diagnostic cap (default 20, 0 = no cap)\n"
          "  --no-color         plain output\n"
