@@ -1,0 +1,49 @@
+// A sustained coordinated turn, as the washout repo's validation suite drives
+// it: `steady_cornering` in validation/maneuvers.h, golden run
+// validation/golden/Classical__steady_cornering.csv.
+//
+// From t = 2, held 10 s: a 0.3 rad/s yaw rate and 3 m/s^2 of lateral
+// acceleration, both positive -- about +Z and along +Y, down and right in SAE,
+// so a right turn with its centripetal pull. Level throughout: yaw does not
+// tilt gravity, so the gravity-free `ain` carries this exactly.
+//
+// The first case here where BOTH halves of the commanded attitude move at
+// once: the rotation channel turns the platform, and the tilt channel leans it
+// into the lateral acceleration.
+package washout;
+
+use se.math;
+use se.sig;
+
+node SteadyCornering {
+    settings {
+        t_start:  double(s)     = 2.0;
+        duration: double(s)     = 10.0;
+        yawRate:  double(rad/s) = 0.3;
+        latAccel: double(m/s^2) = 3.0;
+    }
+
+    structure {
+        node r: sig.src.RectPulse (rad/s) {
+            t_start    = param.t_start;
+            t_duration = param.duration;
+            amplitude  = param.yawRate;
+        };
+        node ay: sig.src.RectPulse (m/s^2) {
+            t_start    = param.t_start;
+            t_duration = param.duration;
+            amplitude  = param.latAccel;
+        };
+        node ain: math.Merge3(m/s^2);
+        node win: math.Merge3(rad/s);
+        node wash: washout.Classical {};
+
+        0.0 --> ain.x, ain.z;
+        ay --> ain.y;
+        0.0 --> win.x, win.y;
+        r --> win.z;
+
+        ain --> wash.ain;
+        win --> wash.win;
+    }
+}

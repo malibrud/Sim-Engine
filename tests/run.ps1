@@ -355,6 +355,15 @@ $examples = @(
     @{ name = 'rn85vert';   sim = 'examples/washout/VerticalAccel.sim';
        roots = @('examples', 'stdlib') },
     @{ name = 'rn85yaw';    sim = 'examples/washout/YawRate.sim';
+       roots = @('examples', 'stdlib') },
+    # Three of the suite's ground-vehicle maneuvers, the turning ones: the only
+    # goldens that move the washout and tilt attitudes at once. Slalom also keeps
+    # an example-local leaf source (`SlalomDrive`) compiling.
+    @{ name = 'corner';     sim = 'examples/washout/SteadyCornering.sim';
+       roots = @('examples', 'stdlib') },
+    @{ name = 'cornerlr';   sim = 'examples/washout/YawCornerLeftRight.sim';
+       roots = @('examples', 'stdlib') },
+    @{ name = 'slalom';     sim = 'examples/washout/Slalom.sim';
        roots = @('examples', 'stdlib') }
 )
 foreach ($ex in $examples) {

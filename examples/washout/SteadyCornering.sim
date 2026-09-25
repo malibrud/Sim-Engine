@@ -1,0 +1,79 @@
+// A sustained right turn, to overlay on the washout repo's golden run
+// validation/golden/Classical__steady_cornering.csv. Same drive, same 24 s,
+// same 100 Hz in the file, same g (RN85.settings). See LongitudinalAccel.sim
+// for the half sample between the golden's filter outputs and these rows, and
+// YawRate.sim for the one sample its heading leads by.
+//
+// The case that checks the commanded attitude's COMPOSITION. Every earlier
+// case moved one half of `qCmd = qWash (x) qTilt` and left the other at
+// identity; here the rotation channel turns the platform and the tilt channel
+// rolls it at the same time, and two columns can only come out right if the
+// composition is right. Both do, against the golden.
+sim SteadyCornering {
+    root: washout.SteadyCornering {};
+
+    step:     1 (ms);
+    solver:   rk4;
+    duration: 24 (s);
+
+    settings: "RN85.settings";
+
+    record: {
+        file:  "steady_cornering.csv";
+        every: 10;           // 100 Hz, the golden's rate
+
+        signals {
+            // The drive, both from t = 2 for 10 s: 0.3 rad/s of yaw and
+            // 3 m/s^2 along +Y, a right turn. Every sample equals the golden's
+            // `in_w_z` and `in_sf_y`.
+            r.y;
+            ay.y;
+
+            // The translational channel -- golden `out_acc_y`, `out_vel_y`,
+            // `out_pos_y`. These do NOT overlay yet, for LongitudinalAccel's
+            // reason: the golden's gravity coupling (R&N B11) takes the lean
+            // back out of the lateral cue, and this node does not until the
+            // next commit. Here the platform ranges from -0.187 m to +0.222 m;
+            // the golden's, from -0.097 m to +0.118 m.
+            wash.aout.y;
+            wash.vout.y;
+            wash.pout.y;
+
+            // The commanded attitude -- golden `out_roll`, `out_pitch`,
+            // `out_yaw`.
+            //
+            // Roll is the tilt: it leans to -0.3108 = -asin(3/9.81), 99% there
+            // by t = 5.7, the sign that makes gravity's share of the platform's
+            // Y specific force the turn's +3 m/s^2. 5e-5 rad from the golden
+            // once its half sample is allowed for.
+            //
+            // Pitch is ZERO, in both, to 1e-17 -- and that is the ORDER check.
+            // The rotation channel's yaw, composed with the tilt's roll ON THE
+            // RIGHT, is Rz(psi) Rx(phi), which comes back out as Euler angles
+            // (phi, 0, psi) exactly. The other order, Rx(phi) Rz(psi), does not:
+            // it would put a pitch here, and the golden has none.
+            //
+            // Heading is the rotation washout, as in YawRate: to 0.100 rad at
+            // t = 2.88 and -0.112 at t = 12.87, each one sample earlier in the
+            // golden, and 7e-5 from it allowing that sample.
+            wash.ecmd.x;
+            wash.ecmd.y;
+            wash.ecmd.z;
+
+            // The commanded body rate -- golden `out_p`, `out_q`, `out_r` --
+            // all within 3e-4 rad/s once the half sample is allowed for.
+            //
+            // `wcmd.y` is the TRANSPORT check. Nothing here pitches, yet q is
+            // not zero: `R(qTilt)^T` carries the washout's yaw rate into the
+            // rolled frame, where part of it is a pitch rate, and with no tilt
+            // pitch that makes q = tan(roll) * r -- true of these columns to
+            // 2e-10. So q is under 0.01 at the turn-in, where the lean has not
+            // built yet, and peaks at 0.091 at the release, t = 12, when the
+            // washout's -0.3 rad/s step arrives with the full lean still on.
+            // The golden's `out_q` is the same to 1.3e-5.
+            wash.wcmd.x;
+            wash.wcmd.y;
+            wash.wcmd.z;
+        }
+    }
+}

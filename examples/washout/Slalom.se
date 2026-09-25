@@ -1,0 +1,27 @@
+// A slalom, as the washout repo's validation suite drives it: `slalom` in
+// validation/maneuvers.h, golden run validation/golden/Classical__slalom.csv.
+//
+// Four full cycles of SteadyCornering's turn with the sign flipping every
+// 2.5 s -- right, left, right, ... -- from t = 2 to t = 22: 0.3 rad/s of yaw
+// and 3 m/s^2 of lateral acceleration, always together. Level throughout, so
+// the gravity-free `ain` carries it exactly.
+package washout;
+
+use se.math;
+
+node Slalom {
+    structure {
+        node drive: SlalomDrive {};
+        node ain: math.Merge3(m/s^2);
+        node win: math.Merge3(rad/s);
+        node wash: washout.Classical {};
+
+        0.0 --> ain.x, ain.z;
+        drive.ay --> ain.y;
+        0.0 --> win.x, win.y;
+        drive.r --> win.z;
+
+        ain --> wash.ain;
+        win --> wash.win;
+    }
+}

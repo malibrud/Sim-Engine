@@ -1,0 +1,57 @@
+// A left turn, a straight and a right turn, to overlay on the washout repo's
+// golden run validation/golden/Classical__yaw_corner_left_right.csv. Same
+// drive, same 27 s, same 100 Hz in the file, same g (RN85.settings).
+//
+// SteadyCornering taken both ways, and SteadyCornering.sim says what each
+// column checks. What this case adds is the sign: the order and transport
+// checks hold for a left lean as well as a right one, and the washout of the
+// first turn has all but gone when the second begins -- roll is back to
+// 0.0006 rad and heading to -0.0004 at t = 12.
+sim YawCornerLeftRight {
+    root: washout.YawCornerLeftRight {};
+
+    step:     1 (ms);
+    solver:   rk4;
+    duration: 27 (s);
+
+    settings: "RN85.settings";
+
+    record: {
+        file:  "yaw_corner_left_right.csv";
+        every: 10;           // 100 Hz, the golden's rate
+
+        signals {
+            // The drive: -0.3 rad/s and -3 m/s^2 from t = 2 to 7 (left),
+            // +0.3 and +3 from t = 12 to 17 (right). Every sample equals the
+            // golden's `in_w_z` and `in_sf_y`.
+            r.y;
+            ay.y;
+
+            // Translation -- golden `out_acc_y`, `out_vel_y`, `out_pos_y` --
+            // does NOT overlay until the next commit's gravity coupling, as in
+            // SteadyCornering: -0.222 m to +0.284 m here, -0.198 m to +0.119 m
+            // in the golden.
+            wash.aout.y;
+            wash.vout.y;
+            wash.pout.y;
+
+            // The commanded attitude. Roll leans to +0.3102 for the left turn
+            // and -0.3102 for the right -- 5 s is not quite long enough for the
+            // full 0.3108 -- and is 5e-5 rad from the golden allowing its half
+            // sample. Pitch is zero in both, to 1e-17. Heading swings -0.100 at
+            // t = 2.88, +0.117 at 7.90, +0.095 at 12.86 and -0.122 at 17.89,
+            // each one sample earlier in the golden and 8e-5 from it allowing
+            // that sample.
+            wash.ecmd.x;
+            wash.ecmd.y;
+            wash.ecmd.z;
+
+            // The body rate, all within 3.2e-4 rad/s of the golden allowing its
+            // half sample. q = tan(roll) * r again, to 2e-10, peaking at 0.093
+            // at each release, t = 7 and t = 17, and 1.6e-5 from `out_q`.
+            wash.wcmd.x;
+            wash.wcmd.y;
+            wash.wcmd.z;
+        }
+    }
+}

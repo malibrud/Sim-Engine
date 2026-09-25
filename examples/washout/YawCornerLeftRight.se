@@ -1,0 +1,62 @@
+// A left turn, a straight, then a right turn, as the washout repo's validation
+// suite drives it: `yaw_corner_left_right` in validation/maneuvers.h, golden run
+// validation/golden/Classical__yaw_corner_left_right.csv.
+//
+// SteadyCornering's turn, shortened to 5 s and taken both ways: -0.3 rad/s and
+// -3 m/s^2 from t = 2 to 7 (left), nothing to t = 12, then +0.3 and +3 to
+// t = 17 (right). Level throughout, so the gravity-free `ain` carries it
+// exactly. Each axis is two pulses and a `math.Sum`, because a wire has one
+// producer.
+package washout;
+
+use se.math;
+use se.sig;
+
+node YawCornerLeftRight {
+    settings {
+        t_left:   double(s)     = 2.0;
+        t_right:  double(s)     = 12.0;
+        duration: double(s)     = 5.0;
+        yawRate:  double(rad/s) = 0.3;
+        latAccel: double(m/s^2) = 3.0;
+    }
+
+    structure {
+        node rL: sig.src.RectPulse (rad/s) {
+            t_start    = param.t_left;
+            t_duration = param.duration;
+            amplitude  = -param.yawRate;
+        };
+        node rR: sig.src.RectPulse (rad/s) {
+            t_start    = param.t_right;
+            t_duration = param.duration;
+            amplitude  = param.yawRate;
+        };
+        node ayL: sig.src.RectPulse (m/s^2) {
+            t_start    = param.t_left;
+            t_duration = param.duration;
+            amplitude  = -param.latAccel;
+        };
+        node ayR: sig.src.RectPulse (m/s^2) {
+            t_start    = param.t_right;
+            t_duration = param.duration;
+            amplitude  = param.latAccel;
+        };
+        node r:  math.Sum(rad/s);
+        node ay: math.Sum(m/s^2);
+        node ain: math.Merge3(m/s^2);
+        node win: math.Merge3(rad/s);
+        node wash: washout.Classical {};
+
+        rL --> r.a;   rR --> r.b;
+        ayL --> ay.a; ayR --> ay.b;
+
+        0.0 --> ain.x, ain.z;
+        ay --> ain.y;
+        0.0 --> win.x, win.y;
+        r --> win.z;
+
+        ain --> wash.ain;
+        win --> wash.win;
+    }
+}

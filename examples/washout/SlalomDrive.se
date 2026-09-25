@@ -1,0 +1,36 @@
+// The slalom's drive, maneuvers.h:126-135 line for line: a yaw rate and a
+// lateral acceleration that flip sign together every `half` seconds, positive
+// first, from `t_start` for `cycles` full cycles, and zero outside.
+//
+// A leaf rather than a graph because the stdlib has no gated square wave:
+// `sig.src.Square` runs forever and is a discrete source whose edges land on
+// its own sample grid, and there is no scalar multiply to gate it with. Here
+// the edges are computed from `sim.time()`, as `RectPulse` computes its own,
+// so they fall where the golden's do.
+package washout;
+
+node SlalomDrive {
+    settings {
+        t_start:  double(s)     = 2.0;
+        half:     double(s)     = 2.5;
+        cycles:   double(-)     = 4.0;
+        yawRate:  double(rad/s) = 0.3;
+        latAccel: double(m/s^2) = 3.0;
+    }
+
+    outputs {
+        r:  double(rad/s);
+        ay: double(m/s^2);
+    }
+
+    output() {
+        const double t  = sim.time();
+        const double t0 = param.t_start;
+        const double t1 = t0 + 2.0 * param.cycles * param.half;
+        if (t < t0 || t >= t1) { out.r = 0.0; out.ay = 0.0; return; }
+        const int    k    = static_cast<int>((t - t0) / param.half);
+        const double sign = (k % 2 == 0) ? 1.0 : -1.0;
+        out.r  = sign * param.yawRate;
+        out.ay = sign * param.latAccel;
+    }
+}
