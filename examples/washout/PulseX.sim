@@ -23,7 +23,7 @@ sim Washout {
             // then does the mirror image at the release. `vout`/`pout` are
             // where that leaves the platform, and both must come back
             // toward zero or it runs out of rail; here the whole ride is
-            // 13 cm, -0.074 m to +0.060 m.
+            // 14 cm, +0.074 m at t = 1.85 to -0.062 m at t = 12.0.
             wash.aout.x;
             wash.vout.x;
             wash.pout.x;

@@ -27,11 +27,15 @@ sim LongitudinalAccel {
             // `out_pos_x`. These do NOT overlay yet and are not meant to:
             // the golden adds gravity through the commanded attitude to the
             // specific force (R&N block B11) and this node does not until the
-            // next commit. Both wash X out during the hold -- under 0.002 by
-            // t = 10 -- and differ in the shape of the transients: the
-            // undershoot is -0.195 at t = 0.55 here against -0.328 at t = 0.46
-            // in the golden, and the ride ends 2.4 mm from home here against
-            // 2.4 cm.
+            // next commit. Without it, surge translation here is the golden's
+            // HEAVE translation, to 3e-5 m -- the same step through the same
+            // filters, see VerticalAccel.sim -- so the whole gap to the golden
+            // surge is that coupling. Both wash X out during the hold -- under
+            // 0.002 by t = 10 -- and differ in the shape of the transients:
+            // the undershoot is -0.195 at t = 0.55 here against -0.328 at
+            // t = 0.46 in the golden, the platform goes out to 0.148 m at
+            // t = 1.85 here against 0.079 m at t = 0.85, and the ride ends
+            // 0.5 mm from home here against 2.4 cm.
             wash.aout.x;
             wash.vout.x;
             wash.pout.x;
@@ -50,8 +54,10 @@ sim LongitudinalAccel {
             // `out_r (RS)`. Pure tilt rate here: 0.183 rad/s at t = 0.29 and
             // -0.186 at t = 10.28. The release peak is the larger because the
             // arcsine's slope, 1/cos(tilt), is steeper at 0.2 rad than at 0,
-            // and the golden shows the same 0.186. 3e-4 rad/s from it
-            // half-shifted, 8e-4 away from the two edges.
+            // and the golden shows the same 0.186. 2e-4 rad/s from it once
+            // the half sample is allowed for, away from the two edges; 9e-3
+            // without, all of it the half sample on a rate that moves
+            // 1.7 rad/s^2 just after each edge.
             wash.wcmd.x;
             wash.wcmd.y;
             wash.wcmd.z;

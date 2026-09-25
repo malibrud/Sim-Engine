@@ -10,8 +10,8 @@
 // Ported from the C++ in the `washout` repo, block for block, with the library
 // doing the filtering: `sig.ScaleLimit3` for the per-axis gain and clamp,
 // `sig.ct.SecondOrderSystem3` and `ct.FirstOrderSystem3` for the high passes,
-// `ct.LeakyIntegrator3` and `ct.Integrator3` for the two integrations, and
-// `kin.QuatLeakyIntegrator` for the rotation channel's washout attitude.
+// two `ct.Integrator3` for the two integrations, and `kin.QuatLeakyIntegrator`
+// for the rotation channel's washout attitude.
 //
 // THE CHANNELS, and what each output means:
 //
@@ -174,9 +174,15 @@ node Classical {
             B = { 1.0, 0.0 };
         };
 
-        node transGlobalVel: sig.ct.LeakyIntegrator3 (m/s^2) {
-            wc = 0.2(rad/s);
-        };
+        // PLAIN integrators, as washout_Classical.h:443-450 has them, so that
+        // `vout` is the integral of `aout` and `pout` of `vout`. The washing
+        // is the high passes' job and they have done it: `aout` is already
+        // third-order high passed. This one was a `LeakyIntegrator3` at
+        // 0.2 rad/s -- the global high pass's own pole, applied a second
+        // time -- which left `aout` alone and put `pout` up to 7.5 cm from
+        // what the C++ integrates out of the same `aout` (VerticalAccel.sim
+        // has the comparison).
+        node transGlobalVel: sig.ct.Integrator3 (m/s^2);
 
         node transGlobalPos: sig.ct.Integrator3 (m/s);
 

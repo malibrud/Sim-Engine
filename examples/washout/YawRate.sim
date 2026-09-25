@@ -26,7 +26,7 @@ sim YawRate {
             // Z, which nothing translational drives. The golden's translation
             // columns are zero on every row; this one carries only the startup
             // transient of the constant -g inside `sf` -- from -9.81, and
-            // enough to take `pout.z` to -0.59 m at t = 1.4. The next commit's
+            // enough to take `pout.z` to -0.72 m at t = 1.85. The next commit's
             // gravity coupling cancels it, and then these three are zero too.
             wash.aout.z;
             wash.vout.z;
@@ -41,7 +41,7 @@ sim YawRate {
             // 10.86: its washout attitude is a per-step update
             // `qWash (x) exp(w dt)` that has already taken sample i's rate
             // when it reports sample i. Allowing that one sample the two agree
-            // to 1e-4 rad; not allowing it, to 1e-3. Roll and pitch are zero in
+            // to 1e-4 rad; not allowing it, to 4e-3. Roll and pitch are zero in
             // both -- a yaw rate leans nothing.
             wash.ecmd.x;
             wash.ecmd.y;
@@ -50,8 +50,11 @@ sim YawRate {
             // Its body rate -- golden `out_p`, `out_q`, `out_r`. The high pass
             // passes the step whole, so `wcmd.z` starts at the full 0.4 and
             // decays through zero to -0.064 at t = 1.8 while the drive still
-            // holds; the release mirrors it. 2e-3 rad/s from the golden, all
-            // of it the half sample on a rate falling 0.37 rad/s^2 at t = 0.5.
+            // holds; the release mirrors it. The rate is not the attitude:
+            // its golden runs half a sample LATE, like every filter output,
+            // and allowing that the two agree to 2e-4 rad/s away from the two
+            // edges. Not allowing it, to 4.5e-3 -- largest just after each
+            // edge, where the rate moves 0.86 rad/s^2.
             wash.wcmd.x;
             wash.wcmd.y;
             wash.wcmd.z;
