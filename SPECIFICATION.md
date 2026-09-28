@@ -2943,30 +2943,42 @@ external build tool:
 - **Generate-code and build-it are separable steps.** The compiler's contract is
   *generate code*; building it into a running simulation is an optional second
   stage.
-- **One script per shell, all equivalent.** `build.bat` for a Developer Command
-  Prompt, `build.ps1` for PowerShell, `build.sh` for a POSIX shell. They differ
-  only in quoting and in how an exit code is read; the compiler arguments they
-  pass are the same list.
+- **The header is the public interface, and nothing else.** `sec` writes three
+  sources, named for the sim unless `--stem` says otherwise:
+  - `<name>.hpp` declares `class Sim`: the ROOT node's settings, inputs and
+    outputs as typed structs (with the record types they use), and the calls a
+    host makes in order — `settings()`, `init()`, `inputs()` / `tick()` /
+    `outputs()` / `done()`, `finish()`. The model itself is `Sim::Impl`,
+    incomplete in the header, so a host depends on no layout it cannot see.
+  - `<name>.cpp` holds everything behind it: the engine runtime, the node
+    classes, `Sim::Impl` and the schedule. It is ONE translation unit — the
+    whole model — which keeps the unity-build property that matters: the
+    model's flat call sequence is compiled in one piece.
+  - `main.cpp` is an example host that uses the header alone. It is what the
+    `run` and `exe` modes build, and `--no-main` suppresses it.
+- **Two scripts, one set of modes.** `build.ps1` for Windows and `build.sh` for
+  a POSIX shell. They differ in quoting and in how an exit code is read, and
+  take the same modes: `run` (build the exe and run it as the `.sim`
+  describes; the default), `exe`, `lib` (a static library plus the header),
+  `test` (build in debug, run, fail unless the exit status is 0), `clean` and
+  `all`; and the same options: a `release` or `debug` configuration, a
+  sanitizer build, and a statically linked C runtime. `test` alone sanitizes
+  by default — finding bugs is its whole job, and it runs its own exe — and
+  falls back to a plain build, saying so, where the compiler has no sanitizer.
+  Elsewhere it is opt-in: it displaces other debug checks (`/RTC1` under MSVC),
+  a sanitized `lib` imposes the sanitizer on its consumer, and a sanitized exe
+  needs its runtime to be findable when it starts.
 - **The compiler output and the C++ compiler's output stay apart.** Each script
-  compiles into a `build/` subdirectory of the output directory, and creates it
-  if it is not there. The generated sources can then be re-emitted, diffed or
-  deleted without object files and executables mixed in among them. The output
-  directory itself is likewise created by `sec`, so `--emit -o <dir>` does not
-  require the caller to have made `<dir>` first.
-- **The model is a header; the driver is its own translation unit.** The script
-  compiles `<name>.main.cpp`, which contains nothing but `main()` and an
-  `#include` of `<name>.generated.hpp`. A host program that wants to drive the
-  root boundary itself includes the header and supplies its own `main()`,
-  without editing a file stamped DO NOT EDIT; the driver can be suppressed
-  entirely. Both the driver and a host use the same `init()` / `done()` /
-  `tick()` / `finish()` calls, so neither can drift from the other.
-- The script is a **full-build reference only**. It never tracks changes and
-  never builds incrementally or in parallel.
-- That is not an omission. **The unity build is the intended build model** — all
-  sources `#include`d into a single translation unit. There are no separate object
-  files, so incremental tracking is a category that does not exist rather than a
-  feature skipped. It also matches the rest of the design: concrete classes, no
-  virtuals, one flat generated call sequence.
+  builds into `build/<config>/`, as `bin/`, `lib/` and `include/`, and creates
+  it if it is not there. The generated sources can then be re-emitted, diffed
+  or deleted without object files and executables mixed in among them, and a
+  consumer of `lib` points its include and library paths at the last two
+  unchanged. The output directory itself is likewise created by `sec`, so
+  `--emit -o <dir>` does not require the caller to have made `<dir>` first.
+- The scripts are **full builds only**. They never track changes and never
+  build incrementally or in parallel. That is not an omission: the model is one
+  translation unit and the example host is another, so there is nothing for
+  incremental tracking to save.
 
 ---
 
@@ -3583,9 +3595,13 @@ being the value that runs.
 #### 15.5a The state buffers are the host's
 
 When a model has array-shaped states its block sizes are not known until §6.2b
-step 4, so `Sim` cannot own `std::array` members and will not own `std::vector`
-ones. **The host allocates and hands the buffers in.** The engine performs no
-allocation for any published block, before a run or during one.
+step 4, so `Sim::Impl` cannot own `std::array` members and will not own
+`std::vector` ones. **The host allocates and hands the buffers in.** The engine
+performs no allocation for any published block, before a run or during one.
+
+The handshake below is `Sim::Impl`'s. The public `Sim` of §12.4 is itself such a
+host: its `init()` sizes the buffers once configuration has settled and binds
+them, so a program written against the public header never sees the handshake.
 
 ```cpp
 void        configure(const SettingsSource&);       // §6.2b steps 1–4
@@ -3634,18 +3650,18 @@ solver, feeding the root boundary, or overriding a setting from outside:
 x[0]      whl.omega             rad/s
 xd[0]     whl.omega'            rad/s^2
 
-[state.discrete]          # Sim::dis; offsets from Sim::discrete_map()
+[state.discrete]          # Sim::Impl::dis; offsets from Sim::Impl::discrete_map()
           tc.cut                N*m         double
 
-[state.discrete.array]    # Sim::dis_arr; rows from Sim::discrete_array_map()
+[state.discrete.array]    # Sim::Impl::dis_arr; rows from Sim::Impl::discrete_array_map()
 dis_arr[?]  bw.w1 [param.nbq]   -           dynamic
 dis_arr[?]  bw.w2 [param.nbq]   -           dynamic
 
-[signals]                 # Sim::sig; offsets from Sim::signal_map()
+[signals]                 # Sim::Impl::sig; offsets from Sim::Impl::signal_map()
           in.axle_torque        N*m         double
           whl.ws.speed          rad/s       double
 
-[boundary.in]             # root inputs the host must drive, as sig.in.*
+[boundary.in]             # root inputs the host must drive, through Sim::inputs()
           in.axle_torque        N*m
 
 [boundary.out]            # root outputs the host may read
@@ -3675,7 +3691,7 @@ instance, so there is no prefix for the root itself.
 **Byte offsets are not in the manifest, deliberately.** Padding is decided by the
 C++ compiler, so a table written by `sec` would be a guess, and a wrong offset
 table is worse than none. The manifest names, units and types each slot; the
-generated header exposes the offsets, built with `offsetof` where they are
+implementation exposes the offsets on `Sim::Impl`, built with `offsetof` where they are
 actually known:
 
 ```cpp
@@ -3683,8 +3699,8 @@ static const se_rt::Slot* signal_map(std::size_t& count);
 static const se_rt::Slot* discrete_map(std::size_t& count);
 // Non-static, and emitted only for a model with array-shaped states: one
 // block each, so one accessor each. Both are built by configure().
-const se_rt::Slot* state_map(std::size_t& count) const;            // Sim::x
-const se_rt::Slot* discrete_array_map(std::size_t& count) const;   // Sim::dis_arr
+const se_rt::Slot* state_map(std::size_t& count) const;            // Sim::Impl::x
+const se_rt::Slot* discrete_array_map(std::size_t& count) const;   // Sim::Impl::dis_arr
 // struct Slot { const char* path; std::size_t offset, size;
 //               const char* type; const char* unit; };
 ```

@@ -1,6 +1,6 @@
 ﻿# ----------------------------------------------------------------------------
 #  GENERATED — DO NOT EDIT.
-#  Unit manifest for: Sim.generated.hpp
+#  Unit manifest for: BwChk.hpp
 #  sim: BwChk   root: bwchk.BwChk   base step: 0.001 s
 #
 #  Units are checked by the DSL compiler at every declarative site and then
@@ -16,24 +16,24 @@
 #  This model has array-shaped states (§6.4a), so no slot number is
 #  known here: an extent does not settle until configuration. The extent
 #  is printed AS WRITTEN, and the concrete rows come from
-#  Sim::state_map() once configure() has run (§15.6).
+#  Sim::Impl::state_map() once configure() has run (§15.6).
           (none)
 
-[state.discrete]          # Sim::dis; offsets from Sim::discrete_map()
+[state.discrete]          # Sim::Impl::dis; offsets from Sim::Impl::discrete_map()
           src.u                   -           double
 
-[state.discrete.array]    # Sim::dis_arr; rows from Sim::discrete_array_map()
+[state.discrete.array]    # Sim::Impl::dis_arr; rows from Sim::Impl::discrete_array_map()
 dis_arr[?]  bw4.w1 [param.nbq]    -           dynamic
 dis_arr[?]  bw4.w2 [param.nbq]    -           dynamic
 dis_arr[?]  bw5.w1 [param.nbq]    -           dynamic
 dis_arr[?]  bw5.w2 [param.nbq]    -           dynamic
 
-[signals]                 # Sim::sig; offsets from Sim::signal_map()
+[signals]                 # Sim::Impl::sig; offsets from Sim::Impl::signal_map()
           src.y                   m/s^2       double
           bw4.y                   m/s^2       double
           bw5.y                   m/s^2       double
 
-[boundary.in]             # root inputs the host must drive, as sig.in.*
+[boundary.in]             # root inputs the host must drive, through Sim::inputs()
           (none)
 
 [boundary.out]            # root outputs the host may read

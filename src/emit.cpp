@@ -126,6 +126,17 @@ std::string quote(const std::string& s) {
 // compensation for erasing units (§4.4); the manifest is the other.
 std::string unit_comment(const Unit& u) { return "// " + u.str(); }
 
+// A type as a reader of the public header wants it labelled: a scalar by its
+// unit, a record by its name and its BOUND units, `se.math.Vec3(m/s^2)`,
+// because a parametric record's own fields say only `U` (§5.2).
+std::string type_label(const Type& t) {
+    if (!t.is_record) return t.unit.str();
+    std::string s = t.record->fq;
+    for (std::size_t i = 0; i < t.unit_args.size(); ++i)
+        s += (i ? ", " : "(") + t.unit_args[i].str();
+    return t.unit_args.empty() ? s : s + ")";
+}
+
 // One member of a generated view struct, kept as columns so the emitted code
 // lines up. The unit comment is the thing a reader scans, so it is worth the
 // bookkeeping to put it in a column.
@@ -201,19 +212,38 @@ void split_native(const std::string& text, std::string& type, std::string& init)
 // ═════════════════════════════════════════════════════════════════════════════
 
 // Which shell a reference build script is written for (§12.4).
-enum class Script { Bat, Ps1, Sh };
+enum class Script { Ps1, Sh };
 
 class Emitter {
 public:
-    Emitter(const Model& m, const std::string& gen_name) : m_(m), gen_(gen_name) {}
+    // `stem` names the three sources: <stem>.hpp is the public interface,
+    // <stem>.cpp the implementation, and the #line resyncs point at the latter,
+    // because that is where every verbatim body lands.
+    Emitter(const Model& m, const std::string& stem)
+        : m_(m), gen_(stem + ".cpp"), hdr_(stem + ".hpp"), stem_(stem) {}
 
-    std::string hpp();
-    std::string main_cpp(const std::string& header_name);
+    std::string public_hpp();
+    std::string impl_cpp(bool separate_runtime);
+    std::string main_cpp();
     std::string manifest();
     std::string topology() const;
-    std::string build_script(Script kind, const std::string& header_name);
+    // `exe_main` is the file holding main(). With `unity` it #includes the
+    // implementation itself (a white-box test program), so it is compiled alone.
+    std::string build_script(Script kind, const std::string& exe_main, bool unity);
 
 private:
+    // The public header's pieces (§15.7).
+    std::set<const RecordInfo*> public_records() const;
+    void record_def(Out& o, const RecordInfo* r) const;
+    void public_class();
+    std::vector<std::size_t> root_settings() const;
+    std::string root_setting_default(const std::string& decl, const Type& t) const;
+    std::string cpp_ns() const;
+    std::uint64_t tick_count() const;
+    void sim_facade();
+    void sim_public_glue();
+    std::string source_expr(const InputSource& s, const Type* type) const;
+
     // Verbatim regions (§11), with `#line` on both sides.
     void verbatim(const Verbatim& v, const std::string& src_path);
     void preamble(const NodeInfo& node, ast::Method::Which which, const char* indent);
@@ -270,7 +300,9 @@ private:
     std::vector<SlotRow> array_state_rows(bool continuous) const;
 
     const Model& m_;
-    std::string gen_;
+    std::string gen_;    // <stem>.cpp
+    std::string hdr_;    // <stem>.hpp
+    std::string stem_;
     Out o_;
 };
 
@@ -352,34 +384,58 @@ void Emitter::preamble(const NodeInfo& node, ast::Method::Which which, const cha
 
 // ─── Records (§5.2) ──────────────────────────────────────────────────────────
 
+// One record, guarded by its fully-qualified name. The guard is what lets two
+// model headers that both use `se.math.Vec3` be included in one translation
+// unit, and lets a record appear in one model's public header and another
+// model's implementation without colliding.
+void Emitter::record_def(Out& o, const RecordInfo* r) const {
+    std::string guard = "SE_TYPE_";
+    for (char c : r->fq) guard += (c == '.' || c == '#') ? '_' : c;
+    const std::size_t colon = r->cpp_name.rfind("::");
+    const std::string ns = colon == std::string::npos ? "" : r->cpp_name.substr(0, colon);
+    const std::string base =
+        colon == std::string::npos ? r->cpp_name : r->cpp_name.substr(colon + 2);
+    o << "#ifndef " << guard << "\n#define " << guard << "\n";
+    if (!ns.empty()) o << "namespace " << ns << " {\n";
+    std::size_t wt = 0, wd = 0;
+    for (const Field& f : r->fields) {
+        wt = std::max(wt, cpp_type(f.type).size());
+        wd = std::max(wd, f.name.size() + 1);
+    }
+    o << "struct " << base << " {   // " << r->fq << "\n";
+    for (const Field& f : r->fields) {
+        o << "    " << pad(cpp_type(f.type), wt) << " " << pad(f.name + ";", wd);
+        if (!f.type.is_record) o << "   " << unit_comment(f.type.unit);
+        o << "\n";
+    }
+    o << "};\n";
+    if (!ns.empty()) o << "}  // namespace " << ns << "\n";
+    o << "#endif\n\n";
+}
+
+// The records the public interface names — a root input, output or setting —
+// and every record those contain. They go in the public header; the rest stay
+// in the implementation.
+std::set<const RecordInfo*> Emitter::public_records() const {
+    std::set<const RecordInfo*> pub;
+    std::function<void(const Type&)> add = [&](const Type& t) {
+        if (!t.is_record || !t.record || !pub.insert(t.record).second) return;
+        for (const Field& f : t.record->fields) add(field_type(t, f));
+    };
+    for (const BoundaryIn& b : m_.boundary_in) add(b.type);
+    for (const RootOutput& r : m_.root_outputs) add(r.type);
+    for (std::size_t i : root_settings()) add(m_.settings[i].decl_type);
+    return pub;
+}
+
 void Emitter::records() {
     // Loading is need-driven, so `record_order` holds exactly the records this
     // model reaches. It is post-order over the field graph, which means a
     // contained record always precedes its container and the emitted sequence
     // compiles without any forward declarations.
-    for (const RecordInfo* r : m_.program->record_order) {
-        const std::string title = "// -- type " + r->fq + " ";
-        o_ << title << std::string(title.size() < 78 ? 78 - title.size() : 1, '-') << "\n";
-        const std::size_t colon = r->cpp_name.rfind("::");
-        const std::string ns = colon == std::string::npos ? "" : r->cpp_name.substr(0, colon);
-        const std::string base =
-            colon == std::string::npos ? r->cpp_name : r->cpp_name.substr(colon + 2);
-        if (!ns.empty()) o_ << "namespace " << ns << " {\n";
-        std::size_t wt = 0, wd = 0;
-        for (const Field& f : r->fields) {
-            wt = std::max(wt, cpp_type(f.type).size());
-            wd = std::max(wd, f.name.size() + 1);
-        }
-        o_ << "struct " << base << " {\n";
-        for (const Field& f : r->fields) {
-            o_ << "    " << pad(cpp_type(f.type), wt) << " " << pad(f.name + ";", wd);
-            if (!f.type.is_record) o_ << "   " << unit_comment(f.type.unit);
-            o_ << "\n";
-        }
-        o_ << "};\n";
-        if (!ns.empty()) o_ << "}  // namespace " << ns << "\n";
-        o_ << "\n";
-    }
+    const std::set<const RecordInfo*> pub = public_records();
+    for (const RecordInfo* r : m_.program->record_order)
+        if (!pub.count(r)) record_def(o_, r);
 }
 
 // ─── `declarations` blocks (§6.6) ────────────────────────────────────────────
@@ -548,7 +604,7 @@ void Emitter::leaf_class(const NodeInfo& node) {
     // not `param.x`, and not `this->param.x` either.
     o_ << "\n";
     std::vector<Row> mem;
-    mem.push_back({"Param", "param;", "// written by Sim::resolve_settings"});
+    mem.push_back({"Param", "param;", "// written by Sim::Impl::resolve_settings"});
     mem.push_back({"const char* const", "se_path_;", "// model path, for the log tag"});
     // §10.5 - the reflection surface's backing. `se_run_` points at the one
     // RunState the enclosing Sim owns, so `sim.time()` is a member read and not
@@ -654,7 +710,18 @@ void Emitter::leaf_class(const NodeInfo& node) {
 std::string Emitter::input_expr(const Leaf& leaf, const std::string& port) const {
     auto it = leaf.inputs.find(port);
     if (it == leaf.inputs.end()) return "{}";
-    const InputSource& s = it->second;
+    // Walking `ports_in` rather than the definition's ports is what gives the
+    // concrete record type after unit substitution (§6.2a).
+    const Type* type = nullptr;
+    for (const Field& f : leaf.ports_in)
+        if (f.name == port) { type = &f.type; break; }
+    return source_expr(it->second, type);
+}
+
+// What a reader of one wire sees: the source's storage, a setting, or a folded
+// literal, with the chain's conversion applied. `type` is the READER's declared
+// type, needed only to rebuild a converted record field by field.
+std::string Emitter::source_expr(const InputSource& s, const Type* type) const {
     // §6.9.2 — a setting source is read where the value is read: the setting is
     // a live member (§6.2b), so an override at configuration reaches the wire
     // without anything being folded, and no `Out` storage is invented. A
@@ -668,14 +735,9 @@ std::string Emitter::input_expr(const Leaf& leaf, const std::string& port) const
     if (!s.converts()) return expr;
 
     // A record converts field by field, so it is rebuilt as a brace initialiser
-    // over the same depth-first order the elaborator flattened (§5.2). Walking
-    // `ports_in` rather than the definition's ports is what gives the concrete
-    // record type after unit substitution (§6.2a).
+    // over the same depth-first order the elaborator flattened (§5.2).
     if (!s.field_convs.empty()) {
-        const Field* pf = nullptr;
-        for (const Field& f : leaf.ports_in)
-            if (f.name == port) { pf = &f; break; }
-        if (pf && pf->type.is_record) {
+        if (type && type->is_record) {
             std::size_t k = 0;
             std::function<std::string(const Type&, const std::string&)> build =
                 [&](const Type& t, const std::string& base) -> std::string {
@@ -704,7 +766,7 @@ std::string Emitter::input_expr(const Leaf& leaf, const std::string& port) const
                 }
                 return r + "}";
             };
-            return build(pf->type, expr);
+            return build(*type, expr);
         }
     }
 
@@ -776,37 +838,19 @@ bool Emitter::adjusts(const Leaf& leaf) {
 // ═════════════════════════════════════════════════════════════════════════════
 
 void Emitter::sim_members() {
-    const double steps = m_.step > 0.0 ? m_.duration / m_.step : 0.0;
-
-    o_ << "    // ---- host API " << std::string(58, '-') << "\n";
-    o_ << "    //  A run is `init(); while (!done()) tick(); finish();` — which is\n";
-    o_ << "    //  exactly what run() does, so a host driving the boundary and the\n";
-    o_ << "    //  generated batch driver use the same calls.\n";
-    o_ << "    //  Construction leaves every setting at the value elaboration computed\n";
-    o_ << "    //  for it (§6.2b step 1). To change one: load_settings(), then\n";
-    o_ << "    //  resolve_settings() to re-run everything derived from it, then init().\n";
+    o_ << "    // ---- lifecycle " << std::string(57, '-') << "\n";
+    o_ << "    //  The public Sim forwards here. start() is Sim::init(): it takes the\n";
+    o_ << "    //  host's settings, configures, and runs every node's init().\n";
     if (!m_.dynamic_states) {
-        o_ << "    Sim() { bind(); resolve_settings(); }\n";
+        o_ << "    Impl() { bind(); resolve_settings(); publish_settings(); }\n";
     } else {
         // §15.5a — the block sizes are not known until configuration, so
-        // the constructor cannot bind what does not exist yet. It configures;
-        // the host then allocates and hands the buffers in.
-        o_ << "    //  This model has array-shaped states (§6.4a), so its block sizes\n";
-        o_ << "    //  are a CONFIGURATION result and the buffers are the host's\n";
-        o_ << "    //  (§15.5a):\n";
-        o_ << "    //\n";
-        o_ << "    //      Sim sim;                       // configures\n";
-        o_ << "    //      std::vector<double> x(sim.state_size()), xd(x.size());\n";
-        o_ << "    //      sim.bind_state(x.data(), xd.data(), x.size());\n";
-        if (m_.n_disc_arr_slots) {
-            o_ << "    //      std::vector<double> d(sim.discrete_array_size()), "
-                  "n(d.size());\n";
-            o_ << "    //      sim.bind_discrete_array(d.data(), n.data(), d.size());\n";
-        }
-        o_ << "    //      sim.init();\n";
-        o_ << "    //\n";
-        o_ << "    //  run() and run_main() do all of that themselves.\n";
-        o_ << "    Sim() { bind(); configure(); }\n";
+        // the constructor cannot bind what does not exist yet. It configures,
+        // and start() sizes the buffers and hands them in.
+        o_ << "    //  This model has array-shaped states (§6.4a), so its block sizes are a\n";
+        o_ << "    //  CONFIGURATION result: start() sizes the buffers after configure()\n";
+        o_ << "    //  and hands them to bind_state() (§15.5a).\n";
+        o_ << "    Impl() { bind(); configure(); publish_settings(); }\n";
         o_ << "    void configure();                        // §6.2b steps 1-4\n";
         o_ << "    std::size_t state_size() const { return n_states; }\n";
         if (m_.n_disc_arr_slots)
@@ -815,20 +859,25 @@ void Emitter::sim_members() {
         if (m_.n_disc_arr_slots)
             o_ << "    void bind_discrete_array(double* pd, double* pn, std::size_t n);\n";
     }
+    o_ << "    bool start();                            // Sim::init()\n";
     o_ << "    void init();\n";
     o_ << "    void tick();                             // one base step (§9.6)\n";
     o_ << "    bool done() const { return se_done_; }\n";
     o_ << "    void finish();\n";
+    o_ << "    int  exit_code() const;                  // what Sim::finish() returns\n";
+    o_ << "    const char* error() const;               // what Sim::error() returns\n";
     o_ << "    //  Empty unless resolve_settings() rejected a value it was given\n";
     o_ << "    //  (§16.4). init() refuses to start a run while it is set.\n";
     o_ << "    const std::string& config_error() const { return se_cfg_error_; }\n";
     o_ << "    double time() const { return se_time_; }\n";
-    o_ << "    std::uint64_t tick_index() const { return se_tick_; }\n";
-    o_ << "    int run();                               // init + loop + finish\n";
-    o_ << "    static int run_main();                   // run(), configured from the .sim\n\n";
-    o_ << "    static constexpr double        step_seconds = " << dbl(m_.step) << ";\n";
-    o_ << "    static constexpr std::uint64_t tick_count   = "
-       << std::to_string(static_cast<long long>(steps + 0.5)) << ";\n\n";
+    o_ << "    std::uint64_t tick_index() const { return se_tick_; }\n\n";
+
+    // The public face of the model's own state: the host's copy of the root
+    // settings, the snapshot that tells an edit from a default, and the root
+    // outputs as the host reads them.
+    o_ << "    Sim::Settings se_settings_{};   // the host edits these through Sim::settings()\n";
+    o_ << "    Sim::Settings se_resolved_{};   // what configuration last left there\n";
+    o_ << "    Sim::Outputs  se_outputs_{};    // copied out of `sig` every tick\n\n";
 
     o_ << "    // ---- the model's whole data surface " << std::string(36, '-') << "\n";
     o_ << "    //  x    continuous state — the external solver's ABI\n";
@@ -883,19 +932,9 @@ void Emitter::sim_members() {
     // address and one size. ZOH still falls out for free: a slow node's slice
     // is simply not written on the ticks it does not sample.
     o_ << "    struct Signals {\n";
-    if (!m_.boundary_in.empty()) {
-        o_ << "        struct In {\n";
-        std::size_t wt = 0, wd = 0;
-        for (const BoundaryIn& b : m_.boundary_in) {
-            wt = std::max(wt, cpp_type(b.type).size());
-            wd = std::max(wd, b.ident.size() + 3);
-        }
-        for (const BoundaryIn& b : m_.boundary_in)
-            o_ << "            " << pad(cpp_type(b.type), wt) << " "
-               << pad(b.ident + "{};", wd)
-               << (b.type.is_record ? "" : "   " + unit_comment(b.type.unit)) << "\n";
-        o_ << "        } in;   // the host writes these\n";
-    }
+    // The root inputs are the public struct itself, so Sim::inputs() hands the
+    // host a reference into this block and nothing is copied per tick.
+    o_ << "        Sim::Inputs in;   // the host writes these, through Sim::inputs()\n";
     {
         std::size_t w = 0;
         for (const Leaf& leaf : m_.leaves)
@@ -1101,8 +1140,20 @@ void Emitter::sim_members() {
             o_ << "    std::vector<se_rt::Slot>  se_dstate_slots_;\n";
     }
 
+    // For a dynamic model the buffers are the host's (§15.5a), and the public
+    // Sim is that host: start() sizes these and binds them.
+    if (m_.dynamic_states) {
+        o_ << "\n    std::vector<double> se_x_buf_, se_xd_buf_;   // bound by start()\n";
+        if (m_.n_disc_arr_slots)
+            o_ << "    std::vector<double> se_d_buf_, se_dn_buf_;\n";
+    }
+
     // Everything below is defined after the class, so the class body reads as
     // an interface and a data layout rather than as a wall of code.
+    o_ << "\n    void configure_run();\n";
+    o_ << "    std::string accept_settings();\n";
+    o_ << "    void publish_settings();\n";
+    o_ << "    void publish_outputs();\n";
     o_ << "\n    void resolve_settings();\n";
     o_ << "\n    void bind();\n";
     o_ << "    void apply_initial_conditions();\n";
@@ -1152,9 +1203,9 @@ std::string Emitter::render_expr(const ExprCode& c) const {
 // ordering work. A setting a §14 source bound is PINNED and its expression is
 // skipped, which is how a deep override detaches from the flow-down (§13.3).
 void Emitter::sim_resolve_settings() {
-    o_ << "\n// Settings (§6.2b). Re-runnable: call it after load_settings() and\n";
-    o_ << "// every derived value follows, exactly as it does at elaboration.\n";
-    o_ << "inline void Sim::resolve_settings() {\n";
+    o_ << "\n// Settings (§6.2b). Re-runnable: start() calls it after pinning the host's\n";
+    o_ << "// edits, and every derived value follows, exactly as at elaboration.\n";
+    o_ << "void Sim::Impl::resolve_settings() {\n";
     std::size_t w = 0;
     for (const SettingSlot& s : m_.settings)
         w = std::max(w, param_base(s.owner).size() + s.name.size() + 1);
@@ -1212,7 +1263,7 @@ void Emitter::sim_configure() {
 
     o_ << "\n// §6.2b steps 1-4. Re-runnable, and it must be re-run after a change to\n";
     o_ << "// any setting an extent reads — that is what moves the blocks.\n";
-    o_ << "inline void Sim::configure() {\n";
+    o_ << "void Sim::Impl::configure() {\n";
     o_ << "    se_cfg_error_.clear();\n";
     o_ << "    resolve_settings();\n\n";
 
@@ -1390,7 +1441,7 @@ void Emitter::sim_configure_indices() {
 void Emitter::sim_binders() {
     if (!m_.dynamic_states) return;
 
-    o_ << "\ninline void Sim::bind_state(double* px, double* pxd, std::size_t n) {\n";
+    o_ << "\nvoid Sim::Impl::bind_state(double* px, double* pxd, std::size_t n) {\n";
     o_ << "    if (n != n_states) {\n";
     o_ << "        se_cfg_error_ = se_rt::bind_error(" << quote("bind_state")
        << ", n, n_states);\n        return;\n    }\n";
@@ -1424,7 +1475,7 @@ void Emitter::sim_binders() {
     o_ << "    se_bound_x_ = true;\n}\n";
 
     if (!m_.n_disc_arr_slots) return;
-    o_ << "\ninline void Sim::bind_discrete_array(double* pd, double* pn, "
+    o_ << "\nvoid Sim::Impl::bind_discrete_array(double* pd, double* pn, "
           "std::size_t n) {\n";
     o_ << "    if (n != n_dstates) {\n";
     o_ << "        se_cfg_error_ = se_rt::bind_error(" << quote("bind_discrete_array")
@@ -1454,7 +1505,7 @@ void Emitter::sim_elaborate() {
     o_ << "\n// Declarative state defaults (§6.4). External IC overrides folded in\n";
     o_ << "// here too — the single override channel, which is what a discrete state\n";
     o_ << "// buys over a var. A continuous write lands in x through the proxy.\n";
-    o_ << "inline void Sim::apply_initial_conditions() {\n";
+    o_ << "void Sim::Impl::apply_initial_conditions() {\n";
     std::size_t w = 0;
     bool any_discrete = false;
     for (const Leaf& leaf : m_.leaves) {
@@ -1509,7 +1560,7 @@ void Emitter::sim_init() {
     if (m_.dynamic_states)
         o_ << "// The blocks that are the HOST's (§15.5a) are not here: they have no\n"
               "// address yet. bind_state() and bind_discrete_array() bind those.\n";
-    o_ << "inline void Sim::bind() {\n";
+    o_ << "void Sim::Impl::bind() {\n";
     for (const Leaf& leaf : m_.leaves) {
         for (const StateSlot& s : leaf.states) {
             if (s.continuous) {
@@ -1532,7 +1583,7 @@ void Emitter::sim_init() {
 
     // §10.3 — final() runs on normal and error termination alike, in reverse
     // init order, but only for nodes whose init() completed.
-    o_ << "\ninline void Sim::final_all(const se_rt::RunContext& ctx) const {\n";
+    o_ << "\nvoid Sim::Impl::final_all(const se_rt::RunContext& ctx) const {\n";
     bool any_final = false;
     for (std::size_t i = m_.leaves.size(); i-- > 0;) {
         const Leaf& leaf = m_.leaves[i];
@@ -1547,7 +1598,7 @@ void Emitter::sim_init() {
 void Emitter::sim_output_pass() {
     o_ << "\n// Topological order over feedthrough edges (§8.5). A node with an empty\n";
     o_ << "// In_output is a sort root and needs no predecessor.\n";
-    o_ << "inline void Sim::output_pass(std::uint64_t k) {\n";
+    o_ << "void Sim::Impl::output_pass(std::uint64_t k) {\n";
     for (std::size_t i : m_.order) {
         const Leaf& leaf = m_.leaves[i];
         const ast::Method* out = leaf.node->method(ast::Method::Which::Output);
@@ -1568,7 +1619,7 @@ void Emitter::sim_output_pass() {
     o_ << "\n// The same order, restricted to the nodes that may move WITHIN a step\n";
     o_ << "// (§10.5). A held node is absent, not stale: `sig` still carries the\n";
     o_ << "// value it published at the tick.\n";
-    o_ << "inline void Sim::output_pass_minor() {\n";
+    o_ << "void Sim::Impl::output_pass_minor() {\n";
     bool any = false;
     for (std::size_t i : m_.order) {
         const Leaf& leaf = m_.leaves[i];
@@ -1585,7 +1636,7 @@ void Emitter::sim_output_pass() {
 void Emitter::sim_derivatives() {
     o_ << "\n// The external solver's entry point: reads x, fills xd. Sim owns both,\n";
     o_ << "// so a solver with its own vector does one memcpy each way per call.\n";
-    o_ << "inline void Sim::derivatives(double t) {\n";
+    o_ << "void Sim::Impl::derivatives(double t) {\n";
     o_ << "    se_run_.now = t;   // the minor-step instant, §10.5\n";
     o_ << "    output_pass_minor();\n";
     for (const Leaf& leaf : m_.leaves) {
@@ -1604,7 +1655,7 @@ void Emitter::sim_next() {
     o_ << "// across the MODEL and not merely within a node (§6.4). A node that did\n";
     o_ << "// not sample this tick left its slice of `nxt` equal to `dis`, so the\n";
     o_ << "// assignment is a no-op for it.\n";
-    o_ << "inline void Sim::next_tick(std::uint64_t k) {\n    (void)k;\n";
+    o_ << "void Sim::Impl::next_tick(std::uint64_t k) {\n    (void)k;\n";
     for (const Leaf& leaf : m_.leaves) {
         const ast::Method* s = leaf.node->method(ast::Method::Which::Next);
         if (!s || !leaf.has_discrete()) continue;
@@ -1631,7 +1682,7 @@ void Emitter::sim_adjust() {
     o_ << "\n// The jump map (§6.4b): the only write to `x` outside the solver, and\n";
     o_ << "// the last thing that happens before the state advances. `adj` views the\n";
     o_ << "// SAME slots as `state`, so this is an in-place correction, not a buffer.\n";
-    o_ << "inline void Sim::adjust_tick(std::uint64_t k) {\n    (void)k;\n";
+    o_ << "void Sim::Impl::adjust_tick(std::uint64_t k) {\n    (void)k;\n";
     for (const Leaf& leaf : m_.leaves) {
         if (!adjusts(leaf)) continue;
         const ast::Method* a = leaf.node->method(ast::Method::Which::Adjust);
@@ -1652,7 +1703,7 @@ void Emitter::sim_on_step() {
     o_ << "\n// Once per accepted base step, at each node's sample instants. Runs\n";
     o_ << "// after next(), and like every other method in the tick it observes the\n";
     o_ << "// tick's ENTRY state: both `dis` and `x` advance at the end of tick().\n";
-    o_ << "inline void Sim::on_step_tick(std::uint64_t k) {\n    (void)k;\n";
+    o_ << "void Sim::Impl::on_step_tick(std::uint64_t k) {\n    (void)k;\n";
     for (const Leaf& leaf : m_.leaves) {
         const ast::Method* s = leaf.node->method(ast::Method::Which::OnStep);
         if (!s) continue;
@@ -1675,10 +1726,10 @@ void Emitter::sim_integrate() {
         return;
     }
     if (m_.n_states == 0) {
-        o_ << "inline void Sim::integrate(double, double) {}   // no continuous states\n";
+        o_ << "void Sim::Impl::integrate(double, double) {}   // no continuous states\n";
         return;
     }
-    o_ << "inline void Sim::integrate(double t, double h) {\n";
+    o_ << "void Sim::Impl::integrate(double t, double h) {\n";
     o_ << "    const std::array<double, n_states> x0 = x;\n";
     if (m_.solver == "euler") {
         o_ << "    derivatives(t);\n";
@@ -1709,10 +1760,10 @@ void Emitter::sim_integrate() {
 // nothing here allocates inside a tick (§9.4).
 void Emitter::sim_integrate_dynamic() {
     if (m_.n_cont_slots == 0) {
-        o_ << "inline void Sim::integrate(double, double) {}   // no continuous states\n";
+        o_ << "void Sim::Impl::integrate(double, double) {}   // no continuous states\n";
         return;
     }
-    o_ << "inline void Sim::integrate(double t, double h) {\n";
+    o_ << "void Sim::Impl::integrate(double t, double h) {\n";
     o_ << "    const std::size_t n = n_states;\n";
     o_ << "    if (n == 0) { (void)t; (void)h; return; }\n";
     o_ << "    double* const x0 = se_x0_.data();\n";
@@ -1752,7 +1803,7 @@ void Emitter::sim_record() {
     if (!m_.record.present) return;
     o_ << "\n// Recording is quantitative: an aligned numeric table. The header\n";
     o_ << "// carries units, because the values themselves no longer do.\n";
-    o_ << "inline void Sim::record_open() {\n";
+    o_ << "void Sim::Impl::record_open() {\n";
     o_ << "    if (!se_rec_.open(" << quote(m_.record.file) << ")) {\n";
     o_ << "        se_rt::logs().write(se_rt::Level::Error, \"sim\", 0.0,\n";
     o_ << "                            \"cannot open " << m_.record.file
@@ -1765,7 +1816,7 @@ void Emitter::sim_record() {
     }
     o_ << "});\n}\n";
 
-    o_ << "\ninline void Sim::record_row() {\n    se_rec_.row(se_time_, {";
+    o_ << "\nvoid Sim::Impl::record_row() {\n    se_rec_.row(se_time_, {";
     for (std::size_t i = 0; i < m_.record.signals.size(); ++i) {
         if (i) o_ << ",";
         // §13.5 — a port path that ended on a setting could not be rendered at
@@ -1785,7 +1836,7 @@ void Emitter::sim_run() {
     for (const Leaf& leaf : m_.leaves) any_adjust = any_adjust || adjusts(leaf);
 
     // ── init ─────────────────────────────────────────────────────────────────
-    o_ << "\ninline void Sim::init() {\n";
+    o_ << "\nvoid Sim::Impl::init() {\n";
     o_ << "    // §6.2b — configuration precedes init(), so a value it refused stops\n";
     o_ << "    // the run here, before any node sees state it was never compiled for.\n";
     o_ << "    if (!se_cfg_error_.empty()) { se_rt::control().fail(se_cfg_error_); return; }\n";
@@ -1829,12 +1880,13 @@ void Emitter::sim_run() {
     o_ << "// recorder: one row is one consistent sample of the model at t[k]. Both\n";
     o_ << "// state kinds advance together at the bottom, below the exit, so a run\n";
     o_ << "// that stops is left holding a valid checkpoint (§15.5).\n";
-    o_ << "inline void Sim::tick() {\n";
+    o_ << "void Sim::Impl::tick() {\n";
     o_ << "    se_time_ = static_cast<double>(se_tick_) * step_seconds;\n";
     o_ << "    se_rt::sim_time() = se_time_;\n";
     o_ << "    se_run_.now = se_time_;   // §10.5 — the tick instant; derivatives()\n";
     o_ << "    se_run_.tick = se_tick_;  // moves it again at every minor step\n";
     o_ << "    output_pass(se_tick_);\n";
+    o_ << "    publish_outputs();\n";
     o_ << "    if (!se_rt::control().halted()) {\n";
     if (any_discrete) o_ << "        next_tick(se_tick_);\n";
     o_ << "        on_step_tick(se_tick_);\n";
@@ -1860,7 +1912,7 @@ void Emitter::sim_run() {
     o_ << "}\n";
 
     // ── finish ───────────────────────────────────────────────────────────────
-    o_ << "\ninline void Sim::finish() {\n";
+    o_ << "\nvoid Sim::Impl::finish() {\n";
     o_ << "    se_rt::control().complete();\n";
     o_ << "    const se_rt::RunContext ctx = se_rt::control().context(se_time_);\n";
     o_ << "    final_all(ctx);\n";
@@ -1875,47 +1927,50 @@ void Emitter::sim_run() {
           ": ctx.message.c_str()));\n";
     o_ << "}\n";
 
-    // ── run ──────────────────────────────────────────────────────────────────
-    o_ << "\ninline int Sim::run() {\n";
-    if (!m_.boundary_in.empty()) {
-        // A batch run has nothing to drive the root boundary WITH — the sim file
-        // has no syntax for it. Silence would make the resulting zeros look like
-        // physics, so say it. A host that calls init/tick/finish never sees this.
-        std::string names;
-        for (const BoundaryIn& b : m_.boundary_in) {
-            if (!names.empty()) names += ", ";
-            names += b.path;
-        }
-        o_ << "    se_rt::logs().write(se_rt::Level::Warn, \"sim\", 0.0,\n";
-        o_ << "                        \"batch run: nothing drives the root boundary, "
-              "so it stays at zero: \"\n";
-        o_ << "                        " << quote(names) << ");\n";
-    }
-    if (m_.dynamic_states) {
-        // A batch run is a host like any other, so it does the §15.5a
-        // handshake rather than being exempted from it. The vectors outlive the
-        // loop below, which is the whole run.
-        o_ << "    std::vector<double> se_x(state_size()), se_xd(state_size());\n";
-        o_ << "    bind_state(se_x.data(), se_xd.data(), se_x.size());\n";
-        if (m_.n_disc_arr_slots) {
-            o_ << "    std::vector<double> se_d(discrete_array_size()), "
-                  "se_dn(se_d.size());\n";
-            o_ << "    bind_discrete_array(se_d.data(), se_dn.data(), se_d.size());\n";
-        }
-    }
-    o_ << "    init();\n";
-    o_ << "    while (!done()) tick();\n";
-    o_ << "    finish();\n";
-    o_ << "    const char* r = se_rt::reason_name(se_rt::control().reason());\n";
+    // ── the exit code, and the reason ────────────────────────────────────────
     // §10.6 -- a run that violated a contract is not a successful run, even
     // when nothing halted it. That is what lets a contract BE a test oracle
     // instead of something a harness has to go grepping the log for.
-    o_ << "    return (std::strcmp(r, \"aborted\") == 0 || std::strcmp(r, \"error\") == 0 ||\n";
-    o_ << "            se_rt::checks().any())\n";
-    o_ << "               ? 1\n               : 0;\n";
+    o_ << "\n// 0 for a clean run; 1 if it was aborted, failed, or broke a contract (§10.6).\n";
+    o_ << "int Sim::Impl::exit_code() const {\n";
+    o_ << "    const se_rt::Reason r = se_rt::control().reason();\n";
+    o_ << "    const bool failed = r == se_rt::Reason::Aborted || r == se_rt::Reason::Error;\n";
+    o_ << "    return failed || se_rt::checks().any() ? 1 : 0;\n";
     o_ << "}\n";
 
-    o_ << "\ninline int Sim::run_main() {\n";
+    o_ << "\nconst char* Sim::Impl::error() const {\n";
+    o_ << "    const std::string& m = se_rt::control().message();\n";
+    o_ << "    return m.empty() ? se_cfg_error_.c_str() : m.c_str();\n";
+    o_ << "}\n";
+
+    // ── start ────────────────────────────────────────────────────────────────
+    o_ << "\n// Sim::init(): the run configuration from the .sim, the host's settings,\n";
+    o_ << "// everything derived from them (§6.2b), then every node's init().\n";
+    o_ << "bool Sim::Impl::start() {\n";
+    o_ << "    configure_run();\n";
+    o_ << "    const std::string refused = accept_settings();\n";
+    o_ << (m_.dynamic_states ? "    configure();\n" : "    resolve_settings();\n");
+    o_ << "    if (!refused.empty() && se_cfg_error_.empty()) se_cfg_error_ = refused;\n";
+    o_ << "    publish_settings();\n";
+    if (m_.dynamic_states) {
+        // §15.5a — the buffers are the host's, and here the host is Sim.
+        o_ << "    se_x_buf_.assign(state_size(), 0.0);\n";
+        o_ << "    se_xd_buf_.assign(state_size(), 0.0);\n";
+        o_ << "    bind_state(se_x_buf_.data(), se_xd_buf_.data(), se_x_buf_.size());\n";
+        if (m_.n_disc_arr_slots) {
+            o_ << "    se_d_buf_.assign(discrete_array_size(), 0.0);\n";
+            o_ << "    se_dn_buf_.assign(discrete_array_size(), 0.0);\n";
+            o_ << "    bind_discrete_array(se_d_buf_.data(), se_dn_buf_.data(), "
+                  "se_d_buf_.size());\n";
+        }
+    }
+    o_ << "    init();\n";
+    o_ << "    return !se_rt::control().halted();\n";
+    o_ << "}\n";
+
+    // ── the run configuration the .sim file gave ─────────────────────────────
+    o_ << "\n// Logging (§13.7) and the real-time frame (§9.4), as the .sim file set them.\n";
+    o_ << "void Sim::Impl::configure_run() {\n";
     o_ << "    se_rt::logs().configure(" << quote(m_.log.file) << ", se_rt::Level::";
     const std::string lvl = m_.log.level;
     o_ << (lvl == "trace"   ? "Trace"
@@ -1939,26 +1994,81 @@ void Emitter::sim_run() {
            << ");\n";
     else
         o_ << "    se_rt::realtime().configure(0.0, 0.0);   // mode: batch\n";
-    o_ << "    // A large state vector has no business on the stack.\n";
-    o_ << "    static Sim instance;\n";
-    o_ << "    return instance.run();\n";
+    o_ << "}\n";
+}
+
+// The seam between the public structs and the model's own storage. The root's
+// settings live where configuration writes them (a composite's `se_cfg_root`, or
+// a leaf root's `param`), and the host edits a copy of them in `Sim::Settings`;
+// the root outputs live in the producers' slices of `sig`, and the host reads a
+// copy of them in `Sim::Outputs`.
+void Emitter::sim_public_glue() {
+    std::vector<std::size_t> root;
+    for (std::size_t i = 0; i < m_.settings.size(); ++i)
+        if (m_.settings[i].owner.empty()) root.push_back(i);
+
+    // ── accept: the host's edits, pinned ─────────────────────────────────────
+    o_ << "\n// A root setting the host changed through Sim::settings() is pinned, so\n";
+    o_ << "// resolve_settings() leaves it alone and everything derived from it\n";
+    o_ << "// follows. Returns why a change was refused, or nothing.\n";
+    o_ << "std::string Sim::Impl::accept_settings() {\n";
+    o_ << "    std::string refused;\n";
+    for (std::size_t i : root) {
+        const SettingSlot& s = m_.settings[i];
+        const std::string a = "se_settings_." + s.name, b = "se_resolved_." + s.name;
+        if (s.structural) {
+            o_ << "    if (" << a << " != " << b << " && refused.empty())\n";
+            o_ << "        refused = " << quote(s.path + " is structural: it was fixed when "
+                                                        "the model was generated (§6.2)")
+               << ";\n";
+            continue;
+        }
+        o_ << "    if (" << a << " != " << b << ") {\n";
+        o_ << "        " << param_base(s.owner) << "." << s.name << " = " << a << ";\n";
+        o_ << "        se_pin_[" << i << "] = true;\n";
+        o_ << "    }\n";
+    }
+    o_ << "    return refused;\n";
+    o_ << "}\n";
+
+    // ── publish: what configuration settled on ───────────────────────────────
+    o_ << "\n// Hands the configured root settings back, so Sim::settings() shows what the\n";
+    o_ << "// model runs with, derived values included.\n";
+    o_ << "void Sim::Impl::publish_settings() {\n";
+    std::size_t w = 0;
+    for (std::size_t i : root) w = std::max(w, m_.settings[i].name.size());
+    for (std::size_t i : root) {
+        const SettingSlot& s = m_.settings[i];
+        o_ << "    se_settings_." << pad(s.name, w) << " = " << param_base(s.owner) << "."
+           << s.name << ";\n";
+    }
+    o_ << "    se_resolved_ = se_settings_;\n";
+    o_ << "}\n";
+
+    // ── the root outputs ─────────────────────────────────────────────────────
+    o_ << "\n// The root outputs, read through the same wires a consumer would read them\n";
+    o_ << "// through (§15.3), unit conversions included.\n";
+    o_ << "void Sim::Impl::publish_outputs() {\n";
+    w = 0;
+    for (const RootOutput& r : m_.root_outputs) w = std::max(w, r.name.size());
+    for (const RootOutput& r : m_.root_outputs) {
+        if (!r.driven) {
+            o_ << "    // " << r.name << ": nothing drives it, so it stays zero\n";
+            continue;
+        }
+        o_ << "    se_outputs_." << pad(r.name, w) << " = " << source_expr(r.src, &r.type)
+           << ";\n";
+    }
     o_ << "}\n";
 }
 
 void Emitter::sim_class() {
-    const std::string ns = m_.root_namespace;
-    o_ << "// -- Sim: the whole model, flat " << std::string(47, '-') << "\n";
-    if (!ns.empty()) {
-        std::string cpp_ns;
-        for (char c : ns) {
-            if (c == '.') cpp_ns += "::";
-            else cpp_ns += c;
-        }
-        o_ << "namespace " << cpp_ns << " {\n\n";
-    }
-    // The class body is the interface and the data layout; every body follows
-    // it, so `struct Sim { … };` can be read in one screen.
-    o_ << "struct Sim {\n";
+    const std::string ns = cpp_ns();
+    o_ << "// -- Sim::Impl: the whole model, flat " << std::string(41, '-') << "\n";
+    if (!ns.empty()) o_ << "namespace " << ns << " {\n\n";
+    // The class body is the data layout and the list of what it does; every
+    // body follows it, so `struct Sim::Impl { … };` can be read in one screen.
+    o_ << "struct Sim::Impl {\n";
     build_param_bases();
     sim_members();
     o_ << "};\n";
@@ -1975,15 +2085,32 @@ void Emitter::sim_class() {
     sim_integrate();
     sim_record();
     sim_run();
+    sim_public_glue();
     sim_maps();
-    if (!ns.empty()) {
-        std::string cpp_ns;
-        for (char c : ns) {
-            if (c == '.') cpp_ns += "::";
-            else cpp_ns += c;
-        }
-        o_ << "\n}  // namespace " << cpp_ns << "\n";
-    }
+    sim_facade();
+    if (!ns.empty()) o_ << "\n}  // namespace " << ns << "\n";
+}
+
+// The public interface, each call one line onto Sim::Impl. Nothing here has any
+// logic of its own, which is the point: Sim.hpp promises exactly what Impl does.
+void Emitter::sim_facade() {
+    o_ << "\n// -- Sim: the public interface, forwarded " << std::string(37, '-') << "\n";
+    o_ << "Sim::Sim() : impl_(std::make_unique<Impl>()) {}\n";
+    o_ << "Sim::~Sim() = default;\n";
+    o_ << "Sim::Sim(Sim&&) noexcept = default;\n";
+    o_ << "Sim& Sim::operator=(Sim&&) noexcept = default;\n\n";
+    o_ << "Sim::Settings&      Sim::settings()         { return impl_->se_settings_; }\n";
+    o_ << "bool                Sim::init()             { return impl_->start(); }\n";
+    o_ << "const char*         Sim::error() const      { return impl_->error(); }\n";
+    o_ << "Sim::Inputs&        Sim::inputs()           { return impl_->sig.in; }\n";
+    o_ << "void                Sim::tick()             { impl_->tick(); }\n";
+    o_ << "const Sim::Outputs& Sim::outputs() const    { return impl_->se_outputs_; }\n";
+    o_ << "bool                Sim::done() const       { return impl_->done(); }\n";
+    o_ << "std::uint64_t       Sim::tick_index() const { return impl_->tick_index(); }\n";
+    o_ << "double              Sim::time() const       "
+          "{ return static_cast<double>(tick_index()) * step_seconds; }\n";
+    o_ << "int                 Sim::finish()           "
+          "{ impl_->finish(); return impl_->exit_code(); }\n";
 }
 
 // ─── The block offset tables (§15.6) ─────────────────────────────────────────
@@ -2048,7 +2175,7 @@ std::vector<Emitter::SlotRow> Emitter::array_state_rows(bool continuous) const {
 void Emitter::sim_maps() {
     auto emit_table = [&](const char* fn, const char* block,
                           const std::vector<SlotRow>& rows) {
-        o_ << "\ninline const se_rt::Slot* Sim::" << fn << "(std::size_t& count) {\n";
+        o_ << "\nconst se_rt::Slot* Sim::Impl::" << fn << "(std::size_t& count) {\n";
         if (rows.empty()) {
             o_ << "    count = 0;\n    return nullptr;\n}\n";
             return;
@@ -2060,7 +2187,7 @@ void Emitter::sim_maps() {
             wm = std::max(wm, r[1].size());
         }
         for (const auto& r : rows)
-            o_ << "        {" << pad(quote(r[0]) + ",", wp + 1) << " offsetof(Sim::" << block
+            o_ << "        {" << pad(quote(r[0]) + ",", wp + 1) << " offsetof(Sim::Impl::" << block
                << ", " << pad(r[1] + "),", wm + 2) << " sizeof(" << r[2] << "), "
                << quote(r[2]) << ", " << quote(r[3]) << "},\n";
         o_ << "    };\n    count = sizeof(table) / sizeof(table[0]);\n    return table;\n}\n";
@@ -2076,7 +2203,7 @@ void Emitter::sim_maps() {
     // to learn what paths exist, and calls these to learn where they landed.
     if (!m_.dynamic_states) return;
     auto emit_dyn = [&](const char* fn, const char* store) {
-        o_ << "\ninline const se_rt::Slot* Sim::" << fn
+        o_ << "\nconst se_rt::Slot* Sim::Impl::" << fn
            << "(std::size_t& count) const {\n";
         o_ << "    count = " << store << ".size();\n";
         o_ << "    return " << store << ".empty() ? nullptr : " << store << ".data();\n}\n";
@@ -2085,31 +2212,254 @@ void Emitter::sim_maps() {
     if (m_.n_disc_arr_slots) emit_dyn("discrete_array_map", "se_dstate_slots_");
 }
 
-// ─── The whole file ──────────────────────────────────────────────────────────
+// ─── The three sources ───────────────────────────────────────────────────────
+//
+//  <stem>.hpp is the public interface and nothing else: the root node's
+//  settings, inputs and outputs as typed structs, and the calls that configure,
+//  start, step and finish a run. <stem>.cpp is everything behind it. main.cpp is
+//  an example host that uses the header alone.
 
-std::string Emitter::hpp() {
+std::string Emitter::cpp_ns() const {
+    std::string r;
+    for (char c : m_.root_namespace) {
+        if (c == '.') r += "::";
+        else r += c;
+    }
+    return r;
+}
+
+std::uint64_t Emitter::tick_count() const {
+    const double steps = m_.step > 0.0 ? m_.duration / m_.step : 0.0;
+    return static_cast<std::uint64_t>(steps + 0.5);
+}
+
+std::vector<std::size_t> Emitter::root_settings() const {
+    std::vector<std::size_t> r;
+    for (std::size_t i = 0; i < m_.settings.size(); ++i)
+        if (m_.settings[i].owner.empty()) r.push_back(i);
+    return r;
+}
+
+// A root setting's default, as the .sim file left it: a scalar is its value, and
+// a record is a brace list of its leaves in field order (§6.2c).
+std::string Emitter::root_setting_default(const std::string& decl, const Type& t) const {
+    if (!t.is_record) {
+        for (std::size_t i : root_settings())
+            if (m_.settings[i].name == decl)
+                return literal(m_.settings[i].value, m_.settings[i].scalar);
+        return "{}";
+    }
+    std::string r = "{";
+    for (std::size_t i = 0; i < t.record->fields.size(); ++i) {
+        const Field& f = t.record->fields[i];
+        if (i) r += ", ";
+        r += root_setting_default(decl + "." + f.name, field_type(t, f));
+    }
+    return r + "}";
+}
+
+void Emitter::public_class() {
+
+    // One member: type, name, default, and a unit comment, each in its own
+    // column, because the unit is what a reader scans for.
+    struct Member {
+        std::string type, name, init, comment;
+    };
+    auto emit_rows = [&](const char* name, const std::vector<Member>& rows, const char* none) {
+        o_ << "    struct " << name << " {";
+        if (rows.empty()) {
+            o_ << "};   // " << none << "\n";
+            return;
+        }
+        std::size_t wt = 0, wn = 0, wi = 0;
+        for (const Member& r : rows) {
+            wt = std::max(wt, r.type.size());
+            wn = std::max(wn, r.name.size());
+            wi = std::max(wi, r.init.size());
+        }
+        o_ << "\n";
+        for (const Member& r : rows)
+            o_ << "        " << pad(r.type, wt) << " " << pad(r.name, wn) << " = "
+               << pad(r.init + ";", wi + 1) << "   " << r.comment << "\n";
+        o_ << "    };\n";
+    };
+    auto zero = [](const Type& t) { return t.is_record ? std::string("{}") : literal(0.0, t.scalar); };
+
+    std::vector<Member> settings;
+    {
+        std::set<std::string> seen;
+        for (std::size_t i : root_settings()) {
+            const SettingSlot& s = m_.settings[i];
+            if (!seen.insert(s.decl).second) continue;
+            Member r{cpp_type(s.decl_type), s.decl, root_setting_default(s.decl, s.decl_type),
+                     "// " + (s.decl_type.is_record ? type_label(s.decl_type) : s.unit.str())};
+            if (s.structural) r.comment += "   structural: fixed when generated";
+            settings.push_back(r);
+        }
+    }
+    std::vector<Member> inputs;
+    for (const BoundaryIn& b : m_.boundary_in)
+        inputs.push_back({cpp_type(b.type), b.ident, zero(b.type), "// " + type_label(b.type)});
+    std::vector<Member> outputs;
+    for (const RootOutput& r : m_.root_outputs)
+        outputs.push_back({cpp_type(r.type), r.name, zero(r.type),
+                           "// " + type_label(r.type) + (r.driven ? "" : "   undriven: always zero")});
+
+    o_ << "class Sim {\n";
+    o_ << "public:\n";
+    o_ << "    // ---- the root node, " << m_.root->fq << " " << std::string(
+                  m_.root->fq.size() < 52 ? 52 - m_.root->fq.size() : 1, '-') << "\n";
+    o_ << "    //  Its settings, at the values " << m_.name << ".sim gives them.\n";
+    emit_rows("Settings", settings, "the root declares no settings");
+    o_ << "    //  Its inputs. The host writes these before every tick().\n";
+    emit_rows("Inputs", inputs, "the root declares no inputs");
+    o_ << "    //  Its outputs, as of the last tick().\n";
+    emit_rows("Outputs", outputs, "the root declares no outputs");
+    o_ << "\n";
+    const std::string step = dbl(m_.step) + ";", ticks = std::to_string(tick_count()) + ";";
+    const std::size_t wv = std::max(step.size(), ticks.size());
+    o_ << "    static constexpr double        step_seconds = " << pad(step, wv)
+       << "   // s, one tick\n";
+    o_ << "    static constexpr std::uint64_t tick_count   = " << pad(ticks, wv)
+       << "   // the run's length, in ticks\n\n";
+
+    o_ << "    Sim();\n";
+    o_ << "    ~Sim();\n";
+    o_ << "    Sim(Sim&&) noexcept;\n";
+    o_ << "    Sim& operator=(Sim&&) noexcept;\n\n";
+
+    o_ << "    // ---- 1. configure: before init() " << std::string(40, '-') << "\n";
+    o_ << "    Settings& settings();\n\n";
+
+    o_ << "    // ---- 2. start " << std::string(58, '-') << "\n";
+    o_ << "    //  Applies settings(), sets every initial condition and runs every\n";
+    o_ << "    //  node's init(). False if a setting was refused or a node stopped the\n";
+    o_ << "    //  run: error() says why, and finish() is still owed.\n";
+    o_ << "    bool        init();\n";
+    o_ << "    const char* error() const;\n\n";
+
+    o_ << "    // ---- 3. step " << std::string(59, '-') << "\n";
+    o_ << "    //  tick() samples the model at time(), with inputs() as the host left\n";
+    o_ << "    //  them, then advances one step. outputs() hold what it sampled.\n";
+    o_ << "    Inputs&        inputs();\n";
+    o_ << "    void           tick();\n";
+    o_ << "    const Outputs& outputs() const;\n";
+    o_ << "    bool           done() const;         // the run is over: tick_count, or stopped\n";
+    o_ << "    double         time() const;         // s, the instant the next tick() samples\n";
+    o_ << "    std::uint64_t  tick_index() const;   // the next tick(); time() / step_seconds\n\n";
+
+    o_ << "    // ---- 4. finish " << std::string(57, '-') << "\n";
+    o_ << "    //  Runs every node's final(), closes the recording and the log. 0 for a\n";
+    o_ << "    //  clean run; 1 if it was aborted, failed, or broke a contract.\n";
+    o_ << "    int finish();\n\n";
+
+    o_ << "    // The model itself: the node instances, the state blocks, the schedule.\n";
+    o_ << "    // Defined in " << gen_ << "; incomplete here, so nothing in this header\n";
+    o_ << "    // depends on its layout.\n";
+    o_ << "    struct Impl;\n\n";
+    o_ << "private:\n";
+    o_ << "    std::unique_ptr<Impl> impl_;\n";
+    o_ << "};\n";
+}
+
+std::string Emitter::public_hpp() {
+    Out saved;
+    std::swap(saved, o_);
+
+    const std::string ns = cpp_ns();
+    const std::string sim_t = (ns.empty() ? "" : ns + "::") + "Sim";
     o_ << "// " << std::string(76, '-') << "\n";
-    o_ << "//  GENERATED — DO NOT EDIT.\n";
-    o_ << "//  sim:  " << m_.name << "\n";
-    o_ << "//  root: " << m_.root->fq << "\n";
-    o_ << "//  base step: " << dbl(m_.step) << " s";
-    if (m_.step > 0.0) o_ << "  (" << dbl(1.0 / m_.step) << " Hz)";
-    o_ << "\n//\n";
-    o_ << "//  Reading this file: everything is generated EXCEPT the body of each\n";
-    o_ << "//  lifecycle method, which is copied byte for byte from the `.se` source\n";
-    o_ << "//  named in the `#line` directive above it. The pure methods have\n";
-    o_ << "//  no generated lines at all — brace to brace, they are the model author's.\n";
+    o_ << "//  " << hdr_ << " — GENERATED by sec from " << m_.name << ".sim. DO NOT EDIT.\n";
+    o_ << "//\n";
+    o_ << "//  The public interface of the " << m_.name << " simulation.\n";
+    o_ << "//      root:      " << m_.root->fq << "\n";
+    char hz[32] = "";
+    if (m_.step > 0.0) std::snprintf(hz, sizeof hz, " (%g Hz)", 1.0 / m_.step);
+    o_ << "//      base step: " << dbl(m_.step) << " s" << hz << ", " << tick_count()
+       << " ticks per run\n";
+    o_ << "//\n";
+    o_ << "//  A host does four things, in this order (main.cpp is a complete one):\n";
+    o_ << "//\n";
+    {
+        // The example, with its step numbers in one column.
+        std::vector<std::pair<std::string, std::string>> ex;
+        ex.push_back({sim_t + " sim;", ""});
+        const std::vector<std::size_t> rs = root_settings();
+        if (!rs.empty())
+            ex.push_back({"sim.settings()." + m_.settings[rs.front()].name + " = ...;",
+                          "1. configure, if needed"});
+        ex.push_back({"if (!sim.init()) { ...sim.error()... }", "2. start"});
+        ex.push_back({"while (!sim.done()) {", "3. step"});
+        if (!m_.boundary_in.empty())
+            ex.push_back({"    sim.inputs()." + m_.boundary_in.front().ident + " = ...;", ""});
+        ex.push_back({"    sim.tick();", ""});
+        if (!m_.root_outputs.empty())
+            ex.push_back({"    ...sim.outputs()." + m_.root_outputs.front().name + "...", ""});
+        ex.push_back({"}", ""});
+        ex.push_back({"return sim.finish();", "4. finish"});
+        std::size_t w = 0;
+        for (const auto& e : ex) w = std::max(w, e.first.size());
+        for (const auto& e : ex) {
+            if (e.second.empty()) o_ << "//      " << e.first << "\n";
+            else o_ << "//      " << pad(e.first, w) << "   // " << e.second << "\n";
+        }
+    }
+    o_ << "//\n";
+    o_ << "//  The implementation — the engine runtime, the node classes and the\n";
+    o_ << "//  schedule — is in " << gen_ << " and is not part of this interface.\n";
     o_ << "// " << std::string(76, '-') << "\n";
     o_ << "#pragma once\n\n";
-    o_ << "#include \"se_runtime.hpp\"\n#include \"state_ref.hpp\"\n\n";
+    o_ << "#include <cstdint>\n#include <memory>\n\n";
+
+    const std::set<const RecordInfo*> pub = public_records();
+    if (!pub.empty()) {
+        o_ << "// ---- the record types the interface uses " << std::string(34, '-') << "\n";
+        for (const RecordInfo* r : m_.program->record_order)
+            if (pub.count(r)) record_def(o_, r);
+    }
+
+    if (!ns.empty()) o_ << "namespace " << ns << " {\n\n";
+    public_class();
+    if (!ns.empty()) o_ << "\n}  // namespace " << ns << "\n";
+
+    std::string text = o_.str();
+    std::swap(saved, o_);
+    return text;
+}
+
+std::string Emitter::impl_cpp(bool separate_runtime) {
+    o_ << "// " << std::string(76, '-') << "\n";
+    o_ << "//  " << gen_ << " — GENERATED by sec from " << m_.name << ".sim. DO NOT EDIT.\n";
+    o_ << "//\n";
+    o_ << "//  The implementation of " << hdr_ << ", in this order:\n";
+    if (!separate_runtime)
+        o_ << "//    - the engine runtime (namespace se_rt), the same in every model\n";
+    o_ << "//    - the record types the public header does not already define\n";
+    o_ << "//    - one class per node type\n";
+    o_ << "//    - Sim::Impl, the flat model: state blocks, signals, the schedule\n";
+    o_ << "//    - Sim, the public interface, each call forwarded to Sim::Impl\n";
+    o_ << "//\n";
+    o_ << "//  Everything is generated EXCEPT the body of each node method, which is\n";
+    o_ << "//  copied byte for byte from the `.se` file named in the `#line` above it.\n";
+    o_ << "// " << std::string(76, '-') << "\n";
+    o_ << "#include " << quote(hdr_) << "\n\n";
+    // The runtime goes in ahead of everything model-shaped. Its guard is named
+    // for a hash of its text, so a unity build of two models skips the second.
+    if (separate_runtime)
+        o_ << "#include \"se_runtime.hpp\"\n\n";
+    else
+        o_ << se_runtime_hpp() << "\n"
+           << "// " << std::string(76, '=') << "\n"
+           << "//  END OF THE ENGINE RUNTIME — the model begins here.\n"
+           << "// " << std::string(76, '=') << "\n\n";
     o_ << "#include <array>\n#include <cstddef>\n#include <cstdint>\n#include <cstring>\n";
+    o_ << "#include <memory>\n#include <string>\n";
     // §6.5 / §15.5a — the two places the lowering owns storage: an array
     // var, and the solver scratch plus slot rows of a dynamic model. Both are
     // sized once at configuration and neither is a published block.
     bool any_array_var = false;
     for (const Leaf& leaf : m_.leaves) any_array_var = any_array_var || !leaf.array_vars.empty();
-    if (m_.dynamic_states || any_array_var)
-        o_ << "#include <string>\n#include <vector>\n";
+    if (m_.dynamic_states || any_array_var) o_ << "#include <vector>\n";
     o_ << "\n";
 
     // Said once, here, rather than restated as `(void)x;` at forty use sites.
@@ -2123,14 +2473,13 @@ std::string Emitter::hpp() {
     o_ << "#pragma warning(disable : 4100)   // unreferenced formal parameter\n";
     o_ << "#pragma warning(disable : 4189)   // local initialised but not referenced\n";
     o_ << "#pragma warning(disable : 4458)   // local `log` hides the trace-only member\n";
-    o_ << "#pragma warning(disable : 4459)   // local `sim` hides the namespace\n";
     o_ << "#elif defined(__GNUC__)\n";
     o_ << "#pragma GCC diagnostic ignored \"-Wunused-parameter\"\n";
     o_ << "#pragma GCC diagnostic ignored \"-Wunused-variable\"\n";
     o_ << "#pragma GCC diagnostic ignored \"-Wshadow\"\n";
     o_ << "#endif\n\n";
-    o_ << "using sim::state_ref;\nusing sim::value_ref;\n";
-    if (m_.dynamic_states) o_ << "using sim::state_arr;\n";
+    o_ << "using se_rt::state_ref;\nusing se_rt::value_ref;\n";
+    if (m_.dynamic_states) o_ << "using se_rt::state_arr;\n";
     o_ << "\n";
 
     declarations();
@@ -2144,36 +2493,83 @@ std::string Emitter::hpp() {
     return o_.str();
 }
 
-std::string Emitter::main_cpp(const std::string& header_name) {
-    std::string cpp_ns;
-    for (char c : m_.root_namespace) {
-        if (c == '.') cpp_ns += "::";
-        else cpp_ns += c;
-    }
+// The example host. It uses the public header and nothing else, so it is also
+// the proof that the header is enough.
+std::string Emitter::main_cpp() {
+    const std::string ns = cpp_ns();
+    const std::string sim_t = (ns.empty() ? "" : ns + "::") + "Sim";
+    const std::string who = m_.name;
     Out t;
     t << "// " << std::string(76, '-') << "\n";
-    t << "//  GENERATED — DO NOT EDIT.\n";
-    t << "//  The batch driver for `" << m_.name << "`, and nothing else. It is a\n";
-    t << "//  separate translation unit so that a host program can include\n";
-    t << "//  " << header_name << " and supply its own main():\n";
+    t << "//  main.cpp — GENERATED by sec from " << m_.name << ".sim. An example host.\n";
     t << "//\n";
-    t << "//      " << (cpp_ns.empty() ? "" : cpp_ns + "::") << "Sim sim;\n";
-    t << "//      sim.init();\n";
-    t << "//      while (!sim.done()) {\n";
+    t << "//  Runs the model the way " << m_.name << ".sim describes, through the public\n";
+    t << "//  interface in " << hdr_ << " and nothing else. A program of your own does the\n";
+    t << "//  same four things; copy this file to start one.\n";
+    t << "// " << std::string(76, '-') << "\n";
+    t << "#include " << quote(hdr_) << "\n\n";
+    t << "#include <cstdio>\n\n";
+    t << "int main() {\n";
+    t << "    " << sim_t << " sim;\n\n";
+
+    t << "    // 1. Configure. Every setting already holds the value " << m_.name << ".sim\n";
+    t << "    //    gives it; change any of them here, before init().";
+    const std::vector<std::size_t> rs = root_settings();
+    const SettingSlot* example = nullptr;
+    for (std::size_t i : rs)
+        if (!m_.settings[i].structural) {
+            example = &m_.settings[i];
+            break;
+        }
+    if (example)
+        t << " For example:\n    //        sim.settings()." << example->name << " = "
+          << literal(example->value, example->scalar) << ";   // " << example->unit.str()
+          << "\n\n";
+    else
+        t << "\n\n";
+
+    t << "    // 2. Start.\n";
+    t << "    if (!sim.init()) {\n";
+    t << "        std::fprintf(stderr, \"" << who << ": %s\\n\", sim.error());\n";
+    t << "        return sim.finish();\n";
+    t << "    }\n\n";
+
     if (!m_.boundary_in.empty()) {
+        std::string names;
+        for (const BoundaryIn& b : m_.boundary_in) names += (names.empty() ? "" : ", ") + b.ident;
+        t << "    // 3. Step. " << m_.name << ".sim has no way to drive the root inputs, so\n";
+        t << "    //    this run holds them at zero; a host of your own writes them before\n";
+        t << "    //    every tick().\n";
+        t << "    std::fprintf(stderr, \"" << who << ": nothing drives the root inputs, \"\n";
+        t << "                         \"so they stay at zero: " << names << "\\n\");\n";
+        t << "    while (!sim.done()) {\n";
+        auto zero = [](const Type& ty) {
+            return (ty.is_record ? std::string("{}") : literal(0.0, ty.scalar)) + ";";
+        };
+        std::size_t w = 0, wz = 0;
+        for (const BoundaryIn& b : m_.boundary_in) {
+            w = std::max(w, b.ident.size());
+            wz = std::max(wz, zero(b.type).size());
+        }
         for (const BoundaryIn& b : m_.boundary_in)
-            t << "//          sim.sig.in." << pad(b.ident + " = ...;", 24) << "// "
-              << (b.type.is_record ? b.type.record->fq : b.type.unit.str()) << "\n";
+            t << "        sim.inputs()." << pad(b.ident, w) << " = " << pad(zero(b.type), wz)
+              << "   // " << type_label(b.type) << "\n";
+    } else {
+        t << "    // 3. Step.\n";
+        t << "    while (!sim.done()) {\n";
     }
-    t << "//          sim.tick();\n";
-    t << "//      }\n";
-    t << "//      sim.finish();\n";
-    t << "//\n";
-    t << "//  Pass --no-main to `sec --emit` to suppress this file entirely.\n";
-    t << "// " << std::string(76, '-') << "\n\n";
-    t << "#include " << quote(header_name) << "\n\n";
-    t << "int main() {\n    return " << (cpp_ns.empty() ? "" : cpp_ns + "::")
-      << "Sim::run_main();\n}\n";
+    t << "        sim.tick();\n";
+    if (!m_.root_outputs.empty()) {
+        std::string names;
+        for (const RootOutput& r : m_.root_outputs) names += (names.empty() ? "" : ", ") + r.name;
+        t << "        // sim.outputs() now holds " << names << "\n";
+        t << "        // at the instant this tick() sampled.\n";
+    }
+    t << "    }\n\n";
+    t << "    // 4. Finish: every node's final(), then the recording and the log close.\n";
+    t << "    //    0 for a clean run; 1 if it was aborted, failed, or broke a contract.\n";
+    t << "    return sim.finish();\n";
+    t << "}\n";
     return t.str();
 }
 
@@ -2481,7 +2877,7 @@ std::string Emitter::manifest() {
     Out t;
     t << "# " << std::string(76, '-') << "\n";
     t << "#  GENERATED — DO NOT EDIT.\n";
-    t << "#  Unit manifest for: " << gen_ << "\n";
+    t << "#  Unit manifest for: " << hdr_ << "\n";
     t << "#  sim: " << m_.name << "   root: " << m_.root->fq << "   base step: "
       << dbl(m_.step) << " s\n#\n";
     t << "#  Units are checked by the DSL compiler at every declarative site and then\n";
@@ -2497,7 +2893,7 @@ std::string Emitter::manifest() {
         t << "#  This model has array-shaped states (§6.4a), so no slot number is\n"
              "#  known here: an extent does not settle until configuration. The extent\n"
              "#  is printed AS WRITTEN, and the concrete rows come from\n"
-             "#  Sim::state_map() once configure() has run (§15.6).\n";
+             "#  Sim::Impl::state_map() once configure() has run (§15.6).\n";
     for (const Leaf& leaf : m_.leaves)
         for (const StateSlot& s : leaf.states) {
             if (!s.continuous) continue;
@@ -2522,7 +2918,7 @@ std::string Emitter::manifest() {
     // names, units and types the slots, and the generated header builds the
     // offsets with offsetof(). Both come from the same row list, so they cannot
     // disagree.
-    t << "\n[state.discrete]          # Sim::dis; offsets from Sim::discrete_map()\n";
+    t << "\n[state.discrete]          # Sim::Impl::dis; offsets from Sim::Impl::discrete_map()\n";
     const std::vector<SlotRow> dis = discrete_rows();
     for (const SlotRow& r : dis)
         t << col("", 10) << col(r[0], 24) << col(r[3], 12) << r[2] << "\n";
@@ -2532,18 +2928,18 @@ std::string Emitter::manifest() {
     // in `dis` without destroying its offsetof property, so it gets a flat
     // `double` block of its own and the same address-size-table treatment as x.
     if (m_.n_disc_arr_slots) {
-        t << "\n[state.discrete.array]    # Sim::dis_arr; rows from "
-             "Sim::discrete_array_map()\n";
+        t << "\n[state.discrete.array]    # Sim::Impl::dis_arr; rows from "
+             "Sim::Impl::discrete_array_map()\n";
         for (const SlotRow& r : array_state_rows(false))
             t << col("dis_arr[?]", 12) << col(r[0] + " " + r[1], 22) << col(r[3], 12)
               << "dynamic\n";
     }
 
-    t << "\n[signals]                 # Sim::sig; offsets from Sim::signal_map()\n";
+    t << "\n[signals]                 # Sim::Impl::sig; offsets from Sim::Impl::signal_map()\n";
     for (const SlotRow& r : signal_rows())
         t << col("", 10) << col(r[0], 24) << col(r[3], 12) << r[2] << "\n";
 
-    t << "\n[boundary.in]             # root inputs the host must drive, as sig.in.*\n";
+    t << "\n[boundary.in]             # root inputs the host must drive, through Sim::inputs()\n";
     for (const BoundaryIn& b : m_.boundary_in)
         t << col("", 10) << col(b.path, 24)
           << (b.type.is_record ? b.type.record->fq : b.type.unit.str()) << "\n";
@@ -2614,145 +3010,310 @@ std::string Emitter::manifest() {
 
 // ─── The reference build (§12.4) ─────────────────────────────────────────────
 //
-//  Three scripts, one build. `build.bat` is for a Developer Command Prompt,
-//  `build.ps1` for the PowerShell this project is otherwise driven from, and
-//  `build.sh` for a POSIX shell. They are not translations of one text: cmd,
-//  PowerShell and sh disagree about quoting, about how an exit code is read
-//  and about what a comment looks like, so each is written out on its own.
+//  Two scripts, one build: `build.ps1` for Windows and `build.sh` for a POSIX
+//  shell. They are not translations of one text — PowerShell and sh disagree
+//  about quoting, about how an exit code is read and about what a comment
+//  looks like — but they take the same modes and produce the same layout:
 //
-//  All three compile into a `build/` subdirectory of the output directory and
-//  create it first. The generated sources are the compiler's output and the
-//  binaries are the C++ compiler's; keeping them apart means the emit
-//  directory can be re-emitted, diffed or deleted without object files and
-//  executables mixed in among the files `sec` actually wrote.
+//      build/<config>/bin/       the exe (and, later, the dll)
+//      build/<config>/lib/       the static library
+//      build/<config>/include/   the public header that goes with it
+//
+//  The generated sources are the compiler's output and the binaries are the
+//  C++ compiler's; keeping them apart means the emit directory can be
+//  re-emitted, diffed or deleted without binaries mixed in among the files
+//  `sec` actually wrote.
 
-std::string Emitter::build_script(Script kind, const std::string& main_name) {
+std::string Emitter::build_script(Script kind, const std::string& exe_main, bool unity) {
     const char* platform = kind == Script::Sh ? "linux" : "windows";
     const bool windows = kind != Script::Sh;
-    Out t;
+    const std::string name = stem_;   // the product is named for its sources
 
-    if (kind == Script::Bat) t << "@echo off\r\n";
-    if (kind == Script::Sh) t << "#!/bin/sh\n";
-    // cmd mis-splits an LF-only batch file, so `build.bat` alone is CRLF.
-    const char* nl = kind == Script::Bat ? "\r\n" : "\n";
-    const char* rem = kind == Script::Bat ? "rem " : "# ";
-    t << rem << std::string(74, '-') << nl;
-    t << rem << " GENERATED reference build for " << gen_ << "." << nl;
-    t << (kind == Script::Bat ? "rem" : "#") << nl;
-    t << rem << " A FULL build only: it never tracks changes and never builds" << nl;
-    t << rem << " incrementally. That is not an omission. The unity build is the" << nl;
-    t << rem << " intended model, so there are no object files and \"incremental\" is a"
-      << nl;
-    t << rem << " category that does not exist rather than a feature skipped." << nl;
-    t << rem << std::string(74, '-') << nl;
-
-    // One argument per element, UNQUOTED. Each shell has its own idea of what
-    // needs quoting, and an `include_dir` with a space in it is the case that
-    // separates them, so the quoting is applied where the text is laid out and
-    // never carried around pre-applied in a joined string.
-    std::vector<std::string> args, links;
-    if (windows) {
-        args = {"/nologo", "/std:c++20", "/EHsc",  "/W4",
-                "/permissive-", "/utf-8", "/O2",   "/MD",
-                "/D_CRT_SECURE_NO_WARNINGS"};
-    } else {
-        args = {"-std=c++20", "-O2", "-Wall", "-Wextra"};
-    }
+    // The model's own build primitives (§12.1), one argument per element and
+    // UNQUOTED: each shell has its own idea of what needs quoting, and an
+    // `include_dir` with a space in it is the case that separates them, so the
+    // quoting is applied where the text is laid out.
+    std::vector<std::string> extra, links;
     for (const ast::BuildStmt& b : m_.program->build) {
         if (!b.when.empty() && b.when != platform) continue;
         if (b.primitive == "include_dir")
-            args.push_back((windows ? "/I" : "-I") + b.argument);
+            extra.push_back((windows ? "/I" : "-I") + b.argument);
         else if (b.primitive == "define")
-            args.push_back((windows ? "/D" : "-D") + b.argument);
+            extra.push_back((windows ? "/D" : "-D") + b.argument);
         else if (b.primitive == "cflag")
-            args.push_back(b.argument);
+            extra.push_back(b.argument);
         else if (b.primitive == "link")
             links.push_back(windows ? b.argument + ".lib" : "-l" + b.argument);
     }
+    // A white-box test program #includes the implementation, so it is the
+    // whole program on its own.
+    const std::string exe_sources_ps =
+        unity ? "'" + exe_main + "'" : "'" + exe_main + "', \"$name.cpp\"";
+    const std::string exe_sources_sh = unity ? exe_main : exe_main + " \"$name.cpp\"";
 
-    const std::string exe = m_.name.empty() ? "sim" : m_.name;
-    if (windows) {
-        args.push_back("/Fobuild\\");
-        args.push_back("/Fe:build\\" + exe + ".exe");
-    } else {
-        args.push_back("-o");
-        args.push_back("build/" + exe);
-    }
-    args.push_back(main_name);
-
-    switch (kind) {
-        case Script::Bat: {
-            t << "setlocal\r\n";
-            t << "\r\nif not exist build mkdir build\r\n\r\ncl";
-            // cmd's own splitting is on whitespace, so only an argument that
-            // contains some needs the quotes.
-            auto cmd_arg = [](const std::string& a) {
-                return a.find(' ') == std::string::npos ? a : "\"" + a + "\"";
-            };
-            for (const std::string& a : args) t << " " << cmd_arg(a);
-            if (!links.empty()) {
-                t << " /link";
-                for (const std::string& l : links) t << " " << cmd_arg(l);
+    Out t;
+    if (kind == Script::Ps1) {
+        auto ps_arg = [](const std::string& a) {
+            std::string q = "'";
+            for (char c : a) {
+                q += c;
+                if (c == '\'') q += '\'';
             }
-            t << "\r\nif errorlevel 1 exit /b 1\r\n";
-            t << "echo build: build\\" << exe << ".exe\r\n";
-            t << "endlocal\r\n";
-            break;
-        }
+            return q + "'";
+        };
+        t << "# " << std::string(74, '-') << "\n";
+        t << "#  build.ps1 — GENERATED by sec for " << name << ". The reference build (§12.4).\n";
+        t << "#\n";
+        t << "#      .\\build.ps1 [run|exe|lib|test|clean|all] [-Config release|debug]\n";
+        t << "#                  [-Sanitize | -NoSanitize] [-StaticCrt]\n";
+        t << "#\n";
+        t << "#      run    build the exe, then run it here" << (unity ? "" : ", as " + m_.name + ".sim describes") << "\n";
+        t << "#      exe    build\\<config>\\bin\\" << name << ".exe\n";
+        t << "#      lib    build\\<config>\\lib\\" << name << ".lib, with include\\" << hdr_ << "\n";
+        t << "#      test   build the exe in debug with AddressSanitizer, run it, and\n";
+        t << "#             fail unless it exits 0\n";
+        t << "#      clean  delete build\\\n";
+        t << "#      all    exe and lib\n";
+        t << "#\n";
+        t << "#  release is the default for all but test: optimised, with debug\n";
+        t << "#  information. -Sanitize adds AddressSanitizer to any mode; -NoSanitize\n";
+        t << "#  takes it out of test. -StaticCrt links the C runtime statically (/MT),\n";
+        t << "#  so nothing needs the VC++ redistributable.\n";
+        t << "#\n";
+        t << "#  Every build is a full one; nothing is tracked between runs. If `cl` is\n";
+        t << "#  not on PATH, the script finds Visual Studio and loads its environment.\n";
+        t << "# " << std::string(74, '-') << "\n";
+        t << "param(\n";
+        t << "    [ValidateSet('run', 'exe', 'lib', 'test', 'clean', 'all')]\n";
+        t << "    [string]$Mode = 'run',\n";
+        t << "    [ValidateSet('release', 'debug')]\n";
+        t << "    [string]$Config = '',\n";
+        t << "    [switch]$Sanitize,\n";
+        t << "    [switch]$NoSanitize,\n";
+        t << "    [switch]$StaticCrt\n";
+        t << ")\n\n";
+        t << "$name = " << ps_arg(name) << "\n\n";
 
-        case Script::Ps1: {
-            // Splatted as an array rather than pasted into one string:
-            // PowerShell would re-split a joined string on whitespace, and an
-            // `include_dir` with a space in it would reach `cl` in pieces. A
-            // single-quoted element is literal, which is what a path full of
-            // backslashes needs.
-            auto ps_arg = [&](const std::string& a) {
-                std::string q = "'";
-                for (char c : a) {
-                    q += c;
-                    if (c == '\'') q += '\'';
-                }
-                return q + "'";
-            };
-            t << "\n$flags = @(\n";
-            for (const std::string& a : args) t << "    " << ps_arg(a) << "\n";
-            if (!links.empty()) {
-                t << "    '/link'\n";
-                for (const std::string& l : links) t << "    " << ps_arg(l) << "\n";
-            }
-            t << ")\n";
-            t << "\nNew-Item -ItemType Directory -Force build | Out-Null\n";
-            t << "& cl @flags\n";
-            t << "if ($LASTEXITCODE -ne 0) { exit 1 }\n";
-            t << "Write-Host \"build: build\\" << exe << ".exe\"\n";
-            break;
-        }
+        t << "if ($Mode -eq 'clean') {\n";
+        t << "    Remove-Item -Recurse -Force (Join-Path $PSScriptRoot 'build') "
+             "-ErrorAction SilentlyContinue\n";
+        t << "    Write-Host 'build: removed build\\'\n";
+        t << "    exit 0\n";
+        t << "}\n";
+        t << "if (-not $Config) { $Config = if ($Mode -eq 'test') { 'debug' } else { 'release' } }\n\n";
 
-        case Script::Sh: {
-            auto sh_arg = [](const std::string& a) {
-                std::string q = "'";
-                for (char c : a) {
-                    if (c == '\'') q += "'\''";
-                    else q += c;
-                }
-                return q + "'";
-            };
-            auto bare = [&](const std::string& a) {
-                // Quote only what needs it, so the common script reads like a
-                // command line someone typed.
-                return a.find_first_of(" \t'\"$`\\*?") == std::string::npos ? a
-                                                                            : sh_arg(a);
-            };
-            t << "set -e\n";
-            t << "\nmkdir -p build\n";
-            t << "${CXX:-c++}";
-            for (const std::string& a : args) t << " " << bare(a);
-            for (const std::string& l : links) t << " " << bare(l);
-            t << "\n";
-            t << "echo \"build: build/" << exe << "\"\n";
-            break;
+        t << "# -- the compiler " << std::string(58, '-') << "\n";
+        t << "if (-not (Get-Command cl -ErrorAction SilentlyContinue)) {\n";
+        t << "    $vswhere = Join-Path ${env:ProgramFiles(x86)} "
+             "'Microsoft Visual Studio\\Installer\\vswhere.exe'\n";
+        t << "    if (Test-Path $vswhere) {\n";
+        t << "        $vs = & $vswhere -latest -products * -property installationPath\n";
+        t << "        $vcvars = Join-Path \"$vs\" 'VC\\Auxiliary\\Build\\vcvars64.bat'\n";
+        t << "        if (Test-Path $vcvars) {\n";
+        t << "            & cmd /c \"call `\"$vcvars`\" >nul 2>&1 && set\" | ForEach-Object {\n";
+        t << "                if ($_ -match '^([^=]+)=(.*)$') { Set-Item \"env:$($matches[1])\" "
+             "$matches[2] }\n";
+        t << "            }\n";
+        t << "        }\n";
+        t << "    }\n";
+        t << "}\n";
+        t << "if (-not (Get-Command cl -ErrorAction SilentlyContinue)) {\n";
+        t << "    Write-Host 'build: cl not found; install Visual Studio with C++, or run "
+             "from a Developer PowerShell'\n";
+        t << "    exit 2\n";
+        t << "}\n\n";
+
+        // `test` is the one mode whose whole job is finding bugs, and the one
+        // that runs its own exe inside the environment it just loaded, so it
+        // is the one that sanitizes unasked. It has to stay usable without the
+        // optional ASan component, so there it checks first and says so.
+        t << "# -- the sanitizer " << std::string(57, '-') << "\n";
+        t << "$asan = $Sanitize -or ($Mode -eq 'test' -and -not $NoSanitize)\n";
+        t << "if ($asan -and -not $Sanitize) {\n";
+        t << "    $runtime = 'clang_rt.asan_dynamic-x86_64.dll'\n";
+        t << "    $found = $env:PATH -split ';' | Where-Object { $_ -and "
+             "(Test-Path (Join-Path $_ $runtime)) }\n";
+        t << "    if (-not $found) {\n";
+        t << "        $asan = $false\n";
+        t << "        Write-Host 'test: AddressSanitizer is not installed; testing without it'\n";
+        t << "    }\n";
+        t << "}\n\n";
+
+        t << "# -- the flags " << std::string(61, '-') << "\n";
+        t << "$crt = if ($StaticCrt) { '/MT' } else { '/MD' }\n";
+        t << "if ($Config -eq 'debug') { $crt += 'd' }\n";
+        t << "$flags = @('/nologo', '/std:c++20', '/EHsc', '/W4', '/permissive-', '/utf-8', "
+             "'/Z7', $crt,\n";
+        t << "           '/D_CRT_SECURE_NO_WARNINGS')\n";
+        t << "if ($Config -eq 'debug') {\n";
+        t << "    $flags += '/Od', '/D_DEBUG'\n";
+        t << "    if (-not $asan) { $flags += '/RTC1' }   # /RTC and AddressSanitizer "
+             "do not combine\n";
+        t << "} else {\n";
+        t << "    $flags += '/O2', '/DNDEBUG'\n";
+        t << "}\n";
+        t << "if ($asan) { $flags += '/fsanitize=address' }\n";
+        if (!extra.empty()) {
+            t << "$flags += @(";
+            for (std::size_t i = 0; i < extra.size(); ++i)
+                t << (i ? ", " : "") << ps_arg(extra[i]);
+            t << ")   # from the model's build declarations\n";
         }
+        t << "$links = @(";
+        for (std::size_t i = 0; i < links.size(); ++i) t << (i ? ", " : "") << ps_arg(links[i]);
+        t << ")\n";
+        t << "$out = \"build\\$Config\"\n\n";
+
+        t << "# -- the products " << std::string(58, '-') << "\n";
+        t << "function Build-Exe {\n";
+        t << "    New-Item -ItemType Directory -Force \"$out\\obj\", \"$out\\bin\" | Out-Null\n";
+        t << "    & cl @flags \"/Fo$out\\obj\\\" \"/Fe:$out\\bin\\$name.exe\" " << exe_sources_ps
+          << " `\n";
+        t << "        /link /DEBUG /INCREMENTAL:NO @links | Out-Host\n";
+        t << "    if ($LASTEXITCODE -ne 0) { return $false }\n";
+        t << "    Write-Host \"build: $out\\bin\\$name.exe\"\n";
+        t << "    return $true\n";
+        t << "}\n\n";
+        t << "function Build-Lib {\n";
+        t << "    New-Item -ItemType Directory -Force \"$out\\obj\", \"$out\\lib\", "
+             "\"$out\\include\" | Out-Null\n";
+        t << "    & cl @flags /c \"/Fo$out\\obj\\\" \"$name.cpp\" | Out-Host\n";
+        t << "    if ($LASTEXITCODE -ne 0) { return $false }\n";
+        t << "    & lib /nologo \"/OUT:$out\\lib\\$name.lib\" \"$out\\obj\\$name.obj\" | Out-Host\n";
+        t << "    if ($LASTEXITCODE -ne 0) { return $false }\n";
+        t << "    Copy-Item \"$name.hpp\" \"$out\\include\\\" -Force\n";
+        t << "    Write-Host \"build: $out\\lib\\$name.lib\"\n";
+        t << "    Write-Host \"build: $out\\include\\$name.hpp\"\n";
+        t << "    Write-Host \"build: link it into a program built with the same C runtime "
+             "($crt)\"\n";
+        if (!links.empty()) {
+            t << "    Write-Host 'build: a program using it also links";
+            for (const std::string& l : links) t << " " << l;
+            t << "'\n";
+        }
+        t << "    return $true\n";
+        t << "}\n\n";
+
+        t << "Push-Location $PSScriptRoot\n";
+        t << "try {\n";
+        t << "    $code = 0\n";
+        t << "    if ($Mode -eq 'lib') {\n";
+        t << "        if (-not (Build-Lib)) { $code = 1 }\n";
+        t << "    } elseif (-not (Build-Exe)) {\n";
+        t << "        $code = 1\n";
+        t << "    } elseif ($Mode -eq 'all') {\n";
+        t << "        if (-not (Build-Lib)) { $code = 1 }\n";
+        t << "    } elseif ($Mode -eq 'run') {\n";
+        t << "        & \".\\$out\\bin\\$name.exe\"\n";
+        t << "        $code = $LASTEXITCODE\n";
+        t << "    } elseif ($Mode -eq 'test') {\n";
+        t << "        & \".\\$out\\bin\\$name.exe\"\n";
+        t << "        $code = $LASTEXITCODE\n";
+        t << "        $how = if ($asan) { ' (AddressSanitizer)' } else { '' }\n";
+        t << "        if ($code -eq 0) { Write-Host \"test: passed$how\" } "
+             "else { Write-Host \"test: FAILED$how, exit $code\" }\n";
+        t << "    }\n";
+        t << "} finally {\n";
+        t << "    Pop-Location\n";
+        t << "}\n";
+        t << "exit $code\n";
+        return t.str();
     }
+
+    // ── build.sh ─────────────────────────────────────────────────────────────
+    auto sh_arg = [](const std::string& a) {
+        std::string q = "'";
+        for (char c : a) {
+            if (c == '\'') q += "'\\''";
+            else q += c;
+        }
+        return q + "'";
+    };
+    auto bare = [&](const std::string& a) {
+        // Quote only what needs it, so the script reads like a command line
+        // someone typed.
+        return a.find_first_of(" \t'\"$`\\*?") == std::string::npos ? a : sh_arg(a);
+    };
+    std::string model_args, model_libs;
+    for (const std::string& a : extra) model_args += " " + bare(a);
+    for (const std::string& l : links) model_libs += " " + bare(l);
+
+    t << "#!/bin/sh\n";
+    t << "# " << std::string(74, '-') << "\n";
+    t << "#  build.sh — GENERATED by sec for " << name << ". The reference build (§12.4).\n";
+    t << "#\n";
+    t << "#      ./build.sh [run|exe|lib|test|clean|all] [--config release|debug]\n";
+    t << "#                 [--sanitize | --no-sanitize] [--static-crt]\n";
+    t << "#\n";
+    t << "#  The same modes as build.ps1, into build/<config>/{bin,lib,include};\n";
+    t << "#  test sanitizes (address, undefined) unless --no-sanitize, or unless the\n";
+    t << "#  compiler cannot. CXX picks the compiler; the default is c++.\n";
+    t << "# " << std::string(74, '-') << "\n";
+    t << "set -e\n";
+    t << "cd \"$(dirname \"$0\")\"\n\n";
+    t << "name=" << bare(name) << "\n";
+    t << "mode=run\nconfig=\nsanitize=\nstatic_crt=0\n";
+    t << "while [ $# -gt 0 ]; do\n";
+    t << "    case \"$1\" in\n";
+    t << "        run|exe|lib|test|clean|all) mode=$1 ;;\n";
+    t << "        --config) shift; config=$1 ;;\n";
+    t << "        --sanitize) sanitize=yes ;;\n";
+    t << "        --no-sanitize) sanitize=no ;;\n";
+    t << "        --static-crt) static_crt=1 ;;\n";
+    t << "        *) echo \"build: unknown argument '$1'\" >&2; exit 2 ;;\n";
+    t << "    esac\n";
+    t << "    shift\n";
+    t << "done\n\n";
+    t << "if [ \"$mode\" = clean ]; then rm -rf build; echo \"build: removed build/\"; exit 0; fi\n";
+    t << "if [ -z \"$config\" ]; then\n";
+    t << "    if [ \"$mode\" = test ]; then config=debug; else config=release; fi\n";
+    t << "fi\n";
+    t << "case \"$config\" in release|debug) ;; *) echo \"build: --config is release or "
+         "debug\" >&2; exit 2 ;; esac\n\n";
+    t << "CXX=${CXX:-c++}\n\n";
+    t << "asan=0\n";
+    t << "if [ \"$sanitize\" = yes ]; then\n";
+    t << "    asan=1\n";
+    t << "elif [ \"$sanitize\" != no ] && [ \"$mode\" = test ]; then\n";
+    t << "    if echo 'int main() { return 0; }' | "
+         "$CXX -x c++ -fsanitize=address,undefined -o /dev/null - 2>/dev/null; then\n";
+    t << "        asan=1\n";
+    t << "    else\n";
+    t << "        echo \"test: the sanitizers are not available; testing without them\"\n";
+    t << "    fi\n";
+    t << "fi\n\n";
+    t << "flags=\"-std=c++20 -Wall -Wextra -g\"\n";
+    t << "if [ \"$config\" = debug ]; then flags=\"$flags -O0\"; "
+         "else flags=\"$flags -O2 -DNDEBUG\"; fi\n";
+    t << "if [ $asan = 1 ]; then flags=\"$flags -fsanitize=address,undefined\"; fi\n";
+    t << "ldflags=\n";
+    t << "if [ $static_crt = 1 ]; then ldflags=\"-static-libstdc++ -static-libgcc\"; fi\n";
+    t << "out=build/$config\n\n";
+    t << "build_exe() {\n";
+    t << "    mkdir -p \"$out/bin\"\n";
+    t << "    $CXX $flags" << model_args << " -o \"$out/bin/$name\" " << exe_sources_sh
+      << " $ldflags" << model_libs << "\n";
+    t << "    echo \"build: $out/bin/$name\"\n";
+    t << "}\n\n";
+    t << "build_lib() {\n";
+    t << "    mkdir -p \"$out/obj\" \"$out/lib\" \"$out/include\"\n";
+    t << "    $CXX $flags" << model_args << " -c -o \"$out/obj/$name.o\" \"$name.cpp\"\n";
+    t << "    ar rcs \"$out/lib/lib$name.a\" \"$out/obj/$name.o\"\n";
+    t << "    cp \"$name.hpp\" \"$out/include/\"\n";
+    t << "    echo \"build: $out/lib/lib$name.a\"\n";
+    t << "    echo \"build: $out/include/$name.hpp\"\n";
+    t << "}\n\n";
+    t << "case \"$mode\" in\n";
+    t << "    exe) build_exe ;;\n";
+    t << "    lib) build_lib ;;\n";
+    t << "    all) build_exe; build_lib ;;\n";
+    t << "    run) build_exe; exec \"./$out/bin/$name\" ;;\n";
+    t << "    test)\n";
+    t << "        build_exe\n";
+    t << "        how=; if [ $asan = 1 ]; then how=\" (AddressSanitizer)\"; fi\n";
+    t << "        if \"./$out/bin/$name\"; then echo \"test: passed$how\"; "
+         "else code=$?; echo \"test: FAILED$how, exit $code\"; exit 1; fi ;;\n";
+    t << "esac\n";
     return t.str();
 }
 
@@ -2773,11 +3334,9 @@ bool write_file(Diagnostics& diag, const std::string& path, const std::string& t
 }  // namespace
 
 bool emit(Diagnostics& diag, const Model& m, const EmitOptions& opt) {
-    // The model is a header so a host can include it; the batch driver is its
-    // own translation unit so it can be left out (`--no-main`) without editing
-    // a file stamped DO NOT EDIT.
-    const std::string header_name = opt.stem + ".generated.hpp";
-    const std::string main_name = opt.stem + ".main.cpp";
+    // Named for the sim unless told otherwise, so two models' products can sit
+    // side by side: Drivetrain.hpp, Drivetrain.lib, Drivetrain.exe.
+    const std::string stem = !opt.stem.empty() ? opt.stem : !m.name.empty() ? m.name : "Sim";
     const std::string dir = opt.out_dir.empty() ? "." : opt.out_dir;
 
     // Creating the output directory is the compiler's job, not the caller's:
@@ -2799,26 +3358,28 @@ bool emit(Diagnostics& diag, const Model& m, const EmitOptions& opt) {
         return dir == "." ? name : dir + "/" + name;
     };
 
-    Emitter e(m, header_name);
+    Emitter e(m, stem);
     bool ok = true;
-    ok = write_file(diag, path(header_name), e.hpp(), opt.quiet) && ok;
-    if (opt.write_main)
-        ok = write_file(diag, path(main_name), e.main_cpp(header_name), opt.quiet) && ok;
-    ok = write_file(diag, path(opt.stem + ".units.txt"), e.manifest(), opt.quiet) && ok;
+    // The implementation first: it is the pass that settles the settings'
+    // C++ owners, and the manifest and header only read the model.
+    ok = write_file(diag, path(stem + ".cpp"), e.impl_cpp(opt.separate_runtime), opt.quiet) && ok;
+    ok = write_file(diag, path(stem + ".hpp"), e.public_hpp(), opt.quiet) && ok;
+    const bool unity = !opt.unity_main.empty();
+    const bool has_main = unity || opt.write_main;
+    if (opt.write_main && !unity)
+        ok = write_file(diag, path("main.cpp"), e.main_cpp(), opt.quiet) && ok;
+    ok = write_file(diag, path(stem + ".units.txt"), e.manifest(), opt.quiet) && ok;
     if (opt.write_topology)
-        ok = write_file(diag, path(opt.stem + ".topology.md"),
+        ok = write_file(diag, path(stem + ".topology.md"),
                         "```mermaid\n" + e.topology() + "```\n", opt.quiet) && ok;
-    if (opt.write_runtime) {
-        ok = write_file(diag, path("state_ref.hpp"), state_ref_hpp(), opt.quiet) && ok;
+    if (opt.separate_runtime)
         ok = write_file(diag, path("se_runtime.hpp"), se_runtime_hpp(), opt.quiet) && ok;
-    }
-    if (opt.write_build && opt.write_main) {
-        ok = write_file(diag, path("build.bat"),
-                        e.build_script(Script::Bat, main_name), opt.quiet) && ok;
-        ok = write_file(diag, path("build.ps1"),
-                        e.build_script(Script::Ps1, main_name), opt.quiet) && ok;
-        ok = write_file(diag, path("build.sh"),
-                        e.build_script(Script::Sh, main_name), opt.quiet) && ok;
+    if (opt.write_build && has_main) {
+        const std::string exe_main = unity ? opt.unity_main : "main.cpp";
+        ok = write_file(diag, path("build.ps1"), e.build_script(Script::Ps1, exe_main, unity),
+                        opt.quiet) && ok;
+        ok = write_file(diag, path("build.sh"), e.build_script(Script::Sh, exe_main, unity),
+                        opt.quiet) && ok;
     }
     return ok;
 }

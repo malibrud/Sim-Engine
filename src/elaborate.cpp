@@ -2093,6 +2093,26 @@ void Elaborator::resolve_boundary(const NodeInfo* root, Model& m) {
         m.boundary_in.push_back(std::move(b));
     }
 
+    // The public `Outputs` struct names each root output by its PORT, and reads
+    // it through the same chain a consumer's `In` view would (§15.3), so a
+    // converting wire into the root boundary converts here too. When the root is
+    // a leaf its ports carry the substituted units (§6.2a), so the type comes
+    // from there.
+    const Leaf* root_leaf = nullptr;
+    for (const Leaf& leaf : m.leaves)
+        if (leaf.path.empty()) root_leaf = &leaf;
+    for (const Field& f : root->outputs) {
+        RootOutput r;
+        r.name = f.name;
+        r.type = f.type;
+        if (root_leaf)
+            for (const Field& lf : root_leaf->ports_out)
+                if (lf.name == f.name) r.type = lf.type;
+        std::string dead_end;
+        r.driven = trace_source(f.name, r.src, dead_end);
+        m.root_outputs.push_back(std::move(r));
+    }
+
     // A root output is named in the manifest by the leaf that actually
     // produces it, because that is the storage the host would read.
     for (const Field& f : root->outputs) {

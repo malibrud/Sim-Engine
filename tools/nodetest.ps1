@@ -106,10 +106,11 @@ try {
         foreach ($nodeDir in (Get-ChildItem -Directory -Path $dir | Sort-Object Name)) {
             $programs++
             Push-Location $nodeDir.FullName
-            $log = (& '.\build.bat' 2>&1 | Out-String)
+            # A child PowerShell, so cl's output is captured for the failure report.
+            $log = (& powershell -NoProfile -File '.\build.ps1' exe 2>&1 | Out-String)
             $code = $LASTEXITCODE
-            $exe = Get-ChildItem -File -Path 'build' -Filter '*_test.exe' -ErrorAction SilentlyContinue |
-                   Select-Object -First 1
+            $exe = Get-ChildItem -File -Path 'build\release\bin' -Filter '*_test.exe' `
+                       -ErrorAction SilentlyContinue | Select-Object -First 1
             if ($code -ne 0 -or -not $exe) {
                 Pop-Location
                 Write-Host "FAIL $rel : the test program for $($nodeDir.Name) did not build" `

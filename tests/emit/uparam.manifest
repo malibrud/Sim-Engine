@@ -1,6 +1,6 @@
 ﻿# ----------------------------------------------------------------------------
 #  GENERATED — DO NOT EDIT.
-#  Unit manifest for: Sim.generated.hpp
+#  Unit manifest for: UParam.hpp
 #  sim: UParam   root: uparam.UParam   base step: 0.001 s
 #
 #  Units are checked by the DSL compiler at every declarative site and then
@@ -15,17 +15,17 @@
 [state.continuous]        # slot | model path | unit  -- the solver's ABI
           (none)
 
-[state.discrete]          # Sim::dis; offsets from Sim::discrete_map()
+[state.discrete]          # Sim::Impl::dis; offsets from Sim::Impl::discrete_map()
           src.t                   -           double
           acc.a                   -           double
 
-[signals]                 # Sim::sig; offsets from Sim::signal_map()
+[signals]                 # Sim::Impl::sig; offsets from Sim::Impl::signal_map()
           src.y                   m/s^2       double
           flt.y                   m/s^2       double
           acc.y                   m/s         double
           dec.y                   m/s^2       double
 
-[boundary.in]             # root inputs the host must drive, as sig.in.*
+[boundary.in]             # root inputs the host must drive, through Sim::inputs()
           (none)
 
 [boundary.out]            # root outputs the host may read

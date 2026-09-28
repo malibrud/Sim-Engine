@@ -374,6 +374,18 @@ struct BoundaryOut {
     Type type;
 };
 
+// A root output PORT, as the public `Sim::Outputs` struct declares it: the
+// port's own name and type, and the chain that feeds it, with every hop's
+// conversion folded in — exactly what a leaf's `In` view reads (§15.3).
+// `boundary_out` above names the producer's storage field by field, which is
+// what the manifest wants; this names the port, which is what a host wants.
+struct RootOutput {
+    std::string name;                  // "ws"
+    Type type;                         // as the port declares it
+    bool driven = false;               // false: nothing drives it, it reads 0
+    InputSource src;
+};
+
 // A signal named in `record: { signals { … } }`.
 struct RecordedSignal {
     std::string path;                  // as written
@@ -440,6 +452,7 @@ struct Model {
 
     std::vector<BoundaryIn> boundary_in;
     std::vector<BoundaryOut> boundary_out;
+    std::vector<RootOutput> root_outputs;
 
     double step = 1e-3;                // seconds
     double duration = 0.0;             // seconds

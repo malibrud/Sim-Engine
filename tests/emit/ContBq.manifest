@@ -1,6 +1,6 @@
 ﻿# ----------------------------------------------------------------------------
 #  GENERATED — DO NOT EDIT.
-#  Unit manifest for: Sim.generated.hpp
+#  Unit manifest for: ContBq.hpp
 #  sim: ContBq   root: contbq.ContBq   base step: 0.001 s
 #
 #  Units are checked by the DSL compiler at every declarative site and then
@@ -34,10 +34,10 @@ xd[8]     bq3.z.w'                1/s
 x[9]      bq3.z.wd                -
 xd[9]     bq3.z.wd'               1/s
 
-[state.discrete]          # Sim::dis; offsets from Sim::discrete_map()
+[state.discrete]          # Sim::Impl::dis; offsets from Sim::Impl::discrete_map()
           (none)
 
-[signals]                 # Sim::sig; offsets from Sim::signal_map()
+[signals]                 # Sim::Impl::sig; offsets from Sim::Impl::signal_map()
           src.u                   -           double
           lp.y                    -           double
           hp.y                    -           double
@@ -54,7 +54,7 @@ xd[9]     bq3.z.wd'               1/s
           src3.v.y                -           double
           src3.v.z                -           double
 
-[boundary.in]             # root inputs the host must drive, as sig.in.*
+[boundary.in]             # root inputs the host must drive, through Sim::inputs()
           (none)
 
 [boundary.out]            # root outputs the host may read

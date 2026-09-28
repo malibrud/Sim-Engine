@@ -1,7 +1,7 @@
 # -----------------------------------------------------------------------------
 #  Emit the washout example, and optionally build and run it.
 #
-#  `sec --emit` writes the generated model and a reference build script;
+#  `sec --emit` writes the generated model and its build.ps1 / build.sh;
 #  building and running are separate steps (SPECIFICATION 12.4), which is what
 #  -Build and -Run are for.
 #
@@ -66,44 +66,27 @@ try {
         exit 0
     }
 
-    # The compiler, found here and never by sec: `cl` on PATH, else the latest
-    # Visual Studio's environment imported into this session.
-    if (-not (Get-Command cl -ErrorAction SilentlyContinue)) {
-        $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
-        if (Test-Path $vswhere) {
-            $vsRoot = & $vswhere -latest -products * -property installationPath 2>$null
-            $vcvars = if ($vsRoot) { Join-Path $vsRoot 'VC\Auxiliary\Build\vcvars64.bat' }
-            if ($vcvars -and (Test-Path $vcvars)) {
-                & cmd /c "call ""$vcvars"" >nul 2>&1 && set" | ForEach-Object {
-                    if ($_ -match '^([^=]+)=(.*)$') {
-                        Set-Item -Path ("env:" + $matches[1]) -Value $matches[2] `
-                            -ErrorAction SilentlyContinue
-                    }
-                }
-            }
-        }
-        if (-not (Get-Command cl -ErrorAction SilentlyContinue)) {
-            Write-Host "emit: cl not found (run from a Developer Command Prompt)" -ForegroundColor Red
-            exit 2
-        }
-    }
-
-    # Native tools write to stderr; that is output here, not an exception.
+    # The emitted build.ps1 finds the compiler itself (`cl` on PATH, else the
+    # latest Visual Studio). It runs as a child process so its output, cl's
+    # included, can be captured and checked for warnings.
     $ErrorActionPreference = 'Continue'
     Push-Location $Out
     try {
-        $log = (& '.\build.bat' 2>&1 | Out-String)
-        if ($LASTEXITCODE -ne 0) {
+        $log = (& powershell -NoProfile -ExecutionPolicy Bypass -File '.\build.ps1' exe 2>&1 |
+                Out-String)
+        $code = $LASTEXITCODE
+        if ($code -ne 0) {
             Write-Host "emit: the generated C++ did not compile" -ForegroundColor Red
             Write-Host $log
-            exit 1
+            exit $(if ($code -eq 2) { 2 } else { 1 })
         }
         if ($log -match 'warning') {
             Write-Host "emit: the generated C++ compiled with warnings" -ForegroundColor Yellow
             Write-Host $log
         }
-        $exe = Get-ChildItem -File -Path 'build' -Filter '*.exe' | Select-Object -First 1
-        Write-Host ("emit: built " + (Join-Path $Out $exe.Name)) -ForegroundColor Green
+        $exe = Get-ChildItem -File -Path 'build\release\bin' -Filter '*.exe' |
+               Select-Object -First 1
+        Write-Host ("emit: built " + (Join-Path $Out ('build\release\bin\' + $exe.Name))) -ForegroundColor Green
         if (-not $Run) { exit 0 }
 
         & $exe.FullName

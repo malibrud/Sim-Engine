@@ -1,6 +1,6 @@
 ﻿# ----------------------------------------------------------------------------
 #  GENERATED — DO NOT EDIT.
-#  Unit manifest for: Sim.generated.hpp
+#  Unit manifest for: ParWire.hpp
 #  sim: ParWire   root: parwire.ParWire   base step: 0.001 s
 #
 #  Units are checked by the DSL compiler at every declarative site and then
@@ -15,10 +15,10 @@
 [state.continuous]        # slot | model path | unit  -- the solver's ABI
           (none)
 
-[state.discrete]          # Sim::dis; offsets from Sim::discrete_map()
+[state.discrete]          # Sim::Impl::dis; offsets from Sim::Impl::discrete_map()
           (none)
 
-[signals]                 # Sim::sig; offsets from Sim::signal_map()
+[signals]                 # Sim::Impl::sig; offsets from Sim::Impl::signal_map()
           sp.x                    m/s^2       double
           sp.y                    m/s^2       double
           sp.z                    m/s^2       double
@@ -28,7 +28,7 @@
           s4.y                    m/s^2       double
           s5.y                    m/s^2       double
 
-[boundary.in]             # root inputs the host must drive, as sig.in.*
+[boundary.in]             # root inputs the host must drive, through Sim::inputs()
           (none)
 
 [boundary.out]            # root outputs the host may read

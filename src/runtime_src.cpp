@@ -1,49 +1,268 @@
 // ─────────────────────────────────────────────────────────────────────────────
-//  The fixed engine runtime headers, embedded so that `sec` is self-contained.
+//  The fixed engine runtime, embedded so that `sec` is self-contained.
 //
-//  These are NEVER generated: they do not vary with the model, the same text
-//  serves a 3-state model and a 30,000-state one. They are written out beside
-//  the generated code so the emitted directory compiles on its own, with no
-//  include path outside itself and no third-party package (§15.5).
+//  It is NEVER generated: it does not vary with the model, the same text
+//  serves a 3-state model and a 30,000-state one. By default it is pasted
+//  into the generated header, so the emitted model is one file that compiles
+//  on its own; `--runtime=separate` writes it beside the model as
+//  `se_runtime.hpp` instead (§15.5).
 //
-//  Editing them here changes every future emission. They are ordinary C++,
-//  parked in raw string literals only because a compiler that has to find its
-//  own data files at run time is a compiler that breaks when it is moved.
+//  Editing it here changes every future emission. It is ordinary C++, parked
+//  in raw string literals only because a compiler that has to find its own
+//  data files at run time is a compiler that breaks when it is moved.
+//
+//  The text carries a version tag, `@VER@`, that se_runtime_hpp() replaces
+//  with a hash of the text itself. The tag names both the include guard and
+//  an inline namespace, so two models in one program share one copy when
+//  their runtimes are identical and cannot collide when they are not.
 // ─────────────────────────────────────────────────────────────────────────────
 #include "emit.hpp"
 
+#include <cstdint>
+#include <cstdio>
+
 namespace se {
 
-const char* state_ref_hpp() {
-    return R"SERT(// ─────────────────────────────────────────────────────────────────────────────
-//  state_ref.hpp — FIXED ENGINE RUNTIME HEADER
+namespace {
+
+const char kRuntime[] =
+    R"SERT(// ─────────────────────────────────────────────────────────────────────────────
+//  THE ENGINE RUNTIME — fixed, hand-written, NEVER generated
 //
-//  Hand-written, ships with the engine, NEVER generated. It does not vary with
-//  the model: the same header serves a 3-state model and a 30,000-state one.
-//  The generator's only job is to emit `state_ref omega;` members and bind them
-//  to their slots in Sim::bind().
+//  Nothing here knows anything about any particular model. It holds what the
+//  generated scheduler needs that is not model-shaped:
 //
-//  Purpose: a named view of one slot in a model-wide block, so a node body can
-//  write `state.omega` instead of `sim.x[7]`, while an external solver (CVODE,
-//  odeint, a hand-rolled RK4) still sees nothing but `double*`.
+//      state views    section 15.5 — `state.omega` as a view into Sim::x
+//      log.*          section 10.1 — qualitative, observational
+//      sim.stop/abort section 10.2 — the only way a run ends early
+//      the recorder   section 13.5 — quantitative, an aligned numeric table
+//      the frame      section 9.4  — free-run the batch, then spin
 //
-//  ── THE UNIT CONTRACT ────────────────────────────────────────────────────────
-//  Units are checked by the DSL compiler at every declarative site and then
-//  ERASED. They are never C++ types. What survives into C++ is a guarantee:
+//  The generator emits `se_rt::Log log{...}` into the preamble of the methods
+//  where logging is legal and simply does not emit it elsewhere, which is how
+//  confinement is enforced: by name withholding, not by an analyser
+//  (section 15.4).
 //
-//      the slot holds the value IN THE STATE'S DECLARED UNIT.
+//  The guard and the inline namespace are named for a hash of this text, so a
+//  second model built from the same runtime skips it, and one built from a
+//  different runtime gets its own copy under a different name.
 //
-//  `omega (rad/s)` => x[i] is rad/s, `state.omega` reads rad/s, and a write to
-//  `state.omega` had better be rad/s — the compiler will not check that for
-//  you. This is a contract with the node implementer and with whoever writes
-//  the external solver, and it is why the generator emits a unit manifest
-//  (Sim.units.txt) alongside the model code.
+//  C++20, no third-party packages.
 // ─────────────────────────────────────────────────────────────────────────────
-#pragma once
+#ifndef SE_RUNTIME_@VER@
+#define SE_RUNTIME_@VER@
 
+#include <chrono>
+#include <cmath>
 #include <cstddef>
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
+#include <deque>
+#include <sstream>
+#include <string>
+#include <utility>
+#include <vector>
 
-namespace sim {
+namespace se_rt {
+inline namespace @VER@ {
+
+// The tick time a log record is stamped with. A global because a LogSink is a
+// global: every record carries a time and no caller passes one.
+//
+// This is NOT what a body reads. `sim.time()` comes from the model's own
+// RunState (below), which advances at every minor step and belongs to one Sim
+// rather than to the process. The two agree at tick boundaries and are
+// deliberately different objects.
+inline double& sim_time() {
+    static double t = 0.0;
+    return t;
+}
+
+// ─── `{}` positional formatting (section 10.1) ───────────────────────────────
+// The engine auto-tags every record with sim time, node path and level, so
+// those are never arguments.
+
+inline void format_into(std::ostringstream& o, const char* f) {
+    while (*f) {
+        if (f[0] == '{' && f[1] == '}') {
+            o << "{}";
+            f += 2;
+            continue;
+        }
+        o << *f++;
+    }
+}
+
+template <class A, class... R>
+void format_into(std::ostringstream& o, const char* f, const A& a, const R&... rest) {
+    while (*f) {
+        if (f[0] == '{' && f[1] == '}') {
+            o << a;
+            format_into(o, f + 2, rest...);
+            return;
+        }
+        o << *f++;
+    }
+}
+
+// Every call below is written `se_rt::format(...)`, qualified. Unqualified, an
+// argument of a std type drags `std::format` in by ADL -- C++20 makes <format>
+// reachable from headers this one already includes -- and the two overloads are
+// then ambiguous. Qualifying the name turns ADL off at the call site.
+template <class... A>
+std::string format(const char* f, const A&... a) {
+    std::ostringstream o;
+    format_into(o, f, a...);
+    return o.str();
+}
+
+// ─── Logging (section 13.7) ──────────────────────────────────────────────────
+
+enum class Level { Trace = 0, Debug, Info, Warn, Error };
+
+inline const char* level_name(Level l) {
+    switch (l) {
+        case Level::Trace: return "trace";
+        case Level::Debug: return "debug";
+        case Level::Info:  return "info";
+        case Level::Warn:  return "warn";
+        case Level::Error: return "error";
+    }
+    return "?";
+}
+
+class LogSink {
+public:
+    ~LogSink() {
+        if (file_) std::fclose(file_);
+    }
+
+    // Re-runnable: a second configure() closes the first file rather than
+    // leaking it, and starts the path levels over.
+    void configure(const char* path, Level global) {
+        if (file_) std::fclose(file_);
+        file_ = nullptr;
+        paths_.clear();
+        global_ = global;
+        if (path && *path) file_ = std::fopen(path, "w");
+    }
+
+    // Per-node-path thresholds; the longest matching prefix wins.
+    void set_path_level(const char* path, Level l) { paths_.emplace_back(path, l); }
+
+    Level level_for(const char* path) const {
+        Level best = global_;
+        std::size_t best_len = 0;
+        for (const auto& p : paths_) {
+            const std::size_t n = p.first.size();
+            if (std::strncmp(path, p.first.c_str(), n) != 0) continue;
+            if (path[n] != '\0' && path[n] != '.') continue;
+            if (n >= best_len) {
+                best = p.second;
+                best_len = n;
+            }
+        }
+        return best;
+    }
+
+    void write(Level l, const char* path, double t, const std::string& msg) {
+        const bool passes = l >= level_for(path);
+        // The console always receives warn and above regardless of the
+        // configured threshold (section 13.7).
+        const bool to_console = (l >= Level::Warn) || (!file_ && passes);
+        const bool to_file = file_ && passes;
+        if (!to_console && !to_file) return;
+
+        char head[96];
+        std::snprintf(head, sizeof head, "[%12.6f] %-5s %s: ", t, level_name(l), path);
+        if (to_file) {
+            std::fputs(head, file_);
+            std::fputs(msg.c_str(), file_);
+            std::fputc('\n', file_);
+        }
+        if (to_console) {
+            std::fputs(head, stderr);
+            std::fputs(msg.c_str(), stderr);
+            std::fputc('\n', stderr);
+        }
+    }
+
+    // section 10.1 — trace in the pure methods is suppressed unless this is set,
+    // so the four-evaluations-per-step hazard is visible rather than hidden.
+    bool trace_enabled = false;
+
+private:
+    std::FILE* file_ = nullptr;
+    Level global_ = Level::Info;
+    std::vector<std::pair<std::string, Level>> paths_;
+};
+
+inline LogSink& logs() {
+    static LogSink s;
+    return s;
+}
+
+// The `log` object the generator puts in scope of init(), on_step() and final().
+//
+// It holds the node path and NOTHING else — the sim time is read at call time,
+// from sim_time(). That is what lets the restricted form below be a class
+// member rather than a line of preamble in every method.
+struct Log {
+    const char* path;
+
+    template <class... A> void trace(const char* f, const A&... a) const {
+        logs().write(Level::Trace, path, sim_time(), se_rt::format(f, a...));
+    }
+    template <class... A> void debug(const char* f, const A&... a) const {
+        logs().write(Level::Debug, path, sim_time(), se_rt::format(f, a...));
+    }
+    template <class... A> void info(const char* f, const A&... a) const {
+        logs().write(Level::Info, path, sim_time(), se_rt::format(f, a...));
+    }
+    template <class... A> void warn(const char* f, const A&... a) const {
+        logs().write(Level::Warn, path, sim_time(), se_rt::format(f, a...));
+    }
+    template <class... A> void error(const char* f, const A&... a) const {
+        logs().write(Level::Error, path, sim_time(), se_rt::format(f, a...));
+    }
+};
+
+// The restricted form for the pure methods: `log.trace` alone (section
+// 10.1). `log.info` there is "no such member".
+//
+// Every leaf holds one of these as a member called `log`, so a pure method
+// needs no preamble at all. The mutating methods declare a local `Log log`
+// which shadows it, widening what is legal exactly where section 8.4 says it is.
+struct TraceLog {
+    const char* path;
+
+    template <class... A> void trace(const char* f, const A&... a) const {
+        if (!logs().trace_enabled) return;
+        logs().write(Level::Trace, path, sim_time(),
+                     se_rt::format(f, a...) + "  [minor step]");
+    }
+};
+
+)SERT"
+    // MSVC caps a single string literal at 16380 bytes, and this text passed
+    // it long ago. Adjacent literals concatenate, so the splits are invisible
+    // in the output; each must fall on a blank line between sections, and each
+    // PIECE must stay under the cap as the runtime grows.
+    R"SERT(// ─── State views (section 15.5) ─────────────────────────────────────────────
+//
+// A named view of one slot in a model-wide block, so a node body can write
+// `state.omega` instead of `sim.x[7]`, while an external solver (CVODE,
+// odeint, a hand-rolled RK4) still sees nothing but `double*`.
+//
+// THE UNIT CONTRACT. Units are checked by the DSL compiler at every
+// declarative site and then ERASED. They are never C++ types. What survives
+// into C++ is a guarantee: the slot holds the value IN THE STATE'S DECLARED
+// UNIT. `omega (rad/s)` => x[i] is rad/s, `state.omega` reads rad/s, and a
+// write to `state.omega` had better be rad/s — the compiler will not check
+// that for you. This is a contract with the node implementer and with
+// whoever writes the external solver, and it is why the generator emits a
+// unit manifest (Sim.units.txt) alongside the model code.
 
 // Not a `T&`. A reference member can be neither default-constructed nor
 // rebound, but the generated State and Der structs must be default-constructible
@@ -161,222 +380,7 @@ public:
 using state_ref = value_ref<double>;
 using state_arr = array_ref<double>;
 
-}  // namespace sim
-)SERT";
-}
-
-const char* se_runtime_hpp() {
-    return R"SERT(// ─────────────────────────────────────────────────────────────────────────────
-//  se_runtime.hpp — FIXED ENGINE RUNTIME HEADER
-//
-//  Hand-written, ships with the engine, NEVER generated. It holds the four
-//  things the generated scheduler needs that are not model-shaped:
-//
-//      log.*          SPECIFICATION.md section 10.1 — qualitative, observational
-//      sim.stop/abort section 10.2 — the only way a run ends early
-//      the recorder   section 13.5 — quantitative, an aligned numeric table
-//      the frame      section 9.4  — free-run the batch, then spin
-//
-//  Nothing here knows anything about any particular model. The generator emits
-//  `se_rt::Log log{...}` into the preamble of the methods where logging is
-//  legal and simply does not emit it elsewhere, which is how confinement is
-//  enforced: by name withholding, not by an analyser (section 15.4).
-//
-//  C++20, no third-party packages.
-// ─────────────────────────────────────────────────────────────────────────────
-#pragma once
-
-#include <chrono>
-#include <cmath>
-#include <cstdint>
-#include <cstdio>
-#include <cstring>
-#include <deque>
-#include <sstream>
-#include <string>
-#include <utility>
-#include <vector>
-
-namespace se_rt {
-
-// The tick time a log record is stamped with. A global because a LogSink is a
-// global: every record carries a time and no caller passes one.
-//
-// This is NOT what a body reads. `sim.time()` comes from the model's own
-// RunState (below), which advances at every minor step and belongs to one Sim
-// rather than to the process. The two agree at tick boundaries and are
-// deliberately different objects.
-inline double& sim_time() {
-    static double t = 0.0;
-    return t;
-}
-
-// ─── `{}` positional formatting (section 10.1) ───────────────────────────────
-// The engine auto-tags every record with sim time, node path and level, so
-// those are never arguments.
-
-inline void format_into(std::ostringstream& o, const char* f) {
-    while (*f) {
-        if (f[0] == '{' && f[1] == '}') {
-            o << "{}";
-            f += 2;
-            continue;
-        }
-        o << *f++;
-    }
-}
-
-template <class A, class... R>
-void format_into(std::ostringstream& o, const char* f, const A& a, const R&... rest) {
-    while (*f) {
-        if (f[0] == '{' && f[1] == '}') {
-            o << a;
-            format_into(o, f + 2, rest...);
-            return;
-        }
-        o << *f++;
-    }
-}
-
-// Every call below is written `se_rt::format(...)`, qualified. Unqualified, an
-// argument of a std type drags `std::format` in by ADL -- C++20 makes <format>
-// reachable from headers this one already includes -- and the two overloads are
-// then ambiguous. Qualifying the name turns ADL off at the call site.
-template <class... A>
-std::string format(const char* f, const A&... a) {
-    std::ostringstream o;
-    format_into(o, f, a...);
-    return o.str();
-}
-
-// ─── Logging (section 13.7) ──────────────────────────────────────────────────
-
-enum class Level { Trace = 0, Debug, Info, Warn, Error };
-
-inline const char* level_name(Level l) {
-    switch (l) {
-        case Level::Trace: return "trace";
-        case Level::Debug: return "debug";
-        case Level::Info:  return "info";
-        case Level::Warn:  return "warn";
-        case Level::Error: return "error";
-    }
-    return "?";
-}
-
-class LogSink {
-public:
-    ~LogSink() {
-        if (file_) std::fclose(file_);
-    }
-
-    void configure(const char* path, Level global) {
-        global_ = global;
-        if (path && *path) file_ = std::fopen(path, "w");
-    }
-
-    // Per-node-path thresholds; the longest matching prefix wins.
-    void set_path_level(const char* path, Level l) { paths_.emplace_back(path, l); }
-
-    Level level_for(const char* path) const {
-        Level best = global_;
-        std::size_t best_len = 0;
-        for (const auto& p : paths_) {
-            const std::size_t n = p.first.size();
-            if (std::strncmp(path, p.first.c_str(), n) != 0) continue;
-            if (path[n] != '\0' && path[n] != '.') continue;
-            if (n >= best_len) {
-                best = p.second;
-                best_len = n;
-            }
-        }
-        return best;
-    }
-
-    void write(Level l, const char* path, double t, const std::string& msg) {
-        const bool passes = l >= level_for(path);
-        // The console always receives warn and above regardless of the
-        // configured threshold (section 13.7).
-        const bool to_console = (l >= Level::Warn) || (!file_ && passes);
-        const bool to_file = file_ && passes;
-        if (!to_console && !to_file) return;
-
-        char head[96];
-        std::snprintf(head, sizeof head, "[%12.6f] %-5s %s: ", t, level_name(l), path);
-        if (to_file) {
-            std::fputs(head, file_);
-            std::fputs(msg.c_str(), file_);
-            std::fputc('\n', file_);
-        }
-        if (to_console) {
-            std::fputs(head, stderr);
-            std::fputs(msg.c_str(), stderr);
-            std::fputc('\n', stderr);
-        }
-    }
-
-    // section 10.1 — trace in the pure methods is suppressed unless this is set,
-    // so the four-evaluations-per-step hazard is visible rather than hidden.
-    bool trace_enabled = false;
-
-private:
-    std::FILE* file_ = nullptr;
-    Level global_ = Level::Info;
-    std::vector<std::pair<std::string, Level>> paths_;
-};
-
-inline LogSink& logs() {
-    static LogSink s;
-    return s;
-}
-
-// The `log` object the generator puts in scope of init(), on_step() and final().
-//
-// It holds the node path and NOTHING else — the sim time is read at call time,
-// from sim_time(). That is what lets the restricted form below be a class
-// member rather than a line of preamble in every method.
-struct Log {
-    const char* path;
-
-    template <class... A> void trace(const char* f, const A&... a) const {
-        logs().write(Level::Trace, path, sim_time(), se_rt::format(f, a...));
-    }
-    template <class... A> void debug(const char* f, const A&... a) const {
-        logs().write(Level::Debug, path, sim_time(), se_rt::format(f, a...));
-    }
-    template <class... A> void info(const char* f, const A&... a) const {
-        logs().write(Level::Info, path, sim_time(), se_rt::format(f, a...));
-    }
-    template <class... A> void warn(const char* f, const A&... a) const {
-        logs().write(Level::Warn, path, sim_time(), se_rt::format(f, a...));
-    }
-    template <class... A> void error(const char* f, const A&... a) const {
-        logs().write(Level::Error, path, sim_time(), se_rt::format(f, a...));
-    }
-};
-
-// The restricted form for the pure methods: `log.trace` alone (section
-// 10.1). `log.info` there is "no such member".
-//
-// Every leaf holds one of these as a member called `log`, so a pure method
-// needs no preamble at all. The mutating methods declare a local `Log log`
-// which shadows it, widening what is legal exactly where section 8.4 says it is.
-struct TraceLog {
-    const char* path;
-
-    template <class... A> void trace(const char* f, const A&... a) const {
-        if (!logs().trace_enabled) return;
-        logs().write(Level::Trace, path, sim_time(),
-                     se_rt::format(f, a...) + "  [minor step]");
-    }
-};
-
 )SERT"
-    // MSVC caps a single string literal at 16380 bytes, and this header passed
-    // it long ago. Adjacent literals concatenate, so the splits are invisible
-    // in the output; each must fall on a blank line between sections, and each
-    // PIECE must stay under the cap as the header grows. There are three of
-    // them below, sized so none is close to the limit.
     R"SERT(// ─── Block descriptors (section 15.6) ────────────────────────────────────────
 //
 // A generated model exposes its signal and discrete-state blocks as one
@@ -895,8 +899,33 @@ inline Realtime& realtime() {
     return r;
 }
 
+}  // inline namespace @VER@
 }  // namespace se_rt
+
+#endif  // SE_RUNTIME_@VER@
 )SERT";
+
+}  // namespace
+
+// The runtime text with its version tag filled in: FNV-1a over the text as
+// written, so any edit to it — a comment included — moves the tag. Computed
+// once; the text never changes while `sec` runs.
+const std::string& se_runtime_hpp() {
+    static const std::string text = [] {
+        std::string t = kRuntime;
+        std::uint32_t h = 2166136261u;
+        for (const unsigned char c : t) {
+            h ^= c;
+            h *= 16777619u;
+        }
+        char tag[16];
+        std::snprintf(tag, sizeof tag, "r%08x", static_cast<unsigned>(h));
+        const std::string key = "@VER@";
+        for (std::size_t at = t.find(key); at != std::string::npos; at = t.find(key, at))
+            t.replace(at, key.size(), tag);
+        return t;
+    }();
+    return text;
 }
 
 }  // namespace se

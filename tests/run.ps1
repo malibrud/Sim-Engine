@@ -12,7 +12,7 @@
 #                  A case WITH a <name>.expected must fail, and its diagnostic
 #                  text is compared. A case WITHOUT one must emit cleanly.
 #                  A case may ALSO carry a <name>.manifest, which is compared
-#                  against the emitted Sim.units.txt. That file is the
+#                  against the emitted <sim>.units.txt. That file is the
 #                  configuration schema a settings source is checked against,
 #                  so a silent change to it is a silent change to the model's
 #                  external contract.
@@ -268,14 +268,21 @@ function Run-Emit($simName) {
 # it is the configuration schema a settings source is checked against, so a
 # silent change to it is a silent change to the model's external contract.
 # Opt-in per case: drop a <name>.manifest beside the .sim and it is compared.
+# sec names its outputs for the sim (`sim Drivetrain` -> Drivetrain.units.txt),
+# and a case's sim name need not match its file name, so find them by suffix.
+function Find-Emitted($outDir, $filter) {
+    Get-ChildItem -File -Path $outDir -Filter $filter -ErrorAction SilentlyContinue |
+        Select-Object -First 1 -ExpandProperty FullName
+}
+
 function Check-Manifest($stem, $outDir) {
     $expected = Join-Path $root ("tests\emit\" + $stem + '.manifest')
     # Opt in strictly by the file existing, so -Update refreshes the cases
     # that asked for a manifest rather than minting one for every case.
     if (-not (Test-Path $expected)) { return }
-    $produced = Join-Path $outDir 'Sim.units.txt'
-    if (-not (Test-Path $produced)) {
-        Write-Host "FAIL tests/emit/$stem : no Sim.units.txt was written" -ForegroundColor Red
+    $produced = Find-Emitted $outDir '*.units.txt'
+    if (-not $produced) {
+        Write-Host "FAIL tests/emit/$stem : no <sim>.units.txt was written" -ForegroundColor Red
         $script:fail++
         return
     }
@@ -304,9 +311,9 @@ function Check-Manifest($stem, $outDir) {
 # the golden both see the bare diagram -- the goldens are the diagram, not the
 # wrapper.
 function Check-Topology($stem, $outDir) {
-    $produced = Join-Path $outDir 'Sim.topology.md'
-    if (-not (Test-Path $produced)) {
-        Write-Host "FAIL tests/emit/$stem : no Sim.topology.md was written" -ForegroundColor Red
+    $produced = Find-Emitted $outDir '*.topology.md'
+    if (-not $produced) {
+        Write-Host "FAIL tests/emit/$stem : no <sim>.topology.md was written" -ForegroundColor Red
         $script:fail++
         return
     }
@@ -653,7 +660,10 @@ if (-not $cl) {
     foreach ($name in ($emitDirs.Keys | Sort-Object)) {
         $dir = $emitDirs[$name]
         Push-Location $dir
-        $out = (& '.\build.bat' 2>&1 | Out-String)
+        # A child PowerShell, because the script hands cl's output straight to
+        # its console: only a separate process lets this capture it and look
+        # for warnings.
+        $out = (& powershell -NoProfile -File '.\build.ps1' exe 2>&1 | Out-String)
         $code = $LASTEXITCODE
         Pop-Location
         if ($code -eq 0 -and $out -notmatch 'warning') {
@@ -703,7 +713,7 @@ if (-not $cl) {
             continue
         }
         Push-Location $cfOut
-        $cfLog  = (& '.\build.bat' 2>&1 | Out-String)
+        $cfLog  = (& powershell -NoProfile -File '.\build.ps1' exe 2>&1 | Out-String)
         $cfCode = $LASTEXITCODE
         Pop-Location
         $named  = ($cfLog -match ("'" + $cf.member + "'")) -and ($cfLog -match 'RunView')
@@ -759,28 +769,64 @@ if (-not $cl) {
         $script:fail++
     }
 
-    # build.ps1 is the third emitted script, and an emitted script nobody runs
-    # is an emitted script that does not work. build.bat has just built every
-    # case above, so this proves the PowerShell spelling on ONE of them rather
-    # than paying for a second full compile everywhere: the two scripts differ
-    # only in how the SAME argument list is quoted and how the exit code is
-    # read, so one case exercises the whole difference. build.sh cannot be run
-    # here at all, which is exactly why the two that can be, are.
+    # `build.ps1 lib` has to produce a library a stranger can use: the header
+    # and the .lib, and nothing else. The consumer is the emitted main.cpp,
+    # copied OUT of the emit directory and compiled with only include\ on its
+    # path, so a header that leaned on anything but itself would fail here.
     if ($emitDirs.ContainsKey('Decay')) {
-        $psDir = $emitDirs['Decay']
-        Push-Location $psDir
-        # Removed first, so a build.ps1 that silently does nothing cannot pass
-        # on the executable build.bat left behind.
-        if (Test-Path 'build') { Remove-Item -Recurse -Force 'build' }
-        $out = (& powershell -NoProfile -File '.\build.ps1' 2>&1 | Out-String)
+        $libDir = $emitDirs['Decay']
+        Push-Location $libDir
+        $out = (& powershell -NoProfile -File '.\build.ps1' lib 2>&1 | Out-String)
         $code = $LASTEXITCODE
-        $made = Test-Path '.\build\Decay.exe'
         Pop-Location
-        if ($code -eq 0 -and $made -and $out -notmatch 'warning') {
-            Write-Host "ok   build/emit/Decay : build.ps1 compiles clean" -ForegroundColor Green
+        $inc = Join-Path $libDir 'build\release\include'
+        $lib = Join-Path $libDir 'build\release\lib\Decay.lib'
+        $made = (Test-Path (Join-Path $inc 'Decay.hpp')) -and (Test-Path $lib) -and
+                ((Get-ChildItem -File $inc | Measure-Object).Count -eq 1)
+        $consumer = Join-Path $root 'build\emit\lib-consumer'
+        if (Test-Path $consumer) { Remove-Item -Recurse -Force $consumer }
+        New-Item -ItemType Directory -Force $consumer | Out-Null
+        Copy-Item (Join-Path $libDir 'main.cpp') $consumer
+        Push-Location $consumer
+        $cout = (& cl /nologo /std:c++20 /EHsc /W4 /permissive- /utf-8 /MD "/I$inc" `
+                     main.cpp /Fe:consumer.exe /link $lib 2>&1 | Out-String)
+        $linked = ($LASTEXITCODE -eq 0 -and $cout -notmatch 'warning')
+        $ran = $false
+        if ($linked) {
+            & '.\consumer.exe' 2>&1 | Out-Null
+            $ran = ($LASTEXITCODE -eq 0)
+        }
+        Pop-Location
+        if ($code -eq 0 -and $made -and $out -notmatch 'warning' -and $linked -and $ran) {
+            Write-Host ("ok   build/emit/Decay : build.ps1 lib gives a header and a .lib " +
+                        "that a program links with nothing else") -ForegroundColor Green
             $script:pass++
         } else {
-            Write-Host "FAIL build/emit/Decay : build.ps1 did not compile clean" -ForegroundColor Red
+            Write-Host ("FAIL build/emit/Decay : build.ps1 lib (built=$made linked=$linked " +
+                        "ran=$ran)") -ForegroundColor Red
+            Write-Host $out
+            Write-Host $cout
+            $script:fail++
+        }
+    }
+
+    # `build.ps1 test` builds in debug with AddressSanitizer unasked, runs the
+    # exe and passes on exit 0. A machine without the optional ASan component
+    # still tests, unsanitized, and the script has to say so rather than fail.
+    if ($emitDirs.ContainsKey('Decay')) {
+        Push-Location $emitDirs['Decay']
+        $out = (& powershell -NoProfile -File '.\build.ps1' test 2>&1 | Out-String)
+        $code = $LASTEXITCODE
+        Pop-Location
+        $sanitized = $out -match 'test: passed \(AddressSanitizer\)'
+        $fallback = ($out -match 'AddressSanitizer is not installed') -and
+                    ($out -match 'test: passed')
+        if ($code -eq 0 -and ($sanitized -or $fallback) -and $out -notmatch 'warning') {
+            $how = if ($sanitized) { 'under AddressSanitizer' } else { 'without ASan (not installed)' }
+            Write-Host "ok   build/emit/Decay : build.ps1 test passes, $how" -ForegroundColor Green
+            $script:pass++
+        } else {
+            Write-Host "FAIL build/emit/Decay : build.ps1 test" -ForegroundColor Red
             Write-Host $out
             $script:fail++
         }
@@ -791,7 +837,7 @@ if (-not $cl) {
     if ($emitDirs.ContainsKey('Decay')) {
         $decayDir = $emitDirs['Decay']
         Push-Location $decayDir
-        & '.\build\Decay.exe' 2>&1 | Out-Null
+        & '.\build\release\bin\Decay.exe' 2>&1 | Out-Null
         $ran = ($LASTEXITCODE -eq 0)
         Pop-Location
         $worst = 0.0
@@ -826,7 +872,7 @@ if (-not $cl) {
     if ($emitDirs.ContainsKey('RecConv')) {
         $rcDir = $emitDirs['RecConv']
         Push-Location $rcDir
-        & '.\build\RecConv.exe' 2>&1 | Out-Null
+        & '.\build\release\bin\RecConv.exe' 2>&1 | Out-Null
         $ran = ($LASTEXITCODE -eq 0)
         Pop-Location
         $worst = [double]::PositiveInfinity
@@ -860,7 +906,7 @@ if (-not $cl) {
     if ($emitDirs.ContainsKey('PortPath')) {
         $ppDir = $emitDirs['PortPath']
         Push-Location $ppDir
-        & '.\build\PortPath.exe' 2>&1 | Out-Null
+        & '.\build\release\bin\PortPath.exe' 2>&1 | Out-Null
         $ran = ($LASTEXITCODE -eq 0)
         Pop-Location
         $want = @(8.0, 7.5, 0.5, 1.0, 3.0, 4.0, 0.5)
@@ -900,7 +946,7 @@ if (-not $cl) {
     if ($emitDirs.ContainsKey('QExp')) {
         $qeDir = $emitDirs['QExp']
         Push-Location $qeDir
-        & '.\build\QExp.exe' 2>&1 | Out-Null
+        & '.\build\release\bin\QExp.exe' 2>&1 | Out-Null
         $ran = ($LASTEXITCODE -eq 0)
         Pop-Location
         # Written out rather than computed, so an expected column is a fact
@@ -978,7 +1024,7 @@ if (-not $cl) {
     if ($emitDirs.ContainsKey('Adjust')) {
         $adDir = $emitDirs['Adjust']
         Push-Location $adDir
-        & '.\build\Adjust.exe' 2>&1 | Out-Null
+        & '.\build\release\bin\Adjust.exe' 2>&1 | Out-Null
         $ran = ($LASTEXITCODE -eq 0)
         Pop-Location
         # |1 + z + z^2/2 + z^3/6 + z^4/24| at z = i*0.6283185307179586, written
@@ -1040,7 +1086,7 @@ if (-not $cl) {
     if ($emitDirs.ContainsKey('QInt')) {
         $qiDir = $emitDirs['QInt']
         Push-Location $qiDir
-        & '.\build\QInt.exe' 2>&1 | Out-Null
+        & '.\build\release\bin\QInt.exe' 2>&1 | Out-Null
         $ran = ($LASTEXITCODE -eq 0)
         Pop-Location
         # |1 + z + z^2/2 + z^3/6 + z^4/24| at z = 0.6i, written out rather than
@@ -1109,7 +1155,7 @@ if (-not $cl) {
     if ($emitDirs.ContainsKey('QLeak')) {
         $qlDir = $emitDirs['QLeak']
         Push-Location $qlDir
-        & '.\build\QLeak.exe' 2>&1 | Out-Null
+        & '.\build\release\bin\QLeak.exe' 2>&1 | Out-Null
         $ran = ($LASTEXITCODE -eq 0)
         Pop-Location
         $worst = [double]::PositiveInfinity
@@ -1153,7 +1199,7 @@ if (-not $cl) {
     if ($emitDirs.ContainsKey('ParWire')) {
         $pwDir = $emitDirs['ParWire']
         Push-Location $pwDir
-        & '.\build\ParWire.exe' 2>&1 | Out-Null
+        & '.\build\release\bin\ParWire.exe' 2>&1 | Out-Null
         $ran = ($LASTEXITCODE -eq 0)
         Pop-Location
         $worst = [double]::PositiveInfinity
@@ -1187,7 +1233,7 @@ if (-not $cl) {
     if ($emitDirs.ContainsKey('LitWire')) {
         $lwDir = $emitDirs['LitWire']
         Push-Location $lwDir
-        & '.\build\LitWire.exe' 2>&1 | Out-Null
+        & '.\build\release\bin\LitWire.exe' 2>&1 | Out-Null
         $ran = ($LASTEXITCODE -eq 0)
         Pop-Location
         $worst = [double]::PositiveInfinity
@@ -1237,7 +1283,7 @@ if (-not $cl) {
     if ($emitDirs.ContainsKey('RecSet')) {
         $rsDir = $emitDirs['RecSet']
         Push-Location $rsDir
-        & '.\build\RecSet.exe' 2>&1 | Out-Null
+        & '.\build\release\bin\RecSet.exe' 2>&1 | Out-Null
         $ran = ($LASTEXITCODE -eq 0)
         Pop-Location
         $worst = [double]::PositiveInfinity
@@ -1299,7 +1345,7 @@ if (-not $cl) {
     if ($emitDirs.ContainsKey('ChainChk')) {
         $ccDir = $emitDirs['ChainChk']
         Push-Location $ccDir
-        & '.\build\ChainChk.exe' 2>&1 | Out-Null
+        & '.\build\release\bin\ChainChk.exe' 2>&1 | Out-Null
         $ran = ($LASTEXITCODE -eq 0)
         Pop-Location
         $worst = [double]::PositiveInfinity
@@ -1359,7 +1405,7 @@ if (-not $cl) {
     if ($emitDirs.ContainsKey('Contract')) {
         $ctDir = $emitDirs['Contract']
         Push-Location $ctDir
-        & '.\build\Contract.exe' 2>&1 | Out-Null
+        & '.\build\release\bin\Contract.exe' 2>&1 | Out-Null
         $ctCode = $LASTEXITCODE
         Pop-Location
 
@@ -1440,7 +1486,7 @@ if (-not $cl) {
     if ($emitDirs.ContainsKey('ArrSt')) {
         $asDir = $emitDirs['ArrSt']
         Push-Location $asDir
-        & '.\build\ArrSt.exe' 2>&1 | Out-Null
+        & '.\build\release\bin\ArrSt.exe' 2>&1 | Out-Null
         $ran = ($LASTEXITCODE -eq 0)
         Pop-Location
         $worst = 0.0
@@ -1505,7 +1551,7 @@ if (-not $cl) {
     if ($emitDirs.ContainsKey('BwChk')) {
         $bwDir = $emitDirs['BwChk']
         Push-Location $bwDir
-        & '.\build\BwChk.exe' 2>&1 | Out-Null
+        & '.\build\release\bin\BwChk.exe' 2>&1 | Out-Null
         $ran = ($LASTEXITCODE -eq 0)
         Pop-Location
         $worst = 0.0
@@ -1582,7 +1628,7 @@ if (-not $cl) {
     if ($emitDirs.ContainsKey('ContBq')) {
         $cbDir = $emitDirs['ContBq']
         Push-Location $cbDir
-        & '.\build\ContBq.exe' 2>&1 | Out-Null
+        & '.\build\release\bin\ContBq.exe' 2>&1 | Out-Null
         $ran = ($LASTEXITCODE -eq 0)
         Pop-Location
         $worst = 0.0
@@ -1643,7 +1689,7 @@ if (-not $cl) {
     if ($emitDirs.ContainsKey('CtSrc')) {
         $csDir = $emitDirs['CtSrc']
         Push-Location $csDir
-        & '.\build\CtSrc.exe' 2>&1 | Out-Null
+        & '.\build\release\bin\CtSrc.exe' 2>&1 | Out-Null
         $ran = ($LASTEXITCODE -eq 0)
         Pop-Location
         $wct = 0.0
@@ -1700,7 +1746,7 @@ if (-not $cl) {
     if ($emitDirs.ContainsKey('SrcChk')) {
         $scDir = $emitDirs['SrcChk']
         Push-Location $scDir
-        & '.\build\SrcChk.exe' 2>&1 | Out-Null
+        & '.\build\release\bin\SrcChk.exe' 2>&1 | Out-Null
         $ran = ($LASTEXITCODE -eq 0)
         Pop-Location
         $csv = Join-Path $scDir 'srcchk.csv'
@@ -1831,6 +1877,37 @@ if (-not $cl) {
             $script:pass++
         } else {
             Write-Host "FAIL tests/emit/host.cpp" -ForegroundColor Red
+            if (-not $built) { Write-Host $out }
+            $script:fail++
+        }
+    }
+
+    # tests/emit/two_models.cpp includes two public headers in one TU and
+    # links both implementations, each of which carries the engine runtime.
+    if ($emitDirs.ContainsKey('drivetrain') -and $emitDirs.ContainsKey('Decay')) {
+        $twoDir = Join-Path $root 'build\emit\two-models'
+        if (Test-Path $twoDir) { Remove-Item -Recurse -Force $twoDir }
+        New-Item -ItemType Directory -Force $twoDir | Out-Null
+        Copy-Item (Join-Path $root 'tests\emit\two_models.cpp') $twoDir -Force
+        $dtDir = $emitDirs['drivetrain']
+        $dcDir = $emitDirs['Decay']
+        Push-Location $twoDir
+        $out = (& cl /nologo /std:c++20 /EHsc /W4 /permissive- /utf-8 /O2 /MD `
+                    /D_CRT_SECURE_NO_WARNINGS "/I$dtDir" "/I$dcDir" /Fe:two_models.exe `
+                    two_models.cpp (Join-Path $dtDir 'Drivetrain.cpp') `
+                    (Join-Path $dcDir 'Decay.cpp') 2>&1 | Out-String)
+        $built = ($LASTEXITCODE -eq 0 -and $out -notmatch 'warning')
+        $ran = $false
+        if ($built) {
+            & '.\two_models.exe' 2>&1 | Out-Null
+            $ran = ($LASTEXITCODE -eq 0)
+        }
+        Pop-Location
+        if ($built -and $ran) {
+            Write-Host "ok   tests/emit/two_models.cpp : two public headers in one TU, two implementations in one program" -ForegroundColor Green
+            $script:pass++
+        } else {
+            Write-Host "FAIL tests/emit/two_models.cpp" -ForegroundColor Red
             if (-not $built) { Write-Host $out }
             $script:fail++
         }

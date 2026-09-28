@@ -394,7 +394,7 @@ bool TestGen::run(const std::string& fq, const Source& req_src, Loc req_loc) {
 
     // ── The sets. ──────────────────────────────────────────────────────────
     const std::string node_t = info_->cpp_name;
-    const std::string sim_t = dots_to_colons(m.root_namespace) + "::Sim";
+    const std::string sim_t = dots_to_colons(m.root_namespace) + "::Sim::Impl";
     const std::string ident = leaf_->ident;
 
     std::ostringstream body;
@@ -566,12 +566,16 @@ bool TestGen::run(const std::string& fq, const Source& req_src, Loc req_loc) {
 
     if (diag_.error_count() > errors_before) return false;
 
-    // ── Emit the model, then replace its batch driver with the test program. ─
+    // ── Emit the model, then the test program in place of its example host. ──
     EmitOptions eo;
     eo.out_dir = opt_.out_dir + "/" + def.name;
     eo.write_topology = false;
     eo.quiet = true;
+    // White-box: the program reaches into Sim::Impl, so it #includes the
+    // implementation and is compiled as one translation unit on its own.
+    eo.unity_main = "main.cpp";
     if (!emit(diag_, m, eo)) return false;
+    const std::string stem = m.name;
 
     std::ostringstream o;
     o << "// ----------------------------------------------------------------------------\n"
@@ -582,7 +586,7 @@ bool TestGen::run(const std::string& fq, const Source& req_src, Loc req_loc) {
       << "//  pure methods on it in the fixed order init, output, derivative, next,\n"
       << "//  adjust, and compares what came back.\n"
       << "// ----------------------------------------------------------------------------\n"
-      << "#include \"Sim.generated.hpp\"\n\n"
+      << "#include \"" << stem << ".cpp\"   // the whole model: this program is white-box\n\n"
       << "#include <cmath>\n#include <cstdint>\n#include <cstdio>\n#include <cstring>\n"
       << "#include <limits>\n#include <memory>\n\n"
       << "namespace {\n\n"
@@ -629,7 +633,7 @@ bool TestGen::run(const std::string& fq, const Source& req_src, Loc req_loc) {
       << "    return g_failed_sets ? 1 : 0;\n"
       << "}\n";
 
-    const std::string main_path = eo.out_dir + "/" + eo.stem + ".main.cpp";
+    const std::string main_path = eo.out_dir + "/" + eo.unity_main;
     std::ofstream f(main_path, std::ios::binary);
     if (!f) {
         std::cerr << "sec: cannot write " << main_path << "\n";

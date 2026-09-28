@@ -3,8 +3,8 @@
 //
 //  Implements all six stages of SPECIFICATION.md §1.3. `--parse` stops after
 //  stage 2 and takes any file kind; `--emit` runs the whole pipeline over one
-//  `.sim` file and writes the generated model, the unit manifest, the fixed
-//  runtime headers and a reference build script.
+//  `.sim` file and writes the public header, the implementation, an example
+//  host, the unit manifest and the reference build scripts.
 //
 //  Usage:
 //      sec [options] <file>...
@@ -18,10 +18,12 @@
 //      -I <dir>           add a root directory (§2.1); repeatable
 //      -o <dir>           output directory for --emit (default `.`), created
 //                         if it does not exist
-//      --stem=<name>      output base name for --emit (default `Sim`)
-//      --no-main          do not write <stem>.main.cpp (embed in your own host)
-//      --no-runtime       do not write state_ref.hpp / se_runtime.hpp
-//      --no-build         do not write build.bat / build.ps1 / build.sh
+//      --stem=<name>      output base name for --emit (default: the sim name)
+//      --no-main          do not write main.cpp (embed in your own host)
+//      --runtime=<how>    inline (default): paste the engine runtime into
+//                         <stem>.cpp; separate: write it as
+//                         se_runtime.hpp and #include it
+//      --no-build         do not write build.ps1 / build.sh
 //      --no-topology      do not write <stem>.topology.md
 //      --kind=<k>         force model | sim | settings, ignoring the extension
 //      --max-errors=<n>   diagnostic cap (default 20; 0 means no cap)
@@ -78,10 +80,11 @@ void usage(std::ostream& o) {
          "  -I <dir>           add a root directory; repeatable\n"
          "  -o <dir>           output directory for --emit (default `.`),\n"
          "                     created if it does not exist\n"
-         "  --stem=<name>      output base name for --emit (default `Sim`)\n"
-         "  --no-main          do not write <stem>.main.cpp\n"
-         "  --no-runtime       do not write state_ref.hpp / se_runtime.hpp\n"
-         "  --no-build         do not write build.bat / .ps1 / .sh\n"
+         "  --stem=<name>      output base name for --emit (default: the sim name)\n"
+         "  --no-main          do not write main.cpp\n"
+         "  --runtime=<how>    inline (default) | separate: paste the engine\n"
+         "                     runtime into <stem>.cpp, or write se_runtime.hpp\n"
+         "  --no-build         do not write build.ps1 / build.sh\n"
          "  --no-topology      do not write <stem>.topology.md\n"
          "  --kind=<k>         force model | sim | settings\n"
          "  --max-errors=<n>   diagnostic cap (default 20, 0 = no cap)\n"
@@ -208,8 +211,10 @@ int main(int argc, char** argv) {
             emit_opt.stem = a.substr(7);
         } else if (a == "--no-main") {
             emit_opt.write_main = false;
-        } else if (a == "--no-runtime") {
-            emit_opt.write_runtime = false;
+        } else if (a == "--runtime=inline") {
+            emit_opt.separate_runtime = false;
+        } else if (a == "--runtime=separate") {
+            emit_opt.separate_runtime = true;
         } else if (a == "--no-build") {
             emit_opt.write_build = false;
         } else if (a == "--no-topology") {
