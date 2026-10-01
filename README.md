@@ -466,5 +466,4 @@ In rough order. Each step is decided on its own, so this list changes.
 
 ## License
 
-No license has been chosen yet. Until one is, please ask before reusing the
-code.
+MIT — see [LICENSE](LICENSE).
