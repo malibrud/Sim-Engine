@@ -569,7 +569,8 @@ bool TestGen::run(const std::string& fq, const Source& req_src, Loc req_loc) {
     // ── Emit the model, then the test program in place of its example host. ──
     EmitOptions eo;
     eo.out_dir = opt_.out_dir + "/" + def.name;
-    eo.write_topology = false;
+    eo.topology_html = false;
+    eo.topology_mermaid = false;
     eo.quiet = true;
     // White-box: the program reaches into Sim::Impl, so it #includes the
     // implementation and is compiled as one translation unit on its own.

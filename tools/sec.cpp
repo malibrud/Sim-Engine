@@ -24,7 +24,10 @@
 //                         <stem>.cpp; separate: write it as
 //                         se_runtime.hpp and #include it
 //      --no-build         do not write build.ps1 / build.sh
-//      --no-topology      do not write <stem>.topology.md
+//      --topology=<list>  which topology diagrams to write, comma-separated:
+//                         html (<stem>.topology.html, interactive) and
+//                         mermaid (<stem>.topology.md); default both
+//      --no-topology      write neither
 //      --kind=<k>         force model | sim | settings, ignoring the extension
 //      --max-errors=<n>   diagnostic cap (default 20; 0 means no cap)
 //      --no-color         plain output
@@ -85,7 +88,9 @@ void usage(std::ostream& o) {
          "  --runtime=<how>    inline (default) | separate: paste the engine\n"
          "                     runtime into <stem>.cpp, or write se_runtime.hpp\n"
          "  --no-build         do not write build.ps1 / build.sh\n"
-         "  --no-topology      do not write <stem>.topology.md\n"
+         "  --topology=<list>  html,mermaid (default both): write\n"
+         "                     <stem>.topology.html and/or <stem>.topology.md\n"
+         "  --no-topology      write neither\n"
          "  --kind=<k>         force model | sim | settings\n"
          "  --max-errors=<n>   diagnostic cap (default 20, 0 = no cap)\n"
          "  --no-color         plain output\n"
@@ -218,7 +223,29 @@ int main(int argc, char** argv) {
         } else if (a == "--no-build") {
             emit_opt.write_build = false;
         } else if (a == "--no-topology") {
-            emit_opt.write_topology = false;
+            emit_opt.topology_html = false;
+            emit_opt.topology_mermaid = false;
+        } else if (a.rfind("--topology=", 0) == 0) {
+            // A list, not a single choice: the formats are independent, and
+            // naming one turns the others off.
+            emit_opt.topology_html = false;
+            emit_opt.topology_mermaid = false;
+            std::string list = a.substr(11);
+            for (std::size_t at = 0; at <= list.size();) {
+                std::size_t comma = list.find(',', at);
+                if (comma == std::string::npos) comma = list.size();
+                const std::string f = list.substr(at, comma - at);
+                if (f == "html") {
+                    emit_opt.topology_html = true;
+                } else if (f == "mermaid") {
+                    emit_opt.topology_mermaid = true;
+                } else {
+                    std::cerr << "sec: --topology: unknown format `" << f
+                              << "` (expected html, mermaid)\n";
+                    return 2;
+                }
+                at = comma + 1;
+            }
         } else if (a == "--quiet") {
             emit_opt.quiet = true;
         } else if (a == "--emit") {

@@ -53,7 +53,10 @@ struct EmitOptions {
     // deduplicated by their include guard either way.
     bool separate_runtime = false;
     bool write_build = true;
-    bool write_topology = true;
+    // The topology formats (`--topology=html,mermaid`): the interactive page,
+    // and the Mermaid diagram in a markdown fence. Both by default.
+    bool topology_html = true;
+    bool topology_mermaid = true;
     bool quiet = false;
 };
 
