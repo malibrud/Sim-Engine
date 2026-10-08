@@ -101,6 +101,17 @@ std::string literal(double v, const std::string& scalar) {
     return dbl(v);
 }
 
+// A derived setting's expression, path-addressed rather than C++-addressed:
+// what the manifest and the topology page show as "<- 2 * fl.whl.radius".
+std::string derived_from(const ExprCode& expr) {
+    std::string e;
+    for (const ExprTok& tok : expr)
+        e += tok.kind == ExprTok::Kind::Param
+                 ? (tok.owner.empty() ? tok.text : tok.owner + "." + tok.text)
+                 : tok.text;
+    return e;
+}
+
 std::string cpp_type(const Type& t) {
     return t.is_record ? t.record->cpp_name : t.scalar;
 }
@@ -275,6 +286,7 @@ public:
     std::string manifest();
     Topo topology() const;
     std::string topology_mermaid(const Topo& t) const;
+    std::string topology_json(const Topo& t) const;
     // `exe_main` is the file holding main(). With `unity` it #includes the
     // implementation itself (a white-box test program), so it is compiled alone.
     std::string build_script(Script kind, const std::string& exe_main, bool unity);
@@ -2961,6 +2973,181 @@ std::string Emitter::topology_mermaid(const Topo& topo) const {
     return t.str();
 }
 
+// — The topology as data —
+//
+//  What the interactive page (<stem>.topology.html) is drawn from. Everything
+//  the Mermaid diagram has, plus the three things it never could: BOTH port
+//  names on every wire, every node's settings, states and ports whether wired
+//  or not, and where each node is defined. Values are strings formatted
+//  exactly as the unit manifest formats them, so the page and `.units.txt`
+//  cannot show a setting two ways.
+//
+//  One object or array entry per line: the JSON is checked against goldens,
+//  and a diff should point at the node that changed, not at one long line.
+
+namespace {
+
+// A JSON string literal. `/` after `<` is escaped too, which JSON permits
+// and which matters here: the text is embedded in a <script> element, and a
+// unit or expression containing `</script>` would otherwise end it.
+std::string jstr(const std::string& s) {
+    std::string r = "\"";
+    for (std::size_t i = 0; i < s.size(); ++i) {
+        const unsigned char c = static_cast<unsigned char>(s[i]);
+        switch (c) {
+        case '"': r += "\\\""; break;
+        case '\\': r += "\\\\"; break;
+        case '\n': r += "\\n"; break;
+        case '\r': r += "\\r"; break;
+        case '\t': r += "\\t"; break;
+        case '/': r += (i && s[i - 1] == '<') ? "\\/" : "/"; break;
+        default:
+            if (c < 0x20) {
+                char buf[8];
+                std::snprintf(buf, sizeof buf, "\\u%04x", c);
+                r += buf;
+            } else {
+                r += static_cast<char>(c);
+            }
+        }
+    }
+    return r + "\"";
+}
+
+std::string jbool(bool b) { return b ? "true" : "false"; }
+
+// A string or `null` when empty.
+std::string jopt(const std::string& s) { return s.empty() ? "null" : jstr(s); }
+
+// A port list: [{"name":..,"type":..}, ...]
+std::string jports(const std::vector<Field>& ports) {
+    std::string r = "[";
+    for (std::size_t i = 0; i < ports.size(); ++i)
+        r += (i ? ", " : "") + std::string("{\"name\": ") + jstr(ports[i].name) +
+             ", \"type\": " + jstr(topo_type(ports[i].type)) + "}";
+    return r + "]";
+}
+
+}  // namespace
+
+std::string Emitter::topology_json(const Topo& topo) const {
+    Out t;
+    auto gid = [](std::size_t g) { return g == 0 ? std::string("null") : jstr("g" + std::to_string(g)); };
+
+    std::vector<std::size_t> group_of(m_.leaves.size(), 0);
+    for (std::size_t g = 0; g < topo.groups.size(); ++g)
+        for (std::size_t i : topo.groups[g].leaves) group_of[i] = g;
+
+    t << "{\n";
+    t << "\"name\": " << jstr(m_.name) << ",\n";
+    t << "\"root\": " << jstr(m_.root->fq) << ",\n";
+    t << "\"step\": " << jstr(dbl(m_.step)) << ",\n";
+    t << "\"solver\": " << jstr(m_.solver) << ",\n";
+
+    // ---- composites ----------------------------------------------------------
+    t << "\"groups\": [";
+    for (std::size_t g = 1; g < topo.groups.size(); ++g) {
+        const Topo::Group& gr = topo.groups[g];
+        t << (g > 1 ? ",\n " : "\n ") << "{\"id\": " << gid(g) << ", \"name\": " << jstr(gr.name)
+          << ", \"path\": " << jstr(gr.path) << ", \"parent\": " << gid(gr.parent) << "}";
+    }
+    t << (topo.groups.size() > 1 ? "\n],\n" : "],\n");
+
+    // ---- nodes: leaves, then the terminals ------------------------------------
+    //  Ids are the leaves' generated identifiers, which are unique (I5) and
+    //  never contain a dot, so the terminals' dotted ids cannot collide.
+    std::vector<std::string> rows;
+    for (std::size_t i = 0; i < m_.leaves.size(); ++i) {
+        const Leaf& leaf = m_.leaves[i];
+        const std::size_t dot = leaf.path.rfind('.');
+        const std::string name = leaf.path.empty()
+                                     ? std::string("<root>")
+                                     : (dot == std::string::npos ? leaf.path : leaf.path.substr(dot + 1));
+        std::string r = "{\"id\": " + jstr(leaf.ident) + ", \"kind\": \"leaf\", \"name\": " + jstr(name) +
+                        ", \"path\": " + jstr(leaf.path) + ", \"type\": " + jstr(leaf.node->fq) +
+                        ", \"group\": " + gid(group_of[i]) + ", \"order\": " +
+                        std::to_string(topo.rank[i]) + ", \"rate\": " + jopt(topo.rate[i]) +
+                        ", \"solver\": " + jbool(leaf.has_continuous());
+        if (leaf.node->file && leaf.node->def)
+            r += ", \"file\": " + jstr(line_path(leaf.node->file->path)) +
+                 ", \"line\": " + std::to_string(leaf.node->def->loc.line);
+        r += ", \"ins\": " + jports(leaf.ports_in) + ", \"outs\": " + jports(leaf.ports_out);
+        r += ", \"states\": [";
+        for (std::size_t k = 0; k < leaf.states.size(); ++k) {
+            const StateSlot& s = leaf.states[k];
+            r += (k ? ", " : "") + std::string("{\"name\": ") + jstr(s.name) +
+                 ", \"kind\": " + jstr(s.continuous ? "continuous" : "discrete") +
+                 ", \"unit\": " + jstr(s.unit.str()) +
+                 ", \"initial\": " + jstr(literal(s.initial, s.scalar)) +
+                 ", \"extent\": " + jopt(s.extent.present ? s.extent.text : std::string()) +
+                 ", \"slot\": " +
+                 (s.continuous && !m_.dynamic_states ? std::to_string(s.slot) : std::string("null")) +
+                 "}";
+        }
+        rows.push_back(r + "]}");
+    }
+    for (std::size_t k = 0; k < m_.boundary_in.size(); ++k)
+        rows.push_back("{\"id\": " + jstr("in." + m_.boundary_in[k].ident) +
+                       ", \"kind\": \"in\", \"name\": " + jstr(m_.boundary_in[k].path) +
+                       ", \"type\": " + jstr(topo.in_type[k]) + "}");
+    for (std::size_t k = 0; k < topo.outs.size(); ++k) {
+        if (topo.outs[k].leaf == std::string::npos) continue;
+        rows.push_back("{\"id\": " + jstr("out." + std::to_string(k)) +
+                       ", \"kind\": \"out\", \"name\": " + jstr("out." + topo.outs[k].path) +
+                       ", \"type\": " + jstr(topo.outs[k].type) + "}");
+    }
+    for (std::size_t k = 0; k < topo.consts.size(); ++k)
+        rows.push_back("{\"id\": " + jstr("const." + std::to_string(k)) +
+                       ", \"kind\": \"const\", \"name\": " + jstr(topo.consts[k]) + "}");
+    t << "\"nodes\": [";
+    for (std::size_t k = 0; k < rows.size(); ++k) t << (k ? ",\n " : "\n ") << rows[k];
+    t << (rows.empty() ? "],\n" : "\n],\n");
+
+    // ---- wires -----------------------------------------------------------------
+    //  A terminal's single port is called `out` (a source) or `in` (a sink),
+    //  so every edge names a node AND a port at both ends.
+    rows.clear();
+    for (const Topo::Edge& e : topo.edges) {
+        std::string from, port;
+        switch (e.from) {
+        case Topo::Edge::From::Leaf: from = m_.leaves[e.src].ident; port = e.src_port; break;
+        case Topo::Edge::From::Boundary: from = "in." + e.boundary; port = "out"; break;
+        case Topo::Edge::From::Const: from = "const." + std::to_string(e.src); port = "out"; break;
+        }
+        rows.push_back("{\"from\": " + jstr(from) + ", \"fromPort\": " + jstr(port) +
+                       ", \"to\": " + jstr(m_.leaves[e.dst].ident) + ", \"toPort\": " +
+                       jstr(e.dst_port) + ", \"type\": " + jstr(e.type) +
+                       ", \"feedthrough\": " + jbool(e.feedthrough) + "}");
+    }
+    for (std::size_t k = 0; k < topo.outs.size(); ++k) {
+        const Topo::Output& o = topo.outs[k];
+        if (o.leaf == std::string::npos) continue;
+        rows.push_back("{\"from\": " + jstr(o.ident) + ", \"fromPort\": " + jstr(o.port) +
+                       ", \"to\": " + jstr("out." + std::to_string(k)) +
+                       ", \"toPort\": \"in\", \"type\": " + jstr(o.type) +
+                       ", \"feedthrough\": true}");
+    }
+    t << "\"edges\": [";
+    for (std::size_t k = 0; k < rows.size(); ++k) t << (k ? ",\n " : "\n ") << rows[k];
+    t << (rows.empty() ? "],\n" : "\n],\n");
+
+    // ---- settings ----------------------------------------------------------------
+    //  Every one, composites' included: `owner` is the path of the node or
+    //  composite holding it, which is how the page finds a node's settings.
+    t << "\"settings\": [";
+    for (std::size_t k = 0; k < m_.settings.size(); ++k) {
+        const SettingSlot& s = m_.settings[k];
+        t << (k ? ",\n " : "\n ") << "{\"path\": " << jstr(s.path) << ", \"owner\": " << jstr(s.owner)
+          << ", \"name\": " << jstr(s.name) << ", \"unit\": " << jstr(s.unit.str())
+          << ", \"value\": " << jstr(literal(s.value, s.scalar))
+          << ", \"from\": " << (s.constant ? std::string("null") : jstr(derived_from(s.expr)))
+          << ", \"structural\": " << jbool(s.structural) << ", \"rate\": " << jbool(s.rate) << "}";
+    }
+    t << (m_.settings.empty() ? "]\n" : "\n]\n");
+    t << "}\n";
+    return t.str();
+}
+
 // ─── The unit manifest (§15.6) ───────────────────────────────────────────────
 
 std::string Emitter::manifest() {
@@ -3049,14 +3236,7 @@ std::string Emitter::manifest() {
     for (const SettingSlot& s : m_.settings) {
         t << col("", 10) << col(s.path, 24) << col(s.unit.str(), 12) << "= "
           << literal(s.value, s.scalar);
-        if (!s.constant) {
-            std::string e;
-            for (const ExprTok& tok : s.expr)
-                e += tok.kind == ExprTok::Kind::Param
-                         ? (tok.owner.empty() ? tok.text : tok.owner + "." + tok.text)
-                         : tok.text;
-            t << "   <- " << e;
-        }
+        if (!s.constant) t << "   <- " << derived_from(s.expr);
         t << "\n";
     }
 
