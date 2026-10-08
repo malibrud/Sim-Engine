@@ -214,6 +214,53 @@ void split_native(const std::string& text, std::string& type, std::string& init)
 // Which shell a reference build script is written for (§12.4).
 enum class Script { Ps1, Sh };
 
+// The signal-flow graph as the model runs, in no notation at all. One walk
+// over the flat model builds it; the Mermaid diagram and the interactive page
+// are each a printer over it, so they cannot disagree about what is wired to
+// what. Leaves are referred to by their index in `Model::leaves`, so a printer
+// that wants more than the graph -- settings, states -- reads the leaf itself.
+struct Topo {
+    // The composite tree, recovered from the leaf paths. [0] is the root, and
+    // a group's leaves are in §8.5 schedule order.
+    struct Group {
+        std::string name;                  // last path segment; "" for the root
+        std::string path;                  // root-relative: "fl.whl"
+        std::size_t parent = 0;            // meaningless for [0]
+        std::vector<std::size_t> leaves;
+        std::vector<std::size_t> subs;
+    };
+    // A root output the host may read, collapsed from `boundary_out`'s
+    // field-by-field rows back onto the port they came from.
+    struct Output {
+        std::string ident;                 // producer leaf's identifier
+        std::size_t leaf = 0;              // index, or npos if it is not a leaf
+        std::string port;
+        std::string path;                  // "whl.ws"
+        std::string type;                  // "?" when the port is not found
+    };
+    // One connected input port.
+    struct Edge {
+        enum class From { Leaf, Boundary, Const };
+        From from = From::Leaf;
+        std::size_t src = 0;               // leaf index, or index into `consts`
+        std::string boundary;              // Boundary: the root input's name
+        std::string src_port;              // Leaf: the producer's port
+        std::size_t dst = 0;               // consuming leaf
+        std::string dst_port;
+        std::string type;                  // as a reader wants it, with any
+                                           // folded conversion: "rad to deg"
+        bool feedthrough = false;          // `output()` reads it (§8.3)
+    };
+
+    std::vector<Group> groups;
+    std::vector<std::size_t> rank;         // leaf index -> §8.5 position
+    std::vector<std::string> rate;         // leaf index -> "200 Hz", or ""
+    std::vector<std::string> in_type;      // per `boundary_in`
+    std::vector<Output> outs;
+    std::vector<std::string> consts;       // §6.9.2 constant sources, as text
+    std::vector<Edge> edges;
+};
+
 class Emitter {
 public:
     // `stem` names the three sources: <stem>.hpp is the public interface,
@@ -226,7 +273,8 @@ public:
     std::string impl_cpp(bool separate_runtime);
     std::string main_cpp();
     std::string manifest();
-    std::string topology() const;
+    Topo topology() const;
+    std::string topology_mermaid(const Topo& t) const;
     // `exe_main` is the file holding main(). With `unity` it #includes the
     // implementation itself (a white-box test program), so it is compiled alone.
     std::string build_script(Script kind, const std::string& exe_main, bool unity);
@@ -2577,21 +2625,186 @@ std::string Emitter::main_cpp() {
 //
 //  A picture of the model as it actually RUNS, which is why it is drawn from
 //  the flat model rather than from the `.se` hierarchy. Composites have
-//  evaporated by this point (§15.2), so a `subgraph` below is the path
-//  prefix one left behind and not a runtime object. Drawing the source
-//  hierarchy instead would show what was WRITTEN; this shows what got built,
-//  which is the thing whose behaviour anyone is trying to understand.
+//  evaporated by this point (§15.2), so a group below is the path prefix one
+//  left behind and not a runtime object. Drawing the source hierarchy instead
+//  would show what was WRITTEN; this shows what got built, which is the thing
+//  whose behaviour anyone is trying to understand.
 //
-//  Mermaid rather than Graphviz because it renders with nothing installed —
-//  GitHub, VS Code, any markdown preview — and because it is text, so it
-//  diffs and can be a checked expectation exactly as the manifest already is.
+//  `topology()` is the one walk; every notation is a printer over the `Topo`
+//  it returns. Mermaid is the text one: it renders in any markdown preview
+//  and diffs, so it can be a checked expectation exactly as the manifest is.
 //  "Nothing installed" holds only for a fenced block inside a `.md`, not for
-//  a bare `.mmd`, so `emit()` writes it inside a ```mermaid fence; this
-//  function returns the diagram alone and the fence is added at the write.
-//  Both formats are a printer over this one walk, so a `--dot` twin later is
-//  a second printer and not a second traversal.
+//  a bare `.mmd`, so `emit()` writes it inside a ```mermaid fence; the
+//  printer returns the diagram alone and the fence is added at the write.
 
-std::string Emitter::topology() const {
+namespace {
+
+// What a wire carries, as a reader wants it: a unit for a scalar, the
+// record's own name for a record (§5.3 — the whole record travels).
+std::string topo_type(const Type& ty) {
+    if (!ty.is_record) return ty.unit.str();
+    const std::size_t dot = ty.record->fq.rfind('.');
+    std::string r = dot == std::string::npos ? ty.record->fq : ty.record->fq.substr(dot + 1);
+    // §5.2 — the binding, not just the type. `Vec3` alone would make two
+    // ports look interchangeable when `Vec3(m)` into `Vec3(m/s)` is SE0410
+    // and `Vec3(mm)` into `Vec3(m)` silently scales every field, so the
+    // arguments ARE part of what crosses the wire.
+    if (!ty.unit_args.empty()) {
+        r += "(";
+        for (std::size_t i = 0; i < ty.unit_args.size(); ++i)
+            r += (i ? ", " : "") + ty.unit_args[i].str();
+        r += ")";
+    }
+    return r;
+}
+
+}  // namespace
+
+Topo Emitter::topology() const {
+    Topo t;
+
+    // Position in the §8.5 order, so each group lists its nodes in the order
+    // the tick actually calls them.
+    t.rank.assign(m_.leaves.size(), 0);
+    for (std::size_t k = 0; k < m_.order.size(); ++k) t.rank[m_.order[k]] = k;
+
+    // §9.2 — only a node that declares `rate` can be off the base step, and
+    // only then is the number worth the ink.
+    t.rate.assign(m_.leaves.size(), std::string());
+    for (std::size_t i = 0; i < m_.leaves.size(); ++i) {
+        const Leaf& leaf = m_.leaves[i];
+        if (!dynamic_rate(leaf) || m_.step <= 0.0) continue;
+        char buf[64];
+        std::snprintf(buf, sizeof buf, "%g Hz",
+                      1.0 / (m_.step * static_cast<double>(leaf.decimation)));
+        t.rate[i] = buf;
+    }
+
+    // ---- the composite tree, recovered from the paths ----------------------
+    std::map<std::string, std::size_t> group_of;
+    t.groups.push_back(Topo::Group{});
+    group_of[std::string()] = 0;
+
+    std::function<std::size_t(const std::string&)> ensure =
+        [&](const std::string& path) -> std::size_t {
+        auto it = group_of.find(path);
+        if (it != group_of.end()) return it->second;
+        const std::size_t dot = path.rfind('.');
+        const std::size_t parent =
+            ensure(dot == std::string::npos ? std::string() : path.substr(0, dot));
+        Topo::Group g;
+        g.name = dot == std::string::npos ? path : path.substr(dot + 1);
+        g.path = path;
+        g.parent = parent;
+        t.groups.push_back(g);
+        const std::size_t id = t.groups.size() - 1;
+        group_of[path] = id;
+        t.groups[parent].subs.push_back(id);
+        return id;
+    };
+
+    for (std::size_t i = 0; i < m_.leaves.size(); ++i) {
+        const std::string& path = m_.leaves[i].path;
+        const std::size_t dot = path.rfind('.');
+        t.groups[ensure(dot == std::string::npos ? std::string() : path.substr(0, dot))]
+            .leaves.push_back(i);
+    }
+    for (Topo::Group& g : t.groups)
+        std::sort(g.leaves.begin(), g.leaves.end(),
+                  [&](std::size_t a, std::size_t b) { return t.rank[a] < t.rank[b]; });
+
+    // ---- the root boundary the host drives ---------------------------------
+    for (const BoundaryIn& b : m_.boundary_in) t.in_type.push_back(topo_type(b.type));
+
+    // ---- the root outputs the host may read --------------------------------
+    //  `boundary_out` is expanded field by field, because that is what a host
+    //  wiring itself up needs (§15.6). A diagram wants the PORT, so the rows
+    //  are collapsed back onto the producer they all came from.
+    std::map<std::string, std::size_t> leaf_by_ident;
+    for (std::size_t i = 0; i < m_.leaves.size(); ++i) leaf_by_ident[m_.leaves[i].ident] = i;
+
+    for (const BoundaryOut& b : m_.boundary_out) {
+        if (b.expr.rfind("sig.", 0) != 0) continue;
+        const std::string rest = b.expr.substr(4);
+        const std::size_t d1 = rest.find('.');
+        if (d1 == std::string::npos) continue;
+        const std::string ident = rest.substr(0, d1);
+        const std::string after = rest.substr(d1 + 1);
+        const std::size_t d2 = after.find('.');
+        const std::string port = d2 == std::string::npos ? after : after.substr(0, d2);
+        bool seen = false;
+        for (const Topo::Output& o : t.outs) seen = seen || (o.ident == ident && o.port == port);
+        if (seen) continue;
+        Topo::Output o;
+        o.ident = ident;
+        o.port = port;
+        o.leaf = std::string::npos;
+        o.type = "?";
+        auto it = leaf_by_ident.find(ident);
+        if (it != leaf_by_ident.end()) {
+            const Leaf& leaf = m_.leaves[it->second];
+            o.leaf = it->second;
+            o.path = leaf.path.empty() ? port : leaf.path + "." + port;
+            for (const Field& f : leaf.ports_out)
+                if (f.name == port) o.type = topo_type(f.type);
+        }
+        t.outs.push_back(o);
+    }
+
+    // ---- wires -------------------------------------------------------------
+    for (std::size_t i = 0; i < m_.leaves.size(); ++i) {
+        const Leaf& leaf = m_.leaves[i];
+        const ast::Method* out = leaf.node->method(ast::Method::Which::Output);
+        for (const Field& port : leaf.ports_in) {
+            auto it = leaf.inputs.find(port.name);
+            if (it == leaf.inputs.end()) continue;   // unconnected; SE0430 said so
+            const InputSource& src = it->second;
+
+            Topo::Edge e;
+            e.dst = i;
+            e.dst_port = port.name;
+            // The SAME question schedule.cpp asks when it builds the sort: only
+            // `output()`'s parameter list constrains ordering (§8.3).
+            if (out)
+                for (const std::string& q : out->params)
+                    if (q == port.name) e.feedthrough = true;
+
+            if (src.kind == InputSource::Kind::Boundary) {
+                e.from = Topo::Edge::From::Boundary;
+                e.boundary = src.boundary.substr(std::strlen("sig.in."));
+            } else if (src.kind == InputSource::Kind::Param ||
+                       src.kind == InputSource::Kind::Const) {
+                // §6.9.2 — a constant source has no producing leaf, so there is
+                // no node in the graph to draw the edge from. It gets a
+                // terminal of its own rather than being attributed to whichever
+                // leaf happens to sit at `producer`'s default index.
+                e.from = Topo::Edge::From::Const;
+                e.src = t.consts.size();
+                t.consts.push_back(src.kind == InputSource::Kind::Const ? dbl(src.value)
+                                                                        : render_expr(src.expr));
+            } else {
+                e.from = Topo::Edge::From::Leaf;
+                e.src = src.producer;
+                e.src_port = src.port;
+            }
+
+            // A conversion folded to a constant at elaboration (§4.2) is
+            // invisible in the generated code, so this is the only place it
+            // shows: the two declared units, in the direction they convert.
+            e.type = topo_type(port.type);
+            if (src.converts() && src.kind == InputSource::Kind::Leaf) {
+                const Leaf& prod = m_.leaves[src.producer];
+                for (const Field& f : prod.ports_out)
+                    if (f.name == src.port && !f.type.is_record)
+                        e.type = f.type.unit.str() + " to " + e.type;
+            }
+            t.edges.push_back(e);
+        }
+    }
+    return t;
+}
+
+std::string Emitter::topology_mermaid(const Topo& topo) const {
     Out t;
 
     // `#` opens a Mermaid entity code and `"` closes a label. Neither is
@@ -2621,67 +2834,6 @@ std::string Emitter::topology() const {
             if (ident == r) return ident + "_";
         return ident;
     };
-
-    // What a wire carries, as a reader wants it: a unit for a scalar, the
-    // record's own name for a record (§5.3 — the whole record travels).
-    auto type_of = [](const Type& ty) -> std::string {
-        if (!ty.is_record) return ty.unit.str();
-        const std::size_t dot = ty.record->fq.rfind('.');
-        std::string r =
-            dot == std::string::npos ? ty.record->fq : ty.record->fq.substr(dot + 1);
-        // §5.2 — the binding, not just the type. `Vec3` alone would make two
-        // ports look interchangeable when `Vec3(m)` into `Vec3(m/s)` is SE0410
-        // and `Vec3(mm)` into `Vec3(m)` silently scales every field, so the
-        // arguments ARE part of what crosses the wire.
-        if (!ty.unit_args.empty()) {
-            r += "(";
-            for (std::size_t i = 0; i < ty.unit_args.size(); ++i)
-                r += (i ? ", " : "") + ty.unit_args[i].str();
-            r += ")";
-        }
-        return r;
-    };
-
-    // Position in the §8.5 order, so each group lists its nodes in the order
-    // the tick actually calls them and Mermaid lays them out left to right.
-    std::vector<std::size_t> rank(m_.leaves.size(), 0);
-    for (std::size_t k = 0; k < m_.order.size(); ++k) rank[m_.order[k]] = k;
-
-    // ---- the composite tree, recovered from the paths ----------------------
-    struct Group {
-        std::string name;
-        std::vector<std::size_t> leaves;
-        std::vector<std::size_t> subs;
-    };
-    std::vector<Group> groups;
-    std::map<std::string, std::size_t> group_of;
-    groups.push_back(Group{std::string(), {}, {}});
-    group_of[std::string()] = 0;
-
-    std::function<std::size_t(const std::string&)> ensure =
-        [&](const std::string& path) -> std::size_t {
-        auto it = group_of.find(path);
-        if (it != group_of.end()) return it->second;
-        const std::size_t dot = path.rfind('.');
-        const std::size_t parent =
-            ensure(dot == std::string::npos ? std::string() : path.substr(0, dot));
-        groups.push_back(
-            Group{dot == std::string::npos ? path : path.substr(dot + 1), {}, {}});
-        const std::size_t id = groups.size() - 1;
-        group_of[path] = id;
-        groups[parent].subs.push_back(id);
-        return id;
-    };
-
-    for (std::size_t i = 0; i < m_.leaves.size(); ++i) {
-        const std::string& path = m_.leaves[i].path;
-        const std::size_t dot = path.rfind('.');
-        groups[ensure(dot == std::string::npos ? std::string() : path.substr(0, dot))]
-            .leaves.push_back(i);
-    }
-    for (Group& g : groups)
-        std::sort(g.leaves.begin(), g.leaves.end(),
-                  [&](std::size_t a, std::size_t b) { return rank[a] < rank[b]; });
 
     // ---- header ------------------------------------------------------------
     //  One comment line. It is a function rather than a literal for one
@@ -2725,14 +2877,18 @@ std::string Emitter::topology() const {
     t << "flowchart LR\n";
 
     // ---- the root boundary the host drives ---------------------------------
-    for (const BoundaryIn& b : m_.boundary_in)
-        t << "    se_in_" << b.ident << "([" << lab("in." + b.ident + "<br/>" +
-                                                    type_of(b.type)) << "])\n";
+    for (std::size_t k = 0; k < m_.boundary_in.size(); ++k) {
+        const BoundaryIn& b = m_.boundary_in[k];
+        t << "    se_in_" << b.ident << "([" << lab("in." + b.ident + "<br/>" + topo.in_type[k])
+          << "])\n";
+    }
 
     // ---- nodes, nested by composite ----------------------------------------
+    //  Mermaid lays each group out left to right in the order listed, which is
+    //  the order the tick calls them.
     std::function<void(std::size_t, const std::string&)> draw =
         [&](std::size_t g, const std::string& ind) {
-        for (std::size_t i : groups[g].leaves) {
+        for (std::size_t i : topo.groups[g].leaves) {
             const Leaf& leaf = m_.leaves[i];
             const std::size_t dot = leaf.path.rfind('.');
             std::string name = leaf.path.empty()
@@ -2740,19 +2896,11 @@ std::string Emitter::topology() const {
                                    : (dot == std::string::npos ? leaf.path
                                                                : leaf.path.substr(dot + 1));
             std::string text = name + "<br/>" + leaf.node->fq;
-            // §9.2 — only a node that declares `rate` can be off the base
-            // step, and only then is the number worth the ink.
-            if (dynamic_rate(leaf) && m_.step > 0.0) {
-                char buf[64];
-                std::snprintf(buf, sizeof buf, "%g Hz",
-                              1.0 / (m_.step * static_cast<double>(leaf.decimation)));
-                text += "<br/>";
-                text += buf;
-            }
+            if (!topo.rate[i].empty()) text += "<br/>" + topo.rate[i];
             t << ind << id(leaf.ident) << "[" << lab(text) << "]\n";
         }
-        for (std::size_t sub : groups[g].subs) {
-            t << ind << "subgraph sg" << sub << "[" << lab(groups[sub].name) << "]\n";
+        for (std::size_t sub : topo.groups[g].subs) {
+            t << ind << "subgraph sg" << sub << "[" << lab(topo.groups[sub].name) << "]\n";
             t << ind << "    direction LR\n";
             draw(sub, ind + "    ");
             t << ind << "end\n";
@@ -2761,97 +2909,39 @@ std::string Emitter::topology() const {
     draw(0, "    ");
 
     // ---- the root outputs the host may read --------------------------------
-    //  `boundary_out` is expanded field by field, because that is what a host
-    //  wiring itself up needs (§15.6). A diagram wants the PORT, so the rows
-    //  are collapsed back onto the producer they all came from.
-    std::map<std::string, std::size_t> leaf_by_ident;
-    for (std::size_t i = 0; i < m_.leaves.size(); ++i) leaf_by_ident[m_.leaves[i].ident] = i;
-
-    std::vector<std::pair<std::string, std::string>> outs;   // producer ident, port
-    for (const BoundaryOut& b : m_.boundary_out) {
-        if (b.expr.rfind("sig.", 0) != 0) continue;
-        const std::string rest = b.expr.substr(4);
-        const std::size_t d1 = rest.find('.');
-        if (d1 == std::string::npos) continue;
-        const std::string ident = rest.substr(0, d1);
-        const std::string after = rest.substr(d1 + 1);
-        const std::size_t d2 = after.find('.');
-        const std::string port = d2 == std::string::npos ? after : after.substr(0, d2);
-        bool seen = false;
-        for (const auto& o : outs) seen = seen || (o.first == ident && o.second == port);
-        if (!seen) outs.emplace_back(ident, port);
-    }
-    for (std::size_t k = 0; k < outs.size(); ++k) {
-        auto it = leaf_by_ident.find(outs[k].first);
-        if (it == leaf_by_ident.end()) continue;
-        const Leaf& leaf = m_.leaves[it->second];
-        const std::string path =
-            leaf.path.empty() ? outs[k].second : leaf.path + "." + outs[k].second;
-        const Field* port = nullptr;
-        for (const Field& f : leaf.ports_out)
-            if (f.name == outs[k].second) port = &f;
-        t << "    se_out" << k << "([" << lab("out " + path + "<br/>" +
-                                              (port ? type_of(port->type) : std::string("?")))
-          << "])\n";
+    for (std::size_t k = 0; k < topo.outs.size(); ++k) {
+        const Topo::Output& o = topo.outs[k];
+        if (o.leaf == std::string::npos) continue;
+        t << "    se_out" << k << "([" << lab("out " + o.path + "<br/>" + o.type) << "])\n";
     }
 
     // ---- wires -------------------------------------------------------------
+    //  The label names the port a reader would look up: the producer's for a
+    //  leaf-to-leaf wire, the consumer's for a boundary or constant one. A
+    //  constant's terminal is declared inline, the way Mermaid allows.
     t << "\n";
-    std::size_t konst = 0;   // §6.9.2 — numbers the constant-source terminals
-    for (std::size_t i = 0; i < m_.leaves.size(); ++i) {
-        const Leaf& leaf = m_.leaves[i];
-        const ast::Method* out = leaf.node->method(ast::Method::Which::Output);
-        for (const Field& port : leaf.ports_in) {
-            auto it = leaf.inputs.find(port.name);
-            if (it == leaf.inputs.end()) continue;   // unconnected; SE0430 said so
-            const InputSource& src = it->second;
-
-            // The SAME question schedule.cpp asks when it builds the sort: only
-            // `output()`'s parameter list constrains ordering (§8.3).
-            bool feedthrough = false;
-            if (out)
-                for (const std::string& q : out->params)
-                    if (q == port.name) feedthrough = true;
-
-            std::string from, label;
-            if (src.kind == InputSource::Kind::Boundary) {
-                from = "se_in_" + src.boundary.substr(std::strlen("sig.in."));
-                label = port.name;
-            } else if (src.kind == InputSource::Kind::Param ||
-                       src.kind == InputSource::Kind::Const) {
-                // §6.9.2 — a constant source has no producing leaf, so there is
-                // no node in the graph to draw the edge from. It gets a
-                // terminal of its own, declared inline the way Mermaid allows,
-                // rather than being attributed to whichever leaf happens to sit
-                // at `producer`'s default index.
-                from = "se_k" + std::to_string(konst++) + "([" +
-                       lab(src.kind == InputSource::Kind::Const ? dbl(src.value)
-                                                                : render_expr(src.expr)) +
-                       "])";
-                label = port.name;
-            } else {
-                from = id(m_.leaves[src.producer].ident);
-                label = src.port;
-            }
-
-            // A conversion folded to a constant at elaboration (§4.2) is
-            // invisible in the generated code, so this is the only place it
-            // shows: the two declared units, in the direction they convert.
-            std::string ty = type_of(port.type);
-            if (src.converts() && src.kind == InputSource::Kind::Leaf) {
-                const Leaf& prod = m_.leaves[src.producer];
-                for (const Field& f : prod.ports_out)
-                    if (f.name == src.port && !f.type.is_record)
-                        ty = f.type.unit.str() + " to " + ty;
-            }
-            t << "    " << from << (feedthrough ? " -->|" : " -.->|") << lab(label + " (" + ty + ")")
-              << "| " << id(leaf.ident) << "\n";
+    for (const Topo::Edge& e : topo.edges) {
+        std::string from, label;
+        switch (e.from) {
+        case Topo::Edge::From::Boundary:
+            from = "se_in_" + e.boundary;
+            label = e.dst_port;
+            break;
+        case Topo::Edge::From::Const:
+            from = "se_k" + std::to_string(e.src) + "([" + lab(topo.consts[e.src]) + "])";
+            label = e.dst_port;
+            break;
+        case Topo::Edge::From::Leaf:
+            from = id(m_.leaves[e.src].ident);
+            label = e.src_port;
+            break;
         }
+        t << "    " << from << (e.feedthrough ? " -->|" : " -.->|") << lab(label + " (" + e.type + ")")
+          << "| " << id(m_.leaves[e.dst].ident) << "\n";
     }
-    for (std::size_t k = 0; k < outs.size(); ++k) {
-        auto it = leaf_by_ident.find(outs[k].first);
-        if (it == leaf_by_ident.end()) continue;
-        t << "    " << id(outs[k].first) << " --> se_out" << k << "\n";
+    for (std::size_t k = 0; k < topo.outs.size(); ++k) {
+        if (topo.outs[k].leaf == std::string::npos) continue;
+        t << "    " << id(topo.outs[k].ident) << " --> se_out" << k << "\n";
     }
 
     // ---- where the solver's state lives ------------------------------------
@@ -3371,7 +3461,8 @@ bool emit(Diagnostics& diag, const Model& m, const EmitOptions& opt) {
     ok = write_file(diag, path(stem + ".units.txt"), e.manifest(), opt.quiet) && ok;
     if (opt.write_topology)
         ok = write_file(diag, path(stem + ".topology.md"),
-                        "```mermaid\n" + e.topology() + "```\n", opt.quiet) && ok;
+                        "```mermaid\n" + e.topology_mermaid(e.topology()) + "```\n",
+                        opt.quiet) && ok;
     if (opt.separate_runtime)
         ok = write_file(diag, path("se_runtime.hpp"), se_runtime_hpp(), opt.quiet) && ok;
     if (opt.write_build && has_main) {
