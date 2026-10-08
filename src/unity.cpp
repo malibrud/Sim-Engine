@@ -21,5 +21,6 @@
 #include "emit.cpp"
 #include "testgen.cpp"
 #include "runtime_src.cpp"
+#include "topology_page.cpp"
 
 #include "../tools/sec.cpp"

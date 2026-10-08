@@ -10,7 +10,10 @@
 //                             node classes, Sim::Impl and the schedule
 //      main.cpp               an example host, using <stem>.hpp alone
 //      <stem>.units.txt       the unit manifest — load-bearing, not docs (§15.6)
-//      <stem>.topology.md     the signal-flow graph, a Mermaid diagram in a
+//      <stem>.topology.html   the signal-flow graph, interactive: laid out in
+//                             the browser, with each node's settings, states
+//                             and wiring a click away
+//      <stem>.topology.md     the same graph as a Mermaid diagram in a
 //                             markdown fence
 //      se_runtime.hpp         only with `--runtime=separate`: the runtime as
 //                             its own header, included instead of pasted
@@ -59,6 +62,12 @@ bool emit(Diagnostics& diag, const Model& m, const EmitOptions& opt);
 // The fixed engine runtime, embedded in the compiler, with its version tag
 // filled in (see runtime_src.cpp).
 const std::string& se_runtime_hpp();
+
+// The interactive topology page, with the model pasted in (see
+// topology_page.cpp). `json` is the topology; `base_json` is a JSON string
+// naming the directory relative source paths are relative to.
+std::string topology_page(const std::string& name, const std::string& json,
+                          const std::string& base_json);
 
 }  // namespace se
 

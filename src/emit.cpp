@@ -3639,10 +3639,17 @@ bool emit(Diagnostics& diag, const Model& m, const EmitOptions& opt) {
     if (opt.write_main && !unity)
         ok = write_file(diag, path("main.cpp"), e.main_cpp(), opt.quiet) && ok;
     ok = write_file(diag, path(stem + ".units.txt"), e.manifest(), opt.quiet) && ok;
-    if (opt.write_topology)
+    if (opt.write_topology) {
+        const Topo topo = e.topology();
+        // Source paths in the JSON are as opened, so usually relative to where
+        // `sec` ran; the page needs that directory to turn them into links.
+        std::error_code ec;
+        const std::string base = std::filesystem::current_path(ec).generic_string();
+        ok = write_file(diag, path(stem + ".topology.html"),
+                        topology_page(m.name, e.topology_json(topo), jstr(base)), opt.quiet) && ok;
         ok = write_file(diag, path(stem + ".topology.md"),
-                        "```mermaid\n" + e.topology_mermaid(e.topology()) + "```\n",
-                        opt.quiet) && ok;
+                        "```mermaid\n" + e.topology_mermaid(topo) + "```\n", opt.quiet) && ok;
+    }
     if (opt.separate_runtime)
         ok = write_file(diag, path("se_runtime.hpp"), se_runtime_hpp(), opt.quiet) && ok;
     if (opt.write_build && has_main) {
