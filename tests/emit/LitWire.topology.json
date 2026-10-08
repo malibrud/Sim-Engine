@@ -1,0 +1,45 @@
+﻿{
+"name": "LitWire",
+"root": "litwire.LitWire",
+"step": "0.001",
+"solver": "rk4",
+"groups": [
+ {"id": "g1", "name": "inner", "path": "inner", "parent": null}
+],
+"nodes": [
+ {"id": "s1", "kind": "leaf", "name": "s1", "path": "s1", "type": "se.math.Sum", "group": null, "order": 0, "rate": null, "solver": false, "file": "stdlib/se/math/Sum.se", "line": 11, "ins": [{"name": "a", "type": "m/s^2"}, {"name": "b", "type": "m/s^2"}], "outs": [{"name": "y", "type": "m/s^2"}], "states": []},
+ {"id": "s2", "kind": "leaf", "name": "s2", "path": "s2", "type": "se.math.Sum", "group": null, "order": 1, "rate": null, "solver": false, "file": "stdlib/se/math/Sum.se", "line": 11, "ins": [{"name": "a", "type": "m/s^2"}, {"name": "b", "type": "m/s^2"}], "outs": [{"name": "y", "type": "m/s^2"}], "states": []},
+ {"id": "s3", "kind": "leaf", "name": "s3", "path": "s3", "type": "se.math.Sum", "group": null, "order": 2, "rate": null, "solver": false, "file": "stdlib/se/math/Sum.se", "line": 11, "ins": [{"name": "a", "type": "m/s^2"}, {"name": "b", "type": "m/s^2"}], "outs": [{"name": "y", "type": "m/s^2"}], "states": []},
+ {"id": "s4", "kind": "leaf", "name": "s4", "path": "s4", "type": "se.math.Sum", "group": null, "order": 3, "rate": null, "solver": false, "file": "stdlib/se/math/Sum.se", "line": 11, "ins": [{"name": "a", "type": "m/s^2"}, {"name": "b", "type": "m/s^2"}], "outs": [{"name": "y", "type": "m/s^2"}], "states": []},
+ {"id": "s5", "kind": "leaf", "name": "s5", "path": "s5", "type": "se.math.Sum", "group": null, "order": 4, "rate": null, "solver": false, "file": "stdlib/se/math/Sum.se", "line": 11, "ins": [{"name": "a", "type": "m/s^2"}, {"name": "b", "type": "m/s^2"}], "outs": [{"name": "y", "type": "m/s^2"}], "states": []},
+ {"id": "s6", "kind": "leaf", "name": "s6", "path": "s6", "type": "se.math.Sum", "group": null, "order": 6, "rate": null, "solver": false, "file": "stdlib/se/math/Sum.se", "line": 11, "ins": [{"name": "a", "type": "m/s^2"}, {"name": "b", "type": "m/s^2"}], "outs": [{"name": "y", "type": "m/s^2"}], "states": []},
+ {"id": "inner_z", "kind": "leaf", "name": "z", "path": "inner.z", "type": "se.math.Sum", "group": "g1", "order": 5, "rate": null, "solver": false, "file": "stdlib/se/math/Sum.se", "line": 11, "ins": [{"name": "a", "type": "m/s^2"}, {"name": "b", "type": "m/s^2"}], "outs": [{"name": "y", "type": "m/s^2"}], "states": []},
+ {"id": "out.0", "kind": "out", "name": "out.s6.y", "type": "m/s^2"},
+ {"id": "const.0", "kind": "const", "name": "5.0"},
+ {"id": "const.1", "kind": "const", "name": "7.0"},
+ {"id": "const.2", "kind": "const", "name": "3.0"},
+ {"id": "const.3", "kind": "const", "name": "-4.0"},
+ {"id": "const.4", "kind": "const", "name": "2.0"},
+ {"id": "const.5", "kind": "const", "name": "2.0"},
+ {"id": "const.6", "kind": "const", "name": "1.0"},
+ {"id": "const.7", "kind": "const", "name": "0.0"}
+],
+"edges": [
+ {"from": "const.0", "fromPort": "out", "to": "s1", "toPort": "a", "type": "m/s^2", "feedthrough": true},
+ {"from": "const.1", "fromPort": "out", "to": "s1", "toPort": "b", "type": "m/s^2", "feedthrough": true},
+ {"from": "s1", "fromPort": "y", "to": "s2", "toPort": "a", "type": "m/s^2", "feedthrough": true},
+ {"from": "const.2", "fromPort": "out", "to": "s2", "toPort": "b", "type": "m/s^2", "feedthrough": true},
+ {"from": "s2", "fromPort": "y", "to": "s3", "toPort": "a", "type": "m/s^2", "feedthrough": true},
+ {"from": "const.3", "fromPort": "out", "to": "s3", "toPort": "b", "type": "m/s^2", "feedthrough": true},
+ {"from": "s3", "fromPort": "y", "to": "s4", "toPort": "a", "type": "m/s^2", "feedthrough": true},
+ {"from": "const.4", "fromPort": "out", "to": "s4", "toPort": "b", "type": "m/s^2", "feedthrough": true},
+ {"from": "s4", "fromPort": "y", "to": "s5", "toPort": "a", "type": "m/s^2", "feedthrough": true},
+ {"from": "const.5", "fromPort": "out", "to": "s5", "toPort": "b", "type": "m/s^2", "feedthrough": true},
+ {"from": "s5", "fromPort": "y", "to": "s6", "toPort": "a", "type": "m/s^2", "feedthrough": true},
+ {"from": "inner_z", "fromPort": "y", "to": "s6", "toPort": "b", "type": "m/s^2", "feedthrough": true},
+ {"from": "const.6", "fromPort": "out", "to": "inner_z", "toPort": "a", "type": "m/s^2", "feedthrough": true},
+ {"from": "const.7", "fromPort": "out", "to": "inner_z", "toPort": "b", "type": "m/s^2", "feedthrough": true},
+ {"from": "s6", "fromPort": "y", "to": "out.0", "toPort": "in", "type": "m/s^2", "feedthrough": true}
+],
+"settings": []
+}

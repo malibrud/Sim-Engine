@@ -350,6 +350,67 @@ function Check-Topology($stem, $outDir) {
     Compare-Text "tests/emit/$stem.topology" $expected $body
 }
 
+# The interactive topology page. The page itself is a fixed template, so what
+# is checked is the model data pasted into it: the JSON block, which is
+# extracted, linted, and compared against an opt-in <name>.topology.json.
+# Comparing the whole page would make every template edit churn every golden.
+#
+# The lint is what a golden cannot be trusted with, because -Update accepts
+# whatever was produced: every placeholder is filled, the Graphviz import is
+# pinned to an exact version (an unpinned one can change the picture, or break
+# it, under a page nobody regenerated), the JSON parses, nothing in it can end
+# its <script> element, and every wire names an existing node AND port at both
+# ends -- a dangling one would make Graphviz drop the edge without a word.
+function Check-TopologyHtml($label, $outDir, $golden) {
+    $produced = Find-Emitted $outDir '*.topology.html'
+    if (-not $produced) {
+        Write-Host "FAIL $label : no <sim>.topology.html was written" -ForegroundColor Red
+        $script:fail++
+        return
+    }
+    $html = (Get-Content -Raw -Encoding UTF8 $produced) -replace "`r`n", "`n"
+    $problems = @()
+    foreach ($ph in @('@NAME@', '@TOPOLOGY@', '@BASE@')) {
+        if ($html.Contains($ph)) { $problems += "placeholder $ph left in the page" }
+    }
+    if ($html -notmatch 'wasm-graphviz@\d+\.\d+\.\d+/') { $problems += 'Graphviz import is not pinned to an exact version' }
+    $open = '<script type="application/json" id="topology">'
+    $at = $html.IndexOf($open)
+    $json = $null
+    if ($at -lt 0) {
+        $problems += 'no topology JSON block'
+    } else {
+        $start = $at + $open.Length
+        $json = $html.Substring($start, $html.IndexOf('</script>', $start) - $start)
+        if ($json.Contains('</')) { $problems += "'</' inside the JSON block" }
+        try { $t = $json | ConvertFrom-Json } catch { $problems += "JSON does not parse: $_" }
+    }
+    if ($t) {
+        $nodes = @{}
+        foreach ($n in $t.nodes) { $nodes[$n.id] = $n }
+        foreach ($e in $t.edges) {
+            foreach ($end in @(@($e.from, $e.fromPort, 'outs'), @($e.to, $e.toPort, 'ins'))) {
+                $n = $nodes[$end[0]]
+                if (-not $n) { $problems += "edge end $($end[0]) is not a node"; continue }
+                $ports = switch ($n.kind) {
+                    'leaf'  { @($n.($end[2]) | ForEach-Object { $_.name }) }
+                    'out'   { if ($end[2] -eq 'ins') { @('in') } else { @() } }
+                    default { if ($end[2] -eq 'outs') { @('out') } else { @() } }
+                }
+                if ($ports -notcontains $end[1]) { $problems += "$($end[0]) has no port $($end[1]) on its $($end[2])" }
+            }
+        }
+    }
+    if ($problems.Count -gt 0) {
+        Write-Host "FAIL $label : $($problems[0..([Math]::Min(3, $problems.Count) - 1)] -join '; ')" -ForegroundColor Red
+        $script:fail++
+        return
+    }
+    Write-Host "ok   $label : page filled, pinned, wiring consistent" -ForegroundColor Green
+    $script:pass++
+    if ($golden -and (Test-Path $golden)) { Compare-Text ($label + '.json') $golden $json }
+}
+
 $emitDirs = @{}
 foreach ($f in (Get-ChildItem -Path (Join-Path $root 'tests\emit') -File -Filter '*.sim' |
                 Sort-Object Name)) {
@@ -359,6 +420,7 @@ foreach ($f in (Get-ChildItem -Path (Join-Path $root 'tests\emit') -File -Filter
         $emitDirs[$stem] = $d
         Check-Manifest $stem $d
         Check-Topology $stem $d
+        Check-TopologyHtml "tests/emit/$stem.topology" $d (Join-Path $root ("tests\emit\" + $stem + '.topology.json'))
     }
 }
 
@@ -403,6 +465,10 @@ foreach ($ex in $examples) {
         Write-Host ("ok   " + $ex.sim + " --emit") -ForegroundColor Green
         $script:pass++
         $emitDirs[$ex.name] = $exDir
+        # Lint only: the examples are the big, composite-heavy graphs, so they
+        # are where a wiring inconsistency would show, but their topology moves
+        # too often with the models to be worth a golden.
+        Check-TopologyHtml ($ex.sim -replace '\.sim$', '.topology') $exDir $null
     } else {
         Write-Host ("FAIL " + $ex.sim + " --emit") -ForegroundColor Red
         $script:fail++

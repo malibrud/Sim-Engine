@@ -1,0 +1,22 @@
+﻿{
+"name": "ArrSt",
+"root": "arrst.ArrSt",
+"step": "0.001",
+"solver": "rk4",
+"groups": [],
+"nodes": [
+ {"id": "root", "kind": "leaf", "name": "<root>", "path": "", "type": "arrst.ArrSt", "group": null, "order": 0, "rate": null, "solver": true, "file": "tests/emit/lib/arrst/ArrSt.se", "line": 19, "ins": [], "outs": [{"name": "sum", "type": "-"}, {"name": "tail", "type": "-"}, {"name": "first", "type": "-"}], "states": [{"name": "x", "kind": "continuous", "unit": "-", "initial": "1.0", "extent": "[param.n]", "slot": null}, {"name": "total", "kind": "continuous", "unit": "-", "initial": "0.0", "extent": null, "slot": null}, {"name": "h", "kind": "discrete", "unit": "-", "initial": "0.0", "extent": "[param.n]", "slot": null}, {"name": "tick", "kind": "discrete", "unit": "-", "initial": "0", "extent": null, "slot": null}]},
+ {"id": "out.0", "kind": "out", "name": "out.sum", "type": "-"},
+ {"id": "out.1", "kind": "out", "name": "out.tail", "type": "-"},
+ {"id": "out.2", "kind": "out", "name": "out.first", "type": "-"}
+],
+"edges": [
+ {"from": "root", "fromPort": "sum", "to": "out.0", "toPort": "in", "type": "-", "feedthrough": true},
+ {"from": "root", "fromPort": "tail", "to": "out.1", "toPort": "in", "type": "-", "feedthrough": true},
+ {"from": "root", "fromPort": "first", "to": "out.2", "toPort": "in", "type": "-", "feedthrough": true}
+],
+"settings": [
+ {"path": "n", "owner": "", "name": "n", "unit": "-", "value": "3", "from": null, "structural": false, "rate": false},
+ {"path": "k0", "owner": "", "name": "k0", "unit": "1/s", "value": "1.0", "from": null, "structural": false, "rate": false}
+]
+}
