@@ -1,0 +1,85 @@
+// Carry an acceleration across a rigid body, from the point it is known at to
+// a point `r` away from it:
+//
+//     aout = ain + wd x r + w x (w x r)
+//
+// The tangential term `wd x r` and the centripetal term `w x (w x r)` are the
+// two a rigid lever arm adds; a body with no rotation passes `ain` through.
+// The typical use is an acceleration known at a vehicle's reference point and
+// wanted somewhere else on it -- a sensor, a seat, a payload.
+//
+// EVERYTHING IS IN ONE FRAME. `ain`, `w`, `wd` and `r` must all be expressed in
+// the same coordinates, and `r` must be fixed in the body, which makes that the
+// local (body) frame in practice. The block does not rotate anything; put a
+// `MulRotVec` after it to take the result global.
+//
+// THE UNIT IS FIXED at `m/s^2`, where `MulRotVec` takes a parameter. A rotation
+// is dimension-agnostic; this is not -- the body hard-codes that `w r` and
+// `wd r` are a velocity and an acceleration -- so a parameter would only let a
+// caller instantiate a block that means nothing.
+package se.kin;
+
+use se.math;
+
+node TranslateAcc {
+    settings {
+        r: math.Vec3(m) = { 0.0, 0.0, 0.0 };   // lever arm, from ain's point to aout's
+    }
+
+    inputs  {
+        ain: math.Vec3(m/s^2);    // acceleration at the reference point
+        w:   math.Vec3(rad/s);    // body angular rate
+        wd:  math.Vec3(rad/s^2);  // its derivative
+    }
+    outputs {
+        aout: math.Vec3(m/s^2);   // acceleration at the reference point + r
+    }
+
+    output(ain, w, wd) {
+        const auto& a  = in.ain;
+        const auto& w  = in.w;
+        const auto& wd = in.wd;
+        const auto& r  = param.r;
+
+        // w x (w x r) = w (w . r) - r (w . w)
+        const double wr = w.x*r.x + w.y*r.y + w.z*r.z;
+        const double ww = w.x*w.x + w.y*w.y + w.z*w.z;
+
+        //  aout   = ain +        wd x r         +     w x (w x r)
+        out.aout.x = a.x + (wd.y*r.z - wd.z*r.y) + (w.x*wr - r.x*ww);
+        out.aout.y = a.y + (wd.z*r.x - wd.x*r.z) + (w.y*wr - r.y*ww);
+        out.aout.z = a.z + (wd.x*r.y - wd.y*r.x) + (w.z*wr - r.z*ww);
+    }
+
+    tests {
+        set "with no lever arm the acceleration passes through, exactly", param.r, in.ain, in.w, in.wd = out.aout {
+            { 0, 0, 0 }, { 1, 2, 3 }, { 4, 5, 6 }, { 7, 8, 9 }, { 1, 2, 3 }, "whatever the rotation";
+        }
+
+        set "with no rotation the acceleration passes through, exactly", param.r, in.ain, in.w, in.wd = out.aout {
+            { 1, 2, 3 }, { 1, 2, 3 }, { 0, 0, 0 }, { 0, 0, 0 }, { 1, 2, 3 }, "whatever the lever arm";
+        }
+
+        // Right-handed: spinning up about +z pushes a point on +x toward +y,
+        // and a point on +y toward -x. The order of `wd x r` is this row.
+        set "the tangential term is wd x r", param.r, in.ain, in.w, in.wd = out.aout {
+            { 1, 0, 0 }, { 0, 0, 0 }, { 0, 0, 0 }, { 0, 0, 2 }, {  0, 2, 0 }, "+x arm, spin-up about z -> +y";
+            { 0, 1, 0 }, { 0, 0, 0 }, { 0, 0, 0 }, { 0, 0, 2 }, { -2, 0, 0 }, "+y arm, spin-up about z -> -x";
+        }
+
+        // Centripetal: inward, w^2 |r|, and nothing along the spin axis.
+        set "the centripetal term is w x (w x r)", param.r, in.ain, in.w, in.wd = out.aout {
+            { 1, 0, 0 }, { 0, 0, 0 }, { 0, 0, 3 }, { 0, 0, 0 }, {  -9, 0, 0 }, "+x arm about z points back at the axis";
+            { 2, 0, 0 }, { 0, 0, 0 }, { 0, 0, 3 }, { 0, 0, 0 }, { -18, 0, 0 }, "and scales with the arm";
+            { 1, 0, 0 }, { 0, 0, 0 }, { 3, 0, 0 }, { 0, 0, 0 }, {   0, 0, 0 }, "an arm along the axis feels nothing";
+        }
+
+        set "the three terms add", param.r, in.ain, in.w, in.wd = out.aout {
+            { 1, 0, 0 }, { 1, 1, 1 }, { 0, 0, 3 }, { 0, 0, 2 }, { -8, 3, 1 }, "ain + tangential + centripetal";
+        }
+
+        set "a cell converts into the setting's unit", param.r, in.ain, in.w, in.wd = out.aout {
+            { 1 (km), 0, 0 }, { 0, 0, 0 }, { 0, 0, 0 }, { 0, 0, 2 }, { 0, 2000, 0 }, "a km arm arrives in m";
+        }
+    }
+}
