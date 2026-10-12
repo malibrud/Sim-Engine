@@ -241,9 +241,25 @@ bool compatible(const Unit& a, const Unit& b) {
         const Rat y = i < b.param_exp.size() ? b.param_exp[i] : rat(0);
         if (x != y) return false;
     }
-    for (int i = 0; i < kBaseDims; ++i)
+    constexpr int kAngle = kBaseDims - 1;
+    for (int i = 0; i < kAngle; ++i)
         if (a.dim[i] != b.dim[i]) return false;
-    return true;
+    // §4.5 — angle is absorbed into a POSITIVE power of length: a radian is
+    // arc length over radius, so `rad*m` is a length and `rad^2*m/s^2` is an
+    // acceleration. Only the comparison forgets the angle; the exponent vector
+    // keeps it, so `(rad*m)/m` is still `rad` and the manifest still says so.
+    // With no length (`rad/s` against `Hz`) or a negative one (`rad/m` against
+    // `1/m`) the angle still counts, and `rad` against `-` stays an error.
+    if (a.dim[0].n > 0) return true;
+    return a.dim[kAngle] == b.dim[kAngle];
+}
+
+bool differs_only_in_angle(const Unit& a, const Unit& b) {
+    if (a.parametric() || b.parametric()) return false;
+    constexpr int kAngle = kBaseDims - 1;
+    for (int i = 0; i < kAngle; ++i)
+        if (a.dim[i] != b.dim[i]) return false;
+    return a.dim[0].n <= 0 && a.dim[kAngle] != b.dim[kAngle];
 }
 
 double to_si(double v, const Unit& u) { return v * u.scale + u.offset; }

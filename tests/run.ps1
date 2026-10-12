@@ -1291,6 +1291,44 @@ if (-not $cl) {
         }
     }
 
+    # SPECIFICATION 4.5 -- angle absorbed into a positive power of length.
+    # AngAbs wires w x r, the tangential and the centripetal terms from
+    # math.Cross3 into (m/s) and (m/s^2) ports, which only elaborates under the
+    # rule, and computes the same acceleration with kin.TranslateAcc. Columns:
+    # w x r, the wired acceleration, the leaf's, and a rad*m flow-down into (m).
+    # Every value is exact in binary, so the two accelerations agree to the bit.
+    if ($emitDirs.ContainsKey('AngAbs')) {
+        $aaDir = $emitDirs['AngAbs']
+        Push-Location $aaDir
+        & '.\build\release\bin\AngAbs.exe' 2>&1 | Out-Null
+        $ran = ($LASTEXITCODE -eq 0)
+        Pop-Location
+        $want  = @(0.0, 6.0, 0.0,  -11.0, 10.0, 1.0,  -11.0, 10.0, 1.0,  3.0)
+        $worst = [double]::PositiveInfinity
+        $csv   = Join-Path $aaDir 'angabs.csv'
+        if ($ran -and (Test-Path $csv)) {
+            $worst = 0.0
+            foreach ($line in (Get-Content $csv | Select-Object -Skip 1)) {
+                if (-not $line) { continue }
+                $cols = $line -split ','
+                for ($k = 0; $k -lt $want.Count; $k++) {
+                    $err = [Math]::Abs([double]$cols[$k + 1] - $want[$k])
+                    if ($err -gt $worst) { $worst = $err }
+                }
+            }
+        }
+        if ($worst -eq 0.0) {
+            Write-Host ("ok   build/emit/AngAbs : angle cancels against length on wires " +
+                        "and at flow-down, and the wired lever arm matches TranslateAcc") `
+                -ForegroundColor Green
+            $script:pass++
+        } else {
+            Write-Host ("FAIL build/emit/AngAbs : a column is off by " + $worst) `
+                -ForegroundColor Red
+            $script:fail++
+        }
+    }
+
     # SPECIFICATION 6.9.2 -- a literal as a wire source. LitWire drives all five
     # spellings (bare literals taking the site's unit, a suffixed literal, a
     # negative one, one fanned out to two destinations, and one folded down a

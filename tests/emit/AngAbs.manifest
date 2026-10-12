@@ -1,0 +1,92 @@
+﻿# ----------------------------------------------------------------------------
+#  GENERATED — DO NOT EDIT.
+#  Unit manifest for: AngAbs.hpp
+#  sim: AngAbs   root: angabs.AngAbs   base step: 0.001 s
+#
+#  Units are checked by the DSL compiler at every declarative site and then
+#  ERASED — the generated C++ is plain `double` throughout. This file is where
+#  the erased information goes. It is a real generator output, not
+#  documentation: it is the contract for anyone writing an external solver,
+#  feeding the root boundary, or overriding a setting from outside the model.
+#
+#  Every value named here is IN THE UNIT SHOWN. `-` means dimensionless.
+# ----------------------------------------------------------------------------
+
+[state.continuous]        # slot | model path | unit  -- the solver's ABI
+          (none)
+
+[state.discrete]          # Sim::Impl::dis; offsets from Sim::Impl::discrete_map()
+          (none)
+
+[signals]                 # Sim::Impl::sig; offsets from Sim::Impl::signal_map()
+          wxr.y.x                 rad*m/s     double
+          wxr.y.y                 rad*m/s     double
+          wxr.y.z                 rad*m/s     double
+          tan.y.x                 rad*m/s^2   double
+          tan.y.y                 rad*m/s^2   double
+          tan.y.z                 rad*m/s^2   double
+          cen.y.x                 rad^2*m/s^2 double
+          cen.y.y                 rad^2*m/s^2 double
+          cen.y.z                 rad^2*m/s^2 double
+          acc1.y.x                m/s^2       double
+          acc1.y.y                m/s^2       double
+          acc1.y.z                m/s^2       double
+          acc2.y.x                m/s^2       double
+          acc2.y.y                m/s^2       double
+          acc2.y.z                m/s^2       double
+          ta.aout.x               m/s^2       double
+          ta.aout.y               m/s^2       double
+          ta.aout.z               m/s^2       double
+          hold.y                  m           double
+
+[boundary.in]             # root inputs the host must drive, through Sim::inputs()
+          (none)
+
+[boundary.out]            # root outputs the host may read
+          wxr.y.x                 rad*m/s
+          wxr.y.y                 rad*m/s
+          wxr.y.z                 rad*m/s
+          acc2.y.x                m/s^2
+          acc2.y.y                m/s^2
+          acc2.y.z                m/s^2
+
+[settings]                # configurable; value is the elaborated default
+          w.x                     rad/s       = 0.0
+          w.y                     rad/s       = 0.0
+          w.z                     rad/s       = 2.0
+          wd.x                    rad/s^2     = 0.0
+          wd.y                    rad/s^2     = 0.0
+          wd.z                    rad/s^2     = 3.0
+          r.x                     m           = 3.0
+          r.y                     m           = 0.0
+          r.z                     m           = 0.0
+          ain.x                   m/s^2       = 1.0
+          ain.y                   m/s^2       = 1.0
+          ain.z                   m/s^2       = 1.0
+          th                      rad         = 2.0
+          rr                      m           = 1.5
+          ta.r.x                  m           = 3.0   <- r.x
+          ta.r.y                  m           = 0.0   <- r.y
+          ta.r.z                  m           = 0.0   <- r.z
+          hold.len                m           = 3.0   <- th * rr
+
+[decimation]              # derived from `rate` at configuration
+
+[types]
+se.math.Vec3                      units { U }
+se.math.Vec3.x                    U
+se.math.Vec3.y                    U
+se.math.Vec3.z                    U
+
+[recorded]                # columns of angabs.csv
+          time                    s
+          wxr.y.x                 rad*m/s
+          wxr.y.y                 rad*m/s
+          wxr.y.z                 rad*m/s
+          acc2.y.x                m/s^2
+          acc2.y.y                m/s^2
+          acc2.y.z                m/s^2
+          ta.aout.x               m/s^2
+          ta.aout.y               m/s^2
+          ta.aout.z               m/s^2
+          hold.y                  m

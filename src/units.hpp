@@ -5,7 +5,8 @@
 //  forget:
 //
 //    1. a DIMENSION — a rational exponent vector over the seven SI bases plus
-//       ANGLE (§4.5), which is what compatibility is decided on (§4.2);
+//       ANGLE (§4.5), which is what compatibility is decided on (§4.2) —
+//       with angle ignored where length is a positive power (§4.5);
 //    2. a SCALE and OFFSET to SI base, which is what conversion folds to a
 //       compile-time constant;
 //    3. a DISPLAY form — the factors as the author actually spelled them.
@@ -93,7 +94,13 @@ struct Unit {
     std::string dim_str() const;
 };
 
+// Equal dimensions, except that angle is ignored where length is a positive
+// power (§4.5): `rad*m` is compatible with `m`, `rad/s` is not with `Hz`.
 bool compatible(const Unit& a, const Unit& b);
+// The two disagree in the angle exponent alone — the case worth a note on
+// `SE0410` saying where angle does and does not cancel. False whenever
+// `compatible` is true.
+bool differs_only_in_angle(const Unit& a, const Unit& b);
 
 // Both directions of the affine map. `to_si` then `from_si` is how a value
 // crosses between two compatible units.

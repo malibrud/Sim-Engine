@@ -99,6 +99,17 @@ Elaborator::Elaborator(Diagnostics& diag, Resolver& resolver)
 
 namespace {
 
+// §4.5 — the two `SE0410` notes, plus a third when the dimensions disagree in
+// angle alone. `rad*m` against `m` is legal, so an author who wrote `rad/m`
+// against `1/m` deserves to be told why that one is not.
+std::vector<Attachment> unit_notes(const Unit& a, const Unit& b, const std::string& a_is,
+                                   const std::string& b_is) {
+    std::vector<Attachment> v{note(a_is + a.dim_str()), note(b_is + b.dim_str())};
+    if (differs_only_in_angle(a, b))
+        v.push_back(note("angle cancels only against a positive power of length (\xc2\xa7""4.5)"));
+    return v;
+}
+
 // §15.5 — a double as a C++ literal that reads back bit-identical. The settings
 // program is generated source, so a lossy rendering here would be a silent
 // numerical difference between what `sec` computed and what the binary runs.
@@ -385,8 +396,7 @@ bool Elaborator::eval(const ast::Expr* e, const Source& src, const Env& env, Val
                 diag_.error("SE0410", src, e->loc,
                             "incompatible units in `" + std::string(1, e->op) + "`",
                             "`(" + a.unit.str() + ")` and `(" + b.unit.str() + ")`",
-                            {note("left is " + a.unit.dim_str()),
-                             note("right is " + b.unit.dim_str())});
+                            unit_notes(a.unit, b.unit, "left is ", "right is "));
                 return false;
             }
             const double rhs = convert(b.v, b.unit, a.unit);
@@ -658,8 +668,7 @@ bool Elaborator::coerce(const Value& v, const Type& target, const Source& src, L
                         std::string("incompatible units for ") + what,
                         "`(" + v.unit.str() + ")` where `(" + target.unit.str() +
                             ")` is declared",
-                        {note("value is " + v.unit.dim_str()),
-                         note("target is " + target.unit.dim_str())});
+                        unit_notes(v.unit, target.unit, "value is ", "target is "));
             return false;
         }
         out = convert(v.v, v.unit, target.unit);
@@ -1678,12 +1687,12 @@ bool Elaborator::port_conversion(const Field& from, const Field& to, const Sourc
             const Unit& b = to.type.unit_args[i];
             if (compatible(a, b)) continue;
             const std::string& pname = from.type.record->unit_params[i];
+            std::vector<Attachment> notes{note("both ports are `" + from.type.record->fq +
+                                               "`, but bound `" + pname + "` differently")};
+            for (Attachment& n : unit_notes(a, b, "source is ", "destination is "))
+                notes.push_back(std::move(n));
             diag_.error("SE0410", src, loc, "incompatible unit arguments across a wire",
-                        "`(" + a.str() + ")` -> `(" + b.str() + ")`",
-                        {note("both ports are `" + from.type.record->fq + "`, but bound `" +
-                              pname + "` differently"),
-                         note("source is " + a.dim_str()),
-                         note("destination is " + b.dim_str())});
+                        "`(" + a.str() + ")` -> `(" + b.str() + ")`", std::move(notes));
             args_ok = false;
         }
         if (!args_ok) return false;
@@ -1705,12 +1714,14 @@ bool Elaborator::port_conversion(const Field& from, const Field& to, const Sourc
                         continue;
                     }
                     if (!compatible(af.unit, bf.unit)) {
-                        diag_.error(
-                            "SE0410", src, loc, "incompatible units across a wire",
-                            "`(" + af.unit.str() + ")` -> `(" + bf.unit.str() + ")`",
-                            {note("field `" + name + "` of `" + a.record->fq + "`"),
-                             note("source is " + af.unit.dim_str()),
-                             note("destination is " + bf.unit.dim_str())});
+                        std::vector<Attachment> notes{
+                            note("field `" + name + "` of `" + a.record->fq + "`")};
+                        for (Attachment& n :
+                             unit_notes(af.unit, bf.unit, "source is ", "destination is "))
+                            notes.push_back(std::move(n));
+                        diag_.error("SE0410", src, loc, "incompatible units across a wire",
+                                    "`(" + af.unit.str() + ")` -> `(" + bf.unit.str() + ")`",
+                                    std::move(notes));
                         ok = false;
                         continue;
                     }
@@ -1726,8 +1737,7 @@ bool Elaborator::port_conversion(const Field& from, const Field& to, const Sourc
     if (!compatible(from.type.unit, to.type.unit)) {
         diag_.error("SE0410", src, loc, "incompatible units across a wire",
                     "`(" + from.type.unit.str() + ")` -> `(" + to.type.unit.str() + ")`",
-                    {note("source is " + from.type.unit.dim_str()),
-                     note("destination is " + to.type.unit.dim_str())});
+                    unit_notes(from.type.unit, to.type.unit, "source is ", "destination is "));
         return false;
     }
     // The conversion folds to a constant and is applied where the value is

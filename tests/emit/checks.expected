@@ -1,94 +1,113 @@
 ﻿error[SE0414]: unknown unit symbol `sec`
-  --> tests/emit/lib/checks/Checks.se:33:31
+  --> tests/emit/lib/checks/Checks.se:43:31
    |
-33 |     settings { period: double(sec) = 1.0; }
+43 |     settings { period: double(sec) = 1.0; }
    |                               ^^^ not a unit in Appendix A
    = help: did you mean `(deg)`, `(rev)` or `(s)`?
 
 error[SE0431]: a `continuous` state must be `double`
-  --> tests/emit/lib/checks/Checks.se:40:26
+  --> tests/emit/lib/checks/Checks.se:50:26
    |
-40 |     states  { continuous n: int(-) = 0; }
+50 |     states  { continuous n: int(-) = 0; }
    |                          ^ declared `int`
    = note: the solver's ABI is one flat `double` array (§15.5)
    = help: make it `discrete` if it is not integrated
 
 error[SE0340]: node `NoOutput` declares outputs but no `output()`
-  --> tests/emit/lib/checks/Checks.se:44:6
+  --> tests/emit/lib/checks/Checks.se:54:6
    |
-44 | node NoOutput {
+54 | node NoOutput {
    |      ^^^^^^^^ no `output()`
    = note: nothing else could compute them (§6.12)
 
 error[SE0350]: `nope` is not a declared input of `BadParam`
-  --> tests/emit/lib/checks/Checks.se:92:12
-   |
-92 |     output(nope) { out.z = 0.0; }
-   |            ^^^^ not an input
-   = note: the list names inputs, bare — it is the set of inputs this method reads (§8.3)
-   = help: declared inputs: `u`
+   --> tests/emit/lib/checks/Checks.se:102:12
+    |
+102 |     output(nope) { out.z = 0.0; }
+    |            ^^^^ not an input
+    = note: the list names inputs, bare — it is the set of inputs this method reads (§8.3)
+    = help: declared inputs: `u`
 
 error[SE0320]: node `Both` has both code and a `structure` block
-  --> tests/emit/lib/checks/Checks.se:95:6
-   |
-95 | node Both {
-   |      ^^^^ leaf or composite, never both
-   = note: a composite just groups and aggregates: its state is the union of its descendants' and it leaves no runtime trace at all (§6.1, §15.2)
-   = help: move the code into a child leaf node
+   --> tests/emit/lib/checks/Checks.se:105:6
+    |
+105 | node Both {
+    |      ^^^^ leaf or composite, never both
+    = note: a composite just groups and aggregates: its state is the union of its descendants' and it leaves no runtime trace at all (§6.1, §15.2)
+    = help: move the code into a child leaf node
 
 error[SE0415]: `(deg)` may not be a declared unit
-   --> tests/emit/lib/checks/Checks.se:105:32
+   --> tests/emit/lib/checks/Checks.se:115:32
     |
-105 |     settings { heading: double(deg) = 90.0; }
+115 |     settings { heading: double(deg) = 90.0; }
     |                                ^^^ declare this in radians
     = note: units are erased in bodies (§4.4), so `sin(state.theta)` on a degree-valued accessor is silently wrong, and no dimensional system can catch it
     = help: declare the radian unit and convert at the literal — `theta (rad): double = 90 (deg);`
 
 error[SE0345]: `next()` in a node with no `discrete` states
-  --> tests/emit/lib/checks/Checks.se:57:5
+  --> tests/emit/lib/checks/Checks.se:67:5
    |
-57 |     next()   { }
+67 |     next()   { }
    |     ^^^^ nothing to write
    = note: `next()` may write only `next.`, and `Store` is empty here
    = help: per-step work that is not a state transition belongs in `on_step()` (§8.1)
 
 error[SE0313]: `checks.Checks#Vec3` takes 1 unit argument, 0 given
-  --> tests/emit/lib/checks/Checks.se:72:19
+  --> tests/emit/lib/checks/Checks.se:82:19
    |
-72 |     inputs   { v: Vec3; }
+82 |     inputs   { v: Vec3; }
    |                   ^^^^ 0 given
    = note: `checks.Checks#Vec3` declares 1 unit parameter: `U`
    = help: write `Vec3(unit)` — a record binds its units at every reference, since it is never instantiated (§5.2)
 
 error[SE0410]: incompatible unit arguments across a wire
-  --> tests/emit/lib/checks/Checks.se:25:17
+  --> tests/emit/lib/checks/Checks.se:27:17
    |
-25 |         j.v --> k.v;
+27 |         j.v --> k.v;
    |                 ^^^ `(m)` -> `(m/s)`
    = note: both ports are `checks.Checks#Vec3`, but bound `U` differently
    = note: source is m
    = note: destination is m/s
 
+error[SE0410]: incompatible units across a wire
+  --> tests/emit/lib/checks/Checks.se:34:18
+   |
+34 |         l.k  --> m.k;
+   |                  ^^^ `(rad/m)` -> `(1/m)`
+   = note: source is rad/m
+   = note: destination is 1/m
+   = note: angle cancels only against a positive power of length (§4.5)
+
+error[SE0410]: incompatible units across a wire
+  --> tests/emit/lib/checks/Checks.se:35:18
+   |
+35 |         l.th --> m.s;
+   |                  ^^^ `(rad)` -> `(-)`
+   = note: source is rad
+   = note: destination is -
+   = note: angle cancels only against a positive power of length (§4.5)
+
 error[SE0410]: incompatible units for setting `f`
-   --> tests/emit/lib/checks/Checks.se:113:32
+   --> tests/emit/lib/checks/Checks.se:123:32
     |
-113 |     settings { f: double(Hz) = 1.0 (rad/s); }
+123 |     settings { f: double(Hz) = 1.0 (rad/s); }
     |                                ^^^ `(rad/s)` where `(Hz)` is declared
     = note: value is rad/s
     = note: target is 1/s
+    = note: angle cancels only against a positive power of length (§4.5)
 
 error[SE0430]: input `d.u` is not connected
-  --> tests/emit/lib/checks/Checks.se:90:16
-   |
-90 |     inputs   { u: double(-); }
-   |                ^ declared here
-   = note: an unconnected input is an error: there is no implicit zero (§6.3)
+   --> tests/emit/lib/checks/Checks.se:100:16
+    |
+100 |     inputs   { u: double(-); }
+    |                ^ declared here
+    = note: an unconnected input is an error: there is no implicit zero (§6.3)
 
 error[SE0430]: input `i.v` is not connected
-  --> tests/emit/lib/checks/Checks.se:72:16
+  --> tests/emit/lib/checks/Checks.se:82:16
    |
-72 |     inputs   { v: Vec3; }
+82 |     inputs   { v: Vec3; }
    |                ^ declared here
    = note: an unconnected input is an error: there is no implicit zero (§6.3)
 
-12 errors emitted
+14 errors emitted

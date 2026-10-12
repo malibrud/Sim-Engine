@@ -453,7 +453,9 @@ may.
 A unit expression evaluates to a **dimension** — a rational exponent vector over
 **eight** base dimensions: the seven SI bases plus **angle** (§4.5) — together
 with a **scale factor** and, for a few units, an **offset**. Two units are
-*compatible* iff their dimension vectors are equal. `(-)`, `(1)`, and `(%)` are
+*compatible* iff their dimension vectors are equal, except that the angle
+exponent is ignored where length is a positive power (§4.5, *absorption into
+length*): `(rad*m)` is compatible with `(m)`. `(-)`, `(1)`, and `(%)` are
 all dimensionless; `(%)` carries scale 1/100.
 
 Compatible units convert automatically, and the conversion folds to a
@@ -536,20 +538,56 @@ In §4.1's terms the restriction lands on the **argument** role alone; the liter
 suffix and display roles keep the full unit language, which is exactly what makes
 that line spellable.
 
-**Why this is nearly free here.** The identities that normally make angle-as-a-
-dimension expensive — `v = ωr`, `τ = Iα` — live *only inside bodies*, where
-arithmetic is already unchecked (§4.4). The cost is confined to setting flow-down
-(§7), where angular products are rare.
-
 **The larger win.** `(rad/s)` is angle·T⁻¹ while `(Hz)` stays T⁻¹, so they are no
 longer compatible and the ω-versus-*f* factor-of-2π mix-up becomes a hard error.
 
-**Deliberately not claimed.** This does *not* separate torque from energy. `τ = Iα`
-puts angle in the numerator and `W = τθ` in the denominator, so they disagree —
-the genuine wart in the angle-as-dimension literature. Force, energy, and inertia
-units stay angle-free; torque and energy remain mutually convertible exactly as
-before. No regression, no gain, and the conflict never surfaces because it only
-appears in bodies.
+**Absorption into length.** Where a unit's **length exponent is positive**, its
+angle exponent — of either sign — is ignored when deciding compatibility:
+
+| Unit | Compatible with | Why it arises |
+|---|---|---|
+| `rad*m/s` | `m/s` | `v = ω × r` |
+| `rad*m/s^2` | `m/s^2` | `a = α × r` |
+| `rad^2*m/s^2` | `m/s^2` | `a = ω × (ω × r)` |
+| `kg*m^2*rad/s^2` | `N*m` | `τ = Iα` |
+
+The justification is the radian's own definition — arc length over radius — so an
+angle times a length *is* a length. Without the rule the dimension check gets
+lever arms exactly backwards: the correct `ω·r` arrives as `rad·m/s` and is
+refused by an `m/s` port, while the wrong `f·r` arrives as `m/s` and is accepted.
+It is what lets `math.Cross3(rad/s, m)` feed a velocity port, so lever-arm and
+rolling-contact identities can be wired from generic blocks instead of being
+written as dedicated leaves.
+
+The rule is deliberately narrow, and everything §4.5 exists to catch survives it:
+
+- **No length, no absorption.** `(rad/s)` against `(Hz)` is still `SE0410`.
+- **Negative length, no absorption.** `(rad/m)` against `(1/m)` is still `SE0410`
+  — a wavenumber or a curvature has the same 2π hazard as a frequency.
+- **One-way.** An angle is absorbed into a length, never into `(-)`: `(rad)`
+  against `(-)` is still `SE0410`, so a heading wired into a slip-ratio port is
+  still caught. The price is that `θ = s/r` from two `(m)` quantities is `(-)`
+  and must be computed in a body or carried as `(rad*m)/(m)`.
+
+**What it gives up.** A negative angle exponent is absorbed too, so a torsional
+stiffness `(N*m/rad)` is compatible with a torque `(N*m)`, and a per-radian
+quantity with length in it no longer stands apart from its per-unit form. That is
+the same trade SI makes everywhere by treating the radian as 1; here it is made
+only where a length is present.
+
+It applies **at the compatibility check only**, after unit arguments are bound
+(§6.2a) — the dimension vector itself keeps the angle. `(rad*m)/(m)` is therefore
+still `(rad)`, the manifest (§15.6) still prints `rad·m/s^2` for a port declared
+that way, and `rad` being scale 1 means the conversion across such a wire is the
+identity. An `SE0410` whose two dimensions differ in angle alone carries a note
+saying where angle does and does not cancel.
+
+**Torque and energy.** With absorption, `τ = Iα` gives `kg·m²·rad/s²` and `W = τθ`
+gives `N·m·rad`, and both are compatible with `(N*m)` — the disagreement that is
+the genuine wart in the angle-as-dimension literature never reaches a wire.
+Force, energy, and inertia units stay angle-free, and torque and energy remain
+mutually convertible exactly as before. The rule does *not* separate torque from
+energy; nothing here claims to.
 
 ---
 

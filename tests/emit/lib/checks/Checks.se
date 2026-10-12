@@ -18,11 +18,21 @@ node Checks {
         node i : VecArity {};
         node j : VecSrc   {};
         node k : VecSink  {};
+        node l : AngSrc   {};
+        node m : AngSink  {};
 
         // SE0410 — one `Vec3`, two bindings whose DIMENSIONS differ. A
         // compatible pair would convert per field (see tests/emit/RecConv.sim);
         // `(m)` into `(m/s)` has nothing to convert, on a record or a scalar.
         j.v --> k.v;
+
+        // SE0410, twice — the two places §4.5 does NOT absorb angle. A
+        // negative length (`rad/m` against `1/m`, a wavenumber's 2pi), and no
+        // length at all (`rad` against `-`, a heading into a ratio). Both carry
+        // the note saying where angle does cancel; tests/emit/AngAbs.sim is
+        // the positive side.
+        l.k  --> m.k;
+        l.th --> m.s;
 
         a.z --> self.y;
     }
@@ -113,4 +123,15 @@ node OmegaHz {
     settings { f: double(Hz) = 1.0 (rad/s); }
     outputs  { z: double(-); }
     output() { out.z = param.f; }
+}
+
+node AngSrc {
+    outputs  { k: double(rad/m);  th: double(rad); }
+    output() { out.k = 0.0; out.th = 0.0; }
+}
+
+node AngSink {
+    inputs   { k: double(1/m);  s: double(-); }
+    outputs  { z: double(-); }
+    output(k, s) { out.z = in.k + in.s; }
 }
