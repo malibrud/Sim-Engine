@@ -3,7 +3,8 @@
 // user to insert an explicit sum node.
 //
 // Two inputs, not N, matching `Sum`: a wide adder needs `output(*)`, which is
-// parked (Appendix C). Chain them until then.
+// parked (Appendix C). Chain them until then; `SumSum3` is the three-input
+// case written out.
 package se.math;
 
 use se.math;

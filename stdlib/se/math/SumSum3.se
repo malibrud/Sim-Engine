@@ -1,0 +1,43 @@
+// Three-input vector adder: `Vec3(U) + Vec3(U) + Vec3(U) -> Vec3(U)`.
+//
+// `math.Sum3` adds two, and its header says to chain them for more until a
+// wide adder can be written with `output(*)` (Appendix C). Three terms is the
+// case common enough to spell directly -- an acceleration plus the two terms a
+// rigid lever arm adds is the canonical one -- and one node is easier to read
+// than two with a wire between them. Anything wider still chains.
+package se.math;
+
+use se.math;
+
+node SumSum3 {
+    units { U; }
+
+    inputs  { a: math.Vec3(U);  b: math.Vec3(U); c: math.Vec3(U); }
+    outputs { y: math.Vec3(U); }
+
+    output(a, b, c) {
+        out.y.x = in.a.x + in.b.x + in.c.x;
+        out.y.y = in.a.y + in.b.y + in.c.y;
+        out.y.z = in.a.z + in.b.z + in.c.z;
+    }
+
+    tests {
+        units { U = m; }
+
+        // One input at a time, each with a different vector, so a body that
+        // drops or doubles an input fails a row that names it.
+        set "each input reaches the output on its own", in.a, in.b, in.c = out.y {
+            { 1, 2, 3 }, { 0, 0, 0 }, { 0, 0, 0 }, { 1, 2, 3 }, "a alone";
+            { 0, 0, 0 }, { 4, 5, 6 }, { 0, 0, 0 }, { 4, 5, 6 }, "b alone";
+            { 0, 0, 0 }, { 0, 0, 0 }, { 7, 8, 9 }, { 7, 8, 9 }, "c alone";
+        }
+
+        set "the three add", in.a, in.b, in.c = out.y {
+            { 1, 2, 3 }, { 4, 5, 6 }, { 7, 8, 9 }, { 12, 15, 18 }, "all three";
+        }
+
+        set "a cell converts into the port's unit", in.a, in.b, in.c = out.y {
+            { 1 (km), 0, 0 }, { 0, 0, 0 }, { 0, 0, 0 }, { 1000, 0, 0 }, "a km cell arrives in m";
+        }
+    }
+}

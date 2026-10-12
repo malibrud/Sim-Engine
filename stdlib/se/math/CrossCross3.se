@@ -1,0 +1,68 @@
+// Vector triple product: `Vec3(P) x (Vec3(Q) x Vec3(R)) -> Vec3(P*Q*R)`.
+//
+// The right-nested product, `a x (b x c)`, which is the one that recurs:
+// `w x (w x r)` is the centripetal acceleration of a point `r` on a body
+// spinning at `w`. The cross product is not associative -- `(a x b) x c` is a
+// different vector -- so the nesting is in the name of the ports, not left to
+// the caller: `a` is the outer factor and `b x c` the inner product.
+//
+// It is `math.Cross3` twice, written once. Two chained `Cross3`s compute the
+// same thing; this keeps the intermediate `b x c` out of the model when nothing
+// else reads it, and expands it with Lagrange's formula rather than forming it.
+//
+// With the angle absorbed into length (§4.5), `CrossCross3(rad/s, rad/s, m)`
+// produces `rad^2*m/s^2`, which an `(m/s^2)` port accepts.
+package se.math;
+
+use se.math;
+
+node CrossCross3 {
+    units { P; Q; R; }
+
+    inputs  { a: math.Vec3(P);  b: math.Vec3(Q); c: math.Vec3(R); }
+    outputs { y: math.Vec3(P*Q*R); }
+
+    output(a, b, c) {
+        // Compute using Lagrange's formula:
+        //   y = a x ( b x c ) = (a . c)b - (a . b)c
+        const auto& a = in.a;
+        const auto& b = in.b;
+        const auto& c = in.c;
+        const double ac = a.x*c.x + a.y*c.y + a.z*c.z;
+        const double ab = a.x*b.x + a.y*b.y + a.z*b.z;
+        out.y.x = ac*b.x - ab*c.x;
+        out.y.y = ac*b.y - ab*c.y;
+        out.y.z = ac*b.z - ab*c.z;
+    }
+
+    tests {
+        units { P = m; Q = m; R = m; }
+
+        // x x (x x y) = x x z = -y, while (x x x) x y = 0: this row is the one
+        // that separates the right-nested product from the left-nested one.
+        set "the product nests to the right", in.a, in.b, in.c = out.y {
+            { 1, 0, 0 }, { 1, 0, 0 }, { 0, 1, 0 }, {  0, -1, 0 }, "x x (x x y) = -y";
+            { 0, 0, 1 }, { 1, 0, 0 }, { 0, 0, 1 }, {  1,  0, 0 }, "z x (x x z) = z x -y = x";
+        }
+
+        // b x c = (-3, 6, -3), and a x that = (-24, -6, 12); Lagrange gives
+        // 50 b - 32 c, the same vector, which is what the body computes.
+        set "a general triple, checked both ways by hand", in.a, in.b, in.c = out.y {
+            { 1, 2, 3 }, { 4, 5, 6 }, { 7, 8, 9 }, { -24, -6, 12 }, "(1,2,3) x ((4,5,6) x (7,8,9))";
+        }
+
+        set "parallel b and c have no cross product", in.a, in.b, in.c = out.y {
+            { 1, 2, 3 }, { 1, 1, 1 }, { 2, 2, 2 }, { 0, 0, 0 }, "b x c = 0";
+        }
+
+        // Centripetal: spinning at 3 about z, a point on +x is pulled back
+        // toward the axis at w^2 |r| = 9.
+        set "w x (w x r) points back at the axis", in.a, in.b, in.c = out.y {
+            { 0, 0, 3 }, { 0, 0, 3 }, { 1, 0, 0 }, { -9, 0, 0 }, "centripetal";
+        }
+
+        set "a cell converts into the port's unit", in.a, in.b, in.c = out.y {
+            { 1, 0, 0 }, { 1, 0, 0 }, { 0, 1 (km), 0 }, { 0, -1000, 0 }, "a km cell arrives in m";
+        }
+    }
+}
