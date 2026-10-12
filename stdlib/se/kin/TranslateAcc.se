@@ -13,26 +13,29 @@
 // local (body) frame in practice. The block does not rotate anything; put a
 // `MulRotVec` after it to take the result global.
 //
-// THE UNIT IS FIXED at `m/s^2`, where `MulRotVec` takes a parameter. A rotation
-// is dimension-agnostic; this is not -- the body hard-codes that `w r` and
-// `wd r` are a velocity and an acceleration -- so a parameter would only let a
-// caller instantiate a block that means nothing.
+// THE LENGTH UNIT IS A PARAMETER; angle and time are not. Every term is linear
+// in `r` and `ain`, so whatever length `U` the lever arm is given in, the
+// result comes out in `U/s^2` with no conversion, provided `ain` shares it.
+// Angle is `rad` because it can be nothing else (§4.5), and time is `s`
+// because the body multiplies `w` and `wd` straight into `U/s^2`: a rate per
+// minute would need a factor the body does not apply.
 package se.kin;
 
 use se.math;
 
 node TranslateAcc {
+    units { U; }
     settings {
-        r: math.Vec3(m) = { 0.0, 0.0, 0.0 };   // lever arm, from ain's point to aout's
+        r: math.Vec3(U) = { 0.0, 0.0, 0.0 };   // lever arm, from ain's point to aout's
     }
 
     inputs  {
-        ain: math.Vec3(m/s^2);    // acceleration at the reference point
+        ain: math.Vec3(U/s^2);    // acceleration at the reference point
         w:   math.Vec3(rad/s);    // body angular rate
         wd:  math.Vec3(rad/s^2);  // its derivative
     }
     outputs {
-        aout: math.Vec3(m/s^2);   // acceleration at the reference point + r
+        aout: math.Vec3(U/s^2);   // acceleration at the reference point + r
     }
 
     output(ain, w, wd) {
@@ -52,6 +55,8 @@ node TranslateAcc {
     }
 
     tests {
+        units { U = m; }
+
         set "with no lever arm the acceleration passes through, exactly", param.r, in.ain, in.w, in.wd = out.aout {
             { 0, 0, 0 }, { 1, 2, 3 }, { 4, 5, 6 }, { 7, 8, 9 }, { 1, 2, 3 }, "whatever the rotation";
         }

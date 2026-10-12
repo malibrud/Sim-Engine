@@ -609,9 +609,9 @@ foreach ($f in (Get-ChildItem (Join-Path $root 'stdlib') -Recurse -Filter *.se |
     $ident = 'n_' + $fq.Replace('.', '_')
     $smokeDecls.Add("        node ${ident}: ${fq}${uargs} { " + $smokeSettings[$fq] + " };")
 
-    # The unit parameters this node declares. An input annotated with one of
-    # them binds to `m` at the instantiation above; anything else is a literal
-    # unit and needs a source of its own.
+    # The unit parameters this node declares. They bind to `m` at the
+    # instantiation above, so a source for an input annotated with them carries
+    # the same expression with `m` in their place.
     $uparams = @()
     if ($um.Success) {
         $uparams = @($um.Groups[1].Value -split ';' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
@@ -629,7 +629,9 @@ foreach ($f in (Get-ChildItem (Join-Path $root 'stdlib') -Recurse -Filter *.se |
             if ($parts[1] -match 'Vec([23])\s*\(\s*([^)]*?)\s*\)') {
                 $n = [int]$Matches[1]
                 $u = $Matches[2]
-                if ($uparams -contains $u) { $u = 'm' }
+                # Substitute inside the expression, not just a bare match:
+                # `TranslateAcc` takes `Vec3(U/s^2)`, which must become `m/s^2`.
+                foreach ($p in $uparams) { $u = $u -replace "\b$p\b", 'm' }
                 $src = Get-SmokeVecSource $n $u
             } elseif ($parts[1] -match 'QuatRate') {
                 $src = Get-SmokeQuatRateSource
