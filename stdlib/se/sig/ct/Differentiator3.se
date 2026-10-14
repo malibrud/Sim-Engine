@@ -1,0 +1,34 @@
+// One `ct.Differentiator` on each axis of a vector: three independent
+// realizations of the same rolled-off H(s), sharing one corner.
+package se.sig.ct;
+
+use se.math;
+use se.sig.ct;
+
+node Differentiator3 {
+    units { U; }
+
+    settings {
+        wc: double(rad/s);  // roll-off, required
+    }
+
+    inputs  { v:  math.Vec3(U); }
+    outputs { vd: math.Vec3(U/s); }
+
+    structure {
+        // `mg` merges the DIFFERENTIATED axes, so it binds `U/s`, as
+        // `Integrator3`'s binds `U*s`. The bare axis names are free here:
+        // the ports are `v`/`vd`, so nothing collides with them (SE0330).
+        node sp: math.Split3(U) {};
+        node mg: math.Merge3(U/s) {};
+        node x: ct.Differentiator(U) { wc = param.wc; };
+        node y: ct.Differentiator(U) { wc = param.wc; };
+        node z: ct.Differentiator(U) { wc = param.wc; };
+
+        self --> sp;
+        sp.x --> x --> mg.x;
+        sp.y --> y --> mg.y;
+        sp.z --> z --> mg.z;
+        mg  --> self;
+    }
+}

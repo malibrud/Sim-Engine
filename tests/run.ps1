@@ -569,6 +569,8 @@ $smokeSettings = @{
     'se.kin.QuatLeakyIntegrator'    = 'wc = 0.1(rad/s);'
     'se.sig.ct.LeakyIntegrator3'    = 'wc = 0.1(rad/s);'
     'se.sig.dt.Differentiator'      = 'wc = 1.0(rad/s);'
+    'se.sig.ct.Differentiator'      = 'wc = 1.0(rad/s);'
+    'se.sig.ct.Differentiator3'     = 'wc = 1.0(rad/s);'
     'se.sig.dt.LowPass2'            = 'wn = 1.0(rad/s);'
     'se.sig.src.Ramp'               = 'slope = 1.0(m/s);'
 }

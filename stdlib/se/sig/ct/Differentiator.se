@@ -1,0 +1,65 @@
+// H(s) = wc s / (s + wc) -- the continuous differentiator, rolled off above wc
+// so it does not amplify high-frequency noise. Below wc it is s; above it, the
+// gain flattens at wc instead of climbing without bound.
+//
+// The continuous counterpart of `se.sig.dt.Differentiator`, and the roll-off
+// is not a shortcut here either. A signal that already contains a high-passed
+// input has a derivative that needs the input's own derivative, which the
+// model does not carry; a rolled-off derivative is the most there is to have.
+//
+// Realised with one state, H = wc - wc^2 / (s + wc):
+//
+//     z'  = v - wc z
+//     vd  = wc (v - wc z)
+//
+// INITIAL CONDITION: z starts at 0, which is a model at rest with v = 0. A
+// nonzero v at t = 0 is a step from zero, and `vd` opens at its high-frequency
+// gain, wc v(0), decaying at wc.
+package se.sig.ct;
+
+node Differentiator {
+    units { U; }
+
+    settings {
+        wc: double(rad/s);  // roll-off, required
+    }
+
+    inputs  { v:  double(U); }
+    // Derived, the integrator's relation the other way round.
+    outputs { vd: double(U/s); }
+
+    states {
+        continuous z: double(-) = 0.0;
+    }
+
+    derivative(v) {
+        der.z = in.v - param.wc * state.z;
+    }
+
+    output(v) {
+        out.vd = param.wc * (in.v - param.wc * state.z);
+    }
+
+    tests {
+        units { U = m; }
+
+        set "from rest the output is the high-frequency gain, wc v", param.wc, state.z, in.v = out.vd {
+            2.0, 0.0, 3.0, 6.0, "wc = 2";
+            5.0, 0.0, 3.0, 15.0, "and it scales with wc";
+        }
+
+        // z = v / wc is the state a held input settles to.
+        set "a held input settles to zero rate", param.wc, state.z, in.v = out.vd {
+            2.0, 1.5, 3.0, 0.0, "z = v / wc";
+        }
+
+        set "the output is wc times what the state has not caught up on", param.wc, state.z, in.v = out.vd {
+            2.0, 1.0, 3.0, 2.0, "2 (3 - 2 * 1)";
+        }
+
+        set "the state chases v at wc", param.wc, state.z, in.v = der.z {
+            2.0, 1.0, 3.0, 1.0, "3 - 2 * 1";
+            2.0, 1.5, 3.0, 0.0, "settled";
+        }
+    }
+}
