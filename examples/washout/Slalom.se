@@ -14,14 +14,20 @@ node Slalom {
         node drive: SlalomDrive {};
         node ain: math.Merge3(m/s^2);
         node win: math.Merge3(rad/s);
+        node wdin: math.Merge3(rad/s^2);
         node wash: washout.Classical {};
 
         0.0 --> ain.x, ain.z;
         drive.ay --> ain.y;
         0.0 --> win.x, win.y;
         drive.r --> win.z;
+        // The yaw rate steps, so its true derivative is an impulse at each
+        // edge. Zero stands in for it exactly only because `headPos` is 0
+        // here, and with no lever arm `wdin` multiplies nothing.
+        0.0 --> wdin.x, wdin.y, wdin.z;
 
         ain --> wash.ain;
         win --> wash.win;
+        wdin --> wash.wdin;
     }
 }

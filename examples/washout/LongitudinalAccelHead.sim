@@ -1,0 +1,69 @@
+// Reid & Nahon's surge test with the occupant's head a metre above the motion
+// datum (RN85Head.settings): the same drive as LongitudinalAccel.sim, and the
+// first run that moves `headPos` off zero.
+//
+// There is no golden. The C++ references its whole washout at the datum and
+// only carries the result out to the occupant afterwards, so nothing in the
+// washout repo runs this. What checks it is the kinematics, recorded below.
+//
+// Surge drives no rotation, so the way IN carries nothing: `ain` reaches the
+// head unchanged, the washout runs exactly as in LongitudinalAccel.sim, and the
+// head's motion (`transGlobal*`) is that run's `aout`/`vout`/`pout` cell for
+// cell. Everything this case shows is the way OUT.
+sim LongitudinalAccelHead {
+    root: washout.LongitudinalAccel {};
+
+    step:     1 (ms);
+    solver:   rk4;
+    duration: 40 (s);
+
+    settings: "RN85Head.settings";
+
+    record: {
+        file:  "longitudinal_accel_head.csv";
+        every: 10;           // 100 Hz, as LongitudinalAccel.sim
+
+        signals {
+            pulse.y;
+
+            // The platform at the datum. The lean about the datum swings a
+            // head above it backward, so the datum goes FORWARD to keep the
+            // head where the washout put it: R r - r = (-sin th, 0, 1 - cos th)
+            // for pitch th, and at the full lean (0.2053 rad, t = 9) the datum
+            // is (0.2039, -0.0210) m from the head. `pout` and `vout` match
+            // that closed form, and q (cos th, -sin th), to 1e-9 -- the CSV's
+            // own precision -- and each is the other's derivative to the 100 Hz
+            // central difference's 4e-4.
+            //
+            // `aout` is not exact, and the reason is `wdcmd`. The pulse edges
+            // kick the tilt rate, its true derivative jumps to -1.83 rad/s^2
+            // at t = 10.01, and the 12.5 rad/s differentiator has reached
+            // -0.23 by then. With a 1 m arm that lag goes straight into `aout`:
+            // 0.54 m/s^2 off the derivative of `vout` 50 ms after an edge,
+            // 0.12 at 0.4 s, 0.012 at 0.8 s.
+            //
+            // Z: the off-axis drift of LongitudinalAccel.sim, with the lever
+            // arm's cos th - 1 on top while the lean is on. Y has nothing to
+            // carry and is not recorded.
+            wash.aout.x;
+            wash.aout.z;
+            wash.vout.x;
+            wash.vout.z;
+            wash.pout.x;
+            wash.pout.z;
+
+            // The head, where the washout ran.
+            wash.transGlobalAcc.vout.x;
+            wash.transGlobalAcc.vout.z;
+            wash.transGlobalVel.y.x;
+            wash.transGlobalVel.y.z;
+            wash.transGlobalPos.y.x;
+            wash.transGlobalPos.y.z;
+
+            // The lean that moves one away from the other.
+            wash.ecmd.y;
+            wash.wcmd.y;
+            wash.wdcmd.y;
+        }
+    }
+}

@@ -16,14 +16,17 @@ node PulseX {
         };
         node ain: math.Merge3(m/s^2);
         node win: math.Merge3(rad/s);
+        node wdin: math.Merge3(rad/s^2);
         node wash: washout.Classical {
         };
 
         pulse --> ain.x;
         0.0 --> ain.y, ain.z;
         0.0 --> win.x, win.y, win.z;
+        0.0 --> wdin.x, wdin.y, wdin.z;
 
         ain --> wash.ain;
         win --> wash.win;
+        wdin --> wash.wdin;
     }
 }

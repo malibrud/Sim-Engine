@@ -1,0 +1,8 @@
+// RN85.settings, with the occupant's head a metre above the motion datum.
+//
+// A sim takes one settings file, so the gravity line is repeated here rather
+// than included; RN85.settings says why it is 9.81.
+wash.grav.z = 9.81 (m/s^2);
+
+// SAE, Z down: -1 m is a metre UP from the datum, in the platform frame.
+wash.headPos.z = -1.0 (m);

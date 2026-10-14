@@ -452,6 +452,10 @@ $examples = @(
     @{ name = 'cornerlr';   sim = 'examples/washout/YawCornerLeftRight.sim';
        roots = @('examples', 'stdlib') },
     @{ name = 'slalom';     sim = 'examples/washout/Slalom.sim';
+       roots = @('examples', 'stdlib') },
+    # The surge test with the head a metre above the motion datum: the one
+    # case with a nonzero `headPos`, so the lever-arm wiring compiles.
+    @{ name = 'rn85head';   sim = 'examples/washout/LongitudinalAccelHead.sim';
        roots = @('examples', 'stdlib') }
 )
 foreach ($ex in $examples) {

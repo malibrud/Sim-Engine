@@ -13,13 +13,15 @@
 // two `ct.Integrator3` for the two integrations, and `kin.QuatLeakyIntegrator`
 // for the rotation channel's washout attitude.
 //
-// THE CHANNELS, and what each output means:
+// THE CHANNELS, and what each output means. All three run AT THE HEAD (see
+// HEAD OFFSET below), so `a` is the datum's `ain` carried out to it:
 //
-//   translational   ain -> scale/limit -> f = a - g -> + gravity through the
+//   translational   a -> scale/limit -> f = a - g -> + gravity through the
 //                   commanded attitude -> local high pass -> into the inertial
-//                   frame -> global high pass -> `aout`, then integrated to
-//                   `vout` and `pout`. The high passes are why a step in `ain`
-//                   comes out as a pulse: the platform moves, then washes back.
+//                   frame -> global high pass -> integrated twice, and carried
+//                   back to the datum as `aout`, `vout` and `pout`. The high
+//                   passes are why a step in `ain` comes out as a pulse: the
+//                   platform moves, then washes back.
 //
 //   tilt            the X and Y accelerations, low passed, become the steady
 //                   lean that stands in for them -- `TiltCalc` inverts
@@ -72,6 +74,39 @@
 // 100 m/s^2, not at this node's 10. Here the acceleration is scaled on its own,
 // and a platform at rest and level drives nothing at any gain.
 //
+// HEAD OFFSET. The boundary is the MOTION DATUM, the point the platform is
+// driven about: `ain`, `win` and `wdin` arrive there, and `aout`, `vout` and
+// `pout` leave there. The occupant feels the motion at the head, `headPos` away
+// in the platform frame, so that is where the washout runs. `kin.TranslateAcc`
+// carries the acceleration out to it on the way in,
+//
+//     a = ain + wdin x r + win x (win x r),
+//
+// and both the tilt and the translational channels read `a`. On the way out
+// the translational channel's three are the HEAD's, and the lever arm is
+// taken back off through the commanded attitude, R = R(qCmd), w = wcmd:
+//
+//     pout = p - (R r - r)             zero at neutral, where R = I
+//     vout = v - R (w x r)
+//     aout = a - R (wd x r + w x (w x r))
+//
+// `pout` and `vout` are exact: they are the kinematics of the commanded
+// attitude, and `vout` is the derivative of `pout`. `aout` needs `wd`, and
+// `wcmd` cannot be differentiated exactly -- it carries the high-passed `win`,
+// whose derivative would need `wdin` through the same high pass. So `wdcmd`
+// comes from a differentiator rolled off at `wdcRoll`, as the C++'s body-rate
+// derivative does, and `aout` agrees with the derivative of `vout` only below
+// that corner. Behind a sharp edge in the commanded rate it lags by about
+// 1/wdcRoll (LongitudinalAccelHead.sim has the numbers).
+//
+// The input side has no such problem: the vehicle knows its own angular
+// acceleration, so `wdin` is a boundary input and the transport is exact. The
+// C++ does neither. It references its whole washout at the datum and carries
+// only the output out to the occupant, as the specific force there.
+//
+// With `headPos` zero every lever-arm term is exactly zero, and the outputs
+// are bit-for-bit what they were before the offset existed.
+//
 // COORDINATE CONVENTION -- SAE, matching `se.math.Vec3`: X forward/north, Y
 // right/east, Z down.
 //
@@ -108,16 +143,23 @@ node Classical {
         rotLeak: double(rad/s) = 0.12;
 
         grav:  math.Vec3(m/s^2)  = { 0.0, 0.0, 9.80665 };
+        // The lever arm from the motion datum to the occupant's head, in the
+        // platform (body) frame. Zero puts the head at the datum.
         headPos: math.Vec3(m) = { 0.0, 0.0, 0.0 };
+        // The roll-off of the differentiator that makes `wdcmd` from `wcmd`.
+        // The C++'s `bodyRateDiff` corner.
+        wdcRoll: double(rad/s) = 12.5;
     }
 
+    // All three at the MOTION DATUM, in the vehicle body frame.
     inputs  {
-        ain:  math.Vec3(m/s^2); // kinematic acceleration, vehicle body frame,
-                                //   gravity-free -- see the note above
-        win:  math.Vec3(rad/s); // Local angular velocity
+        ain:  math.Vec3(m/s^2);   // kinematic acceleration, gravity-free --
+                                  //   see the note above
+        win:  math.Vec3(rad/s);   // angular velocity
+        wdin: math.Vec3(rad/s^2); // angular acceleration
     }
-    // The translational three are in the INERTIAL frame (B13 above), not the
-    // platform's.
+    // The translational three are at the MOTION DATUM and in the INERTIAL
+    // frame (B13 above), not the platform's.
     outputs {
         aout: math.Vec3(m/s^2);// commanded platform acceleration, inertial
         vout: math.Vec3(m/s);  // commanded platform velocity, inertial
@@ -126,9 +168,20 @@ node Classical {
         qcmd: kin.Quat;        // commanded platform attitude, qWash (x) qTilt
         ecmd: math.Vec3(rad);  // the same, as SAE (roll, pitch, heading)
         wcmd: math.Vec3(rad/s);// commanded platform body rate
+        wdcmd: math.Vec3(rad/s^2); // its derivative, rolled off at wdcRoll
     }
 
     structure {
+
+        //----------------------------------
+        // Head Offset, In
+        //----------------------------------
+
+        // The datum's acceleration, carried out to the head. Both channels
+        // read this, never `ain`.
+        node toHead: kin.TranslateAcc (m) {
+            r = param.headPos;
+        };
 
         //----------------------------------
         // Tilt Coordination Channel Nodes
@@ -227,11 +280,40 @@ node Classical {
         node transGlobalPos: sig.ct.Integrator3 (m/s);
 
         //----------------------------------
+        // Head Offset, Out
+        //----------------------------------
+
+        // Each is the head's quantity less the lever arm's share of it,
+        // turned into the inertial frame by `cmdR`.
+        node wdCmd:  sig.ct.Differentiator3 (rad/s) {
+            wc = param.wdcRoll;
+        };
+
+        node armR:   kin.MulRotVec (m);                 // R r
+        node armP:   math.Diff3 (m);                    // R r - r
+        node pDatum: math.Diff3 (m);
+
+        node armV:   math.Cross3 (rad/s, m);            // w x r
+        node armVG:  kin.MulRotVec (m/s);               // R (w x r)
+        node vDatum: math.Diff3 (m/s);
+
+        node armT:   math.Cross3 (rad/s^2, m);          // wd x r
+        node armC:   math.CrossCross3 (rad/s, rad/s, m);// w x (w x r)
+        node armA:   math.Sum3 (m/s^2);
+        node armAG:  kin.MulRotVec (m/s^2);             // R (wd x r + w x (w x r))
+        node aDatum: math.Diff3 (m/s^2);
+
+        //----------------------------------
         // Signal Flow Connections
         //----------------------------------
 
+        // Head Offset, In
+        self.ain  --> toHead.ain;
+        self.win  --> toHead.w;
+        self.wdin --> toHead.wd;
+
         // Tilt Channel
-        self.ain --> xyAccel --> tiltScale --> tiltLocalFilt;
+        toHead --> xyAccel --> tiltScale --> tiltLocalFilt;
                                                tiltLocalFilt.vout  --> tiltCalc.acc;
                                                tiltLocalFilt.voutd --> tiltCalc.accRate;
         tiltCalc.tilt --> tiltQuat;
@@ -257,8 +339,8 @@ node Classical {
         wCmd --> self.wcmd;
 
         // Translational Channel
-        self.ain --> transScale  --> sf.a;
-        param.grav               --> sf.b;
+        toHead --> transScale  --> sf.a;
+        param.grav             --> sf.b;
         qCmd --> cmdR;
                  cmdR --> gBody.R;    param.grav --> gBody.v;
         sf    --> a1.a;
@@ -266,8 +348,30 @@ node Classical {
         a1 --> transLocalFilt --> toGlobal.v;
                  cmdR     --> toGlobal.R;
         toGlobal --> transGlobalAcc --> transGlobalVel --> transGlobalPos;
-                     transGlobalAcc                                       --> self.aout;
-                                        transGlobalVel                    --> self.vout;
-                                                           transGlobalPos --> self.pout;
+
+        // Head Offset, Out
+        wCmd --> wdCmd --> self.wdcmd;
+
+        cmdR --> armR.R;   param.headPos --> armR.v;
+        armR          --> armP.a;
+        param.headPos --> armP.b;
+        transGlobalPos --> pDatum.a;
+        armP           --> pDatum.b;
+        pDatum --> self.pout;
+
+        wCmd --> armV.a;   param.headPos --> armV.b;
+        cmdR --> armVG.R;  armV --> armVG.v;
+        transGlobalVel --> vDatum.a;
+        armVG          --> vDatum.b;
+        vDatum --> self.vout;
+
+        wdCmd --> armT.a;  param.headPos --> armT.b;
+        wCmd  --> armC.a, armC.b;   param.headPos --> armC.c;
+        armT --> armA.a;
+        armC --> armA.b;
+        cmdR --> armAG.R;  armA --> armAG.v;
+        transGlobalAcc --> aDatum.a;
+        armAG          --> aDatum.b;
+        aDatum --> self.aout;
     }
 }
