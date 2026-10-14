@@ -20,6 +20,7 @@
 #include "schedule.cpp"
 #include "emit.cpp"
 #include "testgen.cpp"
+#include "doc.cpp"
 #include "runtime_src.cpp"
 #include "topology_page.cpp"
 

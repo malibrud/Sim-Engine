@@ -135,7 +135,32 @@ void Lexer::skip_trivia() {
         if (c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == '\v') {
             bump();
         } else if (c == '/' && at(1) == '/') {
+            // §3.2 — exactly three slashes is a doc comment; `////` is a rule.
+            const bool doc = at(2) == '/' && at(3) != '/';
+            const Loc start = mark();
             while (!eof() && cur() != '\n' && cur() != '\r') bump();
+            if (doc && (docs_.empty() || docs_.back().offset < start.offset)) {
+                DocLine d;
+                d.line = start.line;
+                d.col = start.col;
+                d.offset = start.offset;
+                std::string_view body = text_.substr(start.offset + 3, pos_ - start.offset - 3);
+                d.text_col = start.col + 3;
+                if (!body.empty() && body.front() == ' ') {
+                    body.remove_prefix(1);
+                    ++d.text_col;
+                }
+                while (!body.empty() && (body.back() == ' ' || body.back() == '\t'))
+                    body.remove_suffix(1);
+                d.text = std::string(body);
+                for (std::size_t i = line_start_; i < start.offset; ++i) {
+                    if (text_[i] != ' ' && text_[i] != '\t') {
+                        d.trailing = true;
+                        break;
+                    }
+                }
+                docs_.push_back(std::move(d));
+            }
         } else if (c == '/' && at(1) == '*') {
             const Loc open = mark();
             bump();

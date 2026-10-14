@@ -1,0 +1,12 @@
+package docfix;
+
+/// A pair of values sharing one unit.
+///
+/// # Conventions
+/// `a` is the first element and `b` the second.
+type Pair {
+    units { U; }   /// unit of both elements
+
+    a: double(U);  /// first element
+    b: double(U);  /// second element
+}

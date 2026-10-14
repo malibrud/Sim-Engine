@@ -1,0 +1,25 @@
+package docerr;
+
+/// A summary with no closing period
+///
+/// Cites §99.9, which does not exist, and SE9999, which is not a code.
+///
+/// # Limitations
+/// Listed before a section that belongs earlier.
+///
+/// # Conventions
+/// Out of order.
+///
+/// # Remarks
+/// Not one of the sections.
+node Bad {
+    /// Documents the `settings` keyword, which is not a declaration.
+    settings {
+        k: double(-) = 1.0;
+    }
+
+    inputs  { a: double(-); b: double(-); }   /// two declarations on this line
+    outputs { y: double(-); }                 /// the output
+
+    output(a, b) { out.y = param.k * (in.a + in.b); }
+}

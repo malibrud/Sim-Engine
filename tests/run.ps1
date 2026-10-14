@@ -476,6 +476,61 @@ foreach ($ex in $examples) {
 }
 
 # -----------------------------------------------------------------------------
+#  Documentation (SPEC 3.2 and 6.14).
+# -----------------------------------------------------------------------------
+#  tests/doc/lib is a small documented library: `sec --doc` must write it
+#  cleanly, and each page is compared with tests/doc/docfix.expected/<page>.
+#  tests/doc/err holds one of each doc diagnostic and must fail; its text is
+#  compared with tests/doc/err.expected. Both pass --spec explicitly, so the
+#  citation checks and links do not depend on where the runner was started.
+$docOut = Join-Path $root 'build\doc'
+
+# Every page `sec --doc` wrote into $outDir against $expectedDir, by name. A
+# recorded page that was not generated is a failure too: a page that silently
+# stops being written is a regression, not a cleanup. -Update rewrites the
+# recorded tree from scratch, so a removed page goes with it.
+function Check-DocTree($label, $outDir, $expectedDir) {
+    $pages = @(Get-ChildItem -File -Path $outDir -Filter '*.md' | Sort-Object Name)
+    if ($Update -and (Test-Path $expectedDir)) { Remove-Item -Recurse -Force $expectedDir }
+    if ($Update) { New-Item -ItemType Directory -Force $expectedDir | Out-Null }
+    foreach ($p in $pages) {
+        $actual = (Get-Content -Raw -Encoding UTF8 $p.FullName) -replace "`r`n", "`n"
+        Compare-Text "$label/$($p.Name)" (Join-Path $expectedDir $p.Name) $actual
+    }
+    if (-not $Update -and (Test-Path $expectedDir)) {
+        foreach ($r in (Get-ChildItem -File -Path $expectedDir -Filter '*.md')) {
+            if (-not ($pages | Where-Object { $_.Name -eq $r.Name })) {
+                Write-Host "FAIL $label/$($r.Name) : recorded but no longer generated" `
+                    -ForegroundColor Red
+                $script:fail++
+            }
+        }
+    }
+}
+
+$fixOut = Join-Path $docOut 'docfix'
+if (Test-Path $fixOut) { Remove-Item -Recurse -Force $fixOut }
+$docText = (& $sec --no-color --quiet --max-errors=0 --doc --spec=SPECIFICATION.md `
+                  -o ($fixOut -replace '\\', '/') tests/doc/lib 2>&1 | Out-String)
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "FAIL tests/doc/lib : expected a clean --doc, got" -ForegroundColor Red
+    Write-Host $docText
+    $script:fail++
+} else {
+    Check-DocTree 'tests/doc/docfix' $fixOut (Join-Path $root 'tests\doc\docfix.expected')
+}
+
+$docText = (& $sec --no-color --quiet --max-errors=0 --doc --spec=SPECIFICATION.md `
+                  -o build/doc/err tests/doc/err 2>&1 | Out-String) -replace "`r`n", "`n"
+if ($LASTEXITCODE -ne 1) {
+    Write-Host "FAIL tests/doc/err : expected doc diagnostics and exit 1, got $LASTEXITCODE" `
+        -ForegroundColor Red
+    $script:fail++
+} else {
+    Compare-Text 'tests/doc/err' (Join-Path $root 'tests\doc\err.expected') $docText
+}
+
+# -----------------------------------------------------------------------------
 #  The stdlib smoke model.
 # -----------------------------------------------------------------------------
 #  Every `node` under stdlib/ instantiated exactly once, with every input driven,

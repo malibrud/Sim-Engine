@@ -872,6 +872,7 @@ std::unique_ptr<ast::ModelFile> Parser::parse_model_file() {
 
         if (tok_.loc.offset == before && !at_end()) advance();
     }
+    file->doc_lines = lexer_.doc_lines();
     return file;
 }
 

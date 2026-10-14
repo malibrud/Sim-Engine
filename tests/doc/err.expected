@@ -1,0 +1,72 @@
+﻿error[SE0701]: doc comment documents nothing
+  --> tests/doc/err/docerr/Bad.se:16:5
+   |
+16 |     /// Documents the `settings` keyword, which is not a declaration.
+   |     ^^^ no declaration on the line below
+   = note: a `///` block documents the declaration directly below it; a trailing `///` documents the declaration on its own line (§3.2)
+   = help: use `//` for a comment that is not documentation
+
+error[SE0703]: doc comment is ambiguous: 2 declarations start on that line
+  --> tests/doc/err/docerr/Bad.se:21:47
+   |
+21 |     inputs  { a: double(-); b: double(-); }   /// two declarations on this line
+   |                                               ^^^
+   = help: put each documented declaration on a line of its own
+
+warning[SE0702]: public setting `k` has no doc comment
+  --> tests/doc/err/docerr/Bad.se:18:9
+   |
+18 |         k: double(-) = 1.0;
+   |         ^
+   = help: add a trailing `/// …` fragment on this line (§6.14)
+
+warning[SE0702]: public input `a` has no doc comment
+  --> tests/doc/err/docerr/Bad.se:21:15
+   |
+21 |     inputs  { a: double(-); b: double(-); }   /// two declarations on this line
+   |               ^
+   = help: add a trailing `/// …` fragment on this line (§6.14)
+
+warning[SE0702]: public input `b` has no doc comment
+  --> tests/doc/err/docerr/Bad.se:21:29
+   |
+21 |     inputs  { a: double(-); b: double(-); }   /// two declarations on this line
+   |                             ^
+   = help: add a trailing `/// …` fragment on this line (§6.14)
+
+error[SE0707]: `§99.9` names no section of the specification
+ --> tests/doc/err/docerr/Bad.se:5:11
+  |
+5 | /// Cites §99.9, which does not exist, and SE9999, which is not a code.
+  |           ^^^^^^
+  = note: checked against SPECIFICATION.md
+
+error[SE0708]: `SE9999` is not in the diagnostic catalogue
+ --> tests/doc/err/docerr/Bad.se:5:45
+  |
+5 | /// Cites §99.9, which does not exist, and SE9999, which is not a code.
+  |                                             ^^^^^^
+  = note: checked against SPECIFICATION.md §16.4
+
+error[SE0704]: the summary does not end with a period
+ --> tests/doc/err/docerr/Bad.se:3:5
+  |
+3 | /// A summary with no closing period
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  = note: the first paragraph is the summary: one sentence, shown in the package index (§6.14)
+
+error[SE0706]: doc section `Conventions` is out of order or repeated
+  --> tests/doc/err/docerr/Bad.se:10:5
+   |
+10 | /// # Conventions
+   |     ^^^^^^^^^^^^^
+   = note: the sections are, in order: Conventions, Initial conditions, Accuracy, Limitations, Design notes, See also (§6.14)
+
+error[SE0705]: unknown doc section `Remarks`
+  --> tests/doc/err/docerr/Bad.se:13:5
+   |
+13 | /// # Remarks
+   |     ^^^^^^^^^
+   = note: the sections are, in order: Conventions, Initial conditions, Accuracy, Limitations, Design notes, See also (§6.14)
+
+7 errors, 3 warnings emitted

@@ -289,6 +289,31 @@ An unterminated block comment is an error (`SE0102`). Comments inside verbatim
 regions belong to the verbatim text and are copied through, but are still
 recognised as comments for the purpose of bracket matching (§11.2).
 
+**Doc comments.** A line comment that begins with exactly three slashes, `///`,
+is a *doc comment*; `////` and longer are ordinary comments. Doc comments have no
+effect on a model — every stage but `sec --doc` (§6.14) skips them exactly as it
+skips `//` — and they attach to declarations by position:
+
+```
+/// Follows its input through a first-order lag.     <- documents `node Lag`
+node Lag {
+    settings {
+        tau: double(s) = 0.5;   /// time constant      <- documents `tau`
+    }
+}
+```
+
+- A run of `///` lines on consecutive lines documents the declaration that
+  begins on the line immediately after the run.
+- A `///` that follows other text on its line documents the declaration that
+  begins on that line.
+- The declarations that may be documented are `node`, `type`, unit parameters,
+  settings, inputs, outputs, states, `vars`, `native` members and record
+  fields. A doc comment that documents none of them is `SE0701`; one whose line
+  begins more than one is `SE0703`.
+
+A `///` inside a verbatim region is C++ text and is never a doc comment.
+
 ### 3.3 Identifiers
 
 ```
@@ -2075,6 +2100,54 @@ both in one step — a script, a build system, a future driver — sits above
 
 A dimension error in a cell or a tolerance is the ordinary `SE0410`.
 
+### 6.14 Documentation
+
+`sec --doc` writes a Markdown reference for a library: `index.md`, listing every
+package with a one-line summary of each definition, and one page per package. It
+reads `.se` files to stage 2 only, so a library can be documented without being
+instantiated.
+
+**The comment supplies prose; the source supplies everything else.** For each
+file's public definition (§2.3) the page shows its unit parameters; its settings
+with their types and defaults as written; its inputs, outputs and states with
+their types and initial conditions; whether `output()` reads any input (§8.3);
+and each set of its `tests` section (§6.13) as a table of worked examples. A doc
+comment therefore never restates a type, unit, default or initial condition: the
+page already shows it, and a restatement is a second copy that can disagree.
+
+**The shape of a definition's doc comment.** The first paragraph is the
+*summary*: one sentence, ending in a period, which the index shows (`SE0704`).
+Body paragraphs follow, and may contain an indented block for an equation. Then,
+optionally, any of these sections, each opened by a line `# Name`, in this order
+(`SE0705`, `SE0706`):
+
+| Section | Holds |
+|---|---|
+| `Conventions` | frames, signs, handedness, orderings |
+| `Initial conditions` | what the states start at, and why it matters |
+| `Accuracy` | numerical behaviour, error bounds, drift |
+| `Limitations` | inputs or settings outside which the block is wrong |
+| `Design notes` | why the block is shaped as it is |
+| `See also` | related definitions |
+
+On the page the summary and body open the entry, and the sections follow the
+signature tables. A member's doc comment is a fragment — the table cell beside
+its name.
+
+**Citations are checked.** A `§n.n` in a doc comment must name a heading of this
+specification (`SE0707`), and an `SEnnnn` must name an entry of §16.4 (`SE0708`);
+on the page a `§` becomes a link. `--spec=<path>` names the specification;
+without it `sec` looks beside the first input, then in the current directory,
+and with none found, citations are neither checked nor linked.
+
+**Completeness is a warning.** A public definition, or a setting, input, output,
+state or record field of one, with no doc comment is `SE0702`. It is a warning
+so that a partly documented library still produces a reference; a project that
+wants a complete one treats the warning as a failure. Unit parameters, `vars`,
+`native` members and private definitions may be documented but need not be.
+
+An error suppresses the output, as everywhere in `sec` (§16.2).
+
 ---
 
 ## 7. The elaboration expression language
@@ -3834,7 +3907,8 @@ from one bad brace.
 ### 16.4 Catalogue
 
 Codes are stable. `SE01xx` lexical, `SE02xx` syntactic, `SE03xx` resolution,
-`SE04xx` elaboration, `SE05xx` scheduling, `SE06xx` emission.
+`SE04xx` elaboration, `SE05xx` scheduling, `SE06xx` emission, `SE07xx`
+documentation (§6.14).
 
 **Every code names a compile stage, and configuration failures have none.** The
 five things §6.2b can reject happen in a shipped binary with no source in reach,
@@ -3955,6 +4029,14 @@ of thing wearing the same name.
 | `SE0470` | 4 | A set reaches a rate-derived setting with no `step` |
 | `SE0510` | 5 | Algebraic loop |
 | `SE0511` | 5 | Node is unreachable from the root |
+| `SE0701` | doc | A doc comment documents no declaration |
+| `SE0702` | doc | A public declaration has no doc comment (warning) |
+| `SE0703` | doc | A doc comment's line begins more than one declaration |
+| `SE0704` | doc | A definition's doc comment has no summary ending in a period |
+| `SE0705` | doc | Unknown doc section |
+| `SE0706` | doc | Doc section out of order or repeated |
+| `SE0707` | doc | A `§` citation names no section of the specification |
+| `SE0708` | doc | An `SE` citation names no catalogue entry |
 
 **Configuration-time failures are not `SE` codes.** A §14 source presented to a
 compiled model (§14.1) is diagnosed by that model's loader, not by `sec`, and

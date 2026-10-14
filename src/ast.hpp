@@ -372,6 +372,8 @@ struct ModelFile {
     // A package manifest (`package.se`, §2.6) carries only a file-level build block.
     std::vector<BuildStmt> build;
     SectionMark sec_build;
+    // §3.2 — the file's `///` lines, unattached. Only `sec --doc` reads them.
+    std::vector<DocLine> doc_lines;
 };
 
 // ─── The sim file (§13) ──────────────────────────────────────────────────────

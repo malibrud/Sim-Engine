@@ -10,6 +10,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include "diag.hpp"
 #include "token.hpp"
@@ -25,9 +26,25 @@ struct Verbatim {
     bool present = false;
 };
 
+// One `///` doc comment line (§3.2). The lexer records these and otherwise
+// skips them like any comment; `sec --doc` attaches them to declarations by
+// line, so no other stage ever sees them.
+struct DocLine {
+    std::uint32_t line = 0;
+    std::uint32_t col = 0;
+    std::uint32_t offset = 0;
+    std::string text;        // after `///` and at most one space
+    std::uint32_t text_col = 0;   // column of text[0], for carets inside it
+    bool trailing = false;   // something other than whitespace precedes it
+};
+
 class Lexer {
 public:
     Lexer(const Source& src, Diagnostics& diag);
+
+    // Every `///` line seen in token mode, in source order. A `///` inside a
+    // verbatim C++ region is C++'s business and is not recorded.
+    const std::vector<DocLine>& doc_lines() const { return docs_; }
 
     // Token mode (§3).
     Token next();
@@ -92,6 +109,9 @@ private:
     // Last non-whitespace byte consumed in raw mode — needed to tell a character
     // literal from a digit separator.
     char last_sig_ = '\0';
+
+    // `seek()` re-lexes, so a doc line is recorded only past the last one kept.
+    std::vector<DocLine> docs_;
 };
 
 }  // namespace se

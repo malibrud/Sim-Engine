@@ -13,6 +13,12 @@
 //      --emit             compile a .sim file and write the generated model
 //      --test             write a test program for each node's `tests` section
 //                         (§6.13), one subdirectory of -o per tested node
+//      --doc              write a Markdown reference for the given roots or
+//                         .se files into -o (§6.14): index.md and one page
+//                         per package
+//      --spec=<path>      the SPECIFICATION.md that --doc checks and links
+//                         `§` and `SE` citations against (default: beside
+//                         the first input, then the current directory)
 //      --dump-ast         print the parsed AST
 //      --dump-tokens      print the token stream (does not parse)
 //      -I <dir>           add a root directory (§2.1); repeatable
@@ -50,6 +56,7 @@
 
 #include "../src/ast.hpp"
 #include "../src/diag.hpp"
+#include "../src/doc.hpp"
 #include "../src/dump.hpp"
 #include "../src/elaborate.hpp"
 #include "../src/emit.hpp"
@@ -70,7 +77,7 @@
 namespace {
 
 enum class Kind { Model, Sim, Settings };
-enum class Mode { Parse, Emit, Test, DumpAst, DumpTokens };
+enum class Mode { Parse, Emit, Test, Doc, DumpAst, DumpTokens };
 
 void usage(std::ostream& o) {
     o << "sec — sim-engine compiler\n\n"
@@ -78,6 +85,10 @@ void usage(std::ostream& o) {
          "  --parse            parse and report diagnostics (default)\n"
          "  --emit             compile a .sim file and write the generated model\n"
          "  --test             write a test program per node `tests` section\n"
+         "  --doc              write a Markdown reference for the given roots\n"
+         "                     or .se files into -o: index.md + one page per\n"
+         "                     package\n"
+         "  --spec=<path>      SPECIFICATION.md for --doc's citation checks\n"
          "  --dump-ast         print the parsed AST\n"
          "  --dump-tokens      print the token stream (does not parse)\n"
          "  -I <dir>           add a root directory; repeatable\n"
@@ -192,6 +203,7 @@ int main(int argc, char** argv) {
     std::vector<std::string> files;
     std::vector<std::string> roots;
     se::EmitOptions emit_opt;
+    se::DocOptions doc_opt;
 
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -252,6 +264,10 @@ int main(int argc, char** argv) {
             mode = Mode::Emit;
         } else if (a == "--test") {
             mode = Mode::Test;
+        } else if (a == "--doc") {
+            mode = Mode::Doc;
+        } else if (a.rfind("--spec=", 0) == 0) {
+            doc_opt.spec_path = a.substr(7);
         } else if (a == "--parse") {
             mode = Mode::Parse;
         } else if (a == "--dump-ast") {
@@ -298,6 +314,14 @@ int main(int argc, char** argv) {
             return 2;
         }
         const int rc = compile(files.front(), diag, roots, emit_opt);
+        diag.print_summary();
+        return rc;
+    }
+
+    if (mode == Mode::Doc) {
+        doc_opt.out_dir = emit_opt.out_dir;
+        doc_opt.quiet = emit_opt.quiet;
+        const int rc = se::generate_docs(files, diag, doc_opt);
         diag.print_summary();
         return rc;
     }
