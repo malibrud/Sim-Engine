@@ -13,6 +13,7 @@
 #include <set>
 #include <sstream>
 
+#include "doc.hpp"
 #include "dump.hpp"
 #include "parser.hpp"
 
@@ -1412,6 +1413,23 @@ void Elaborator::instantiate(const NodeInfo* def, const std::string& path,
 
     if (def->composite) {
         const Source& def_src = *def->file->src;
+
+        // §6.9.3 — groups, for the topology printers and nothing else.
+        const ast::Structure& st = def->def->structure;
+        const std::size_t group_base = m.groups.size();
+        for (const ast::Group& g : st.groups) {
+            Model::Group mg;
+            mg.owner = path;
+            mg.label = g.label;
+            if (g.parent != static_cast<std::size_t>(-1)) mg.parent = group_base + g.parent;
+            mg.file = def->file->path;
+            mg.line = g.loc.line;
+            mg.doc = doc_comment_at(def->file->ast->doc_lines, g.loc.line);
+            m.groups.push_back(std::move(mg));
+        }
+        for (const ast::Instance& inst : st.instances)
+            if (inst.group != static_cast<std::size_t>(-1))
+                m.instance_group[sub(path, inst.name)] = group_base + inst.group;
 
         // §6.2a — evaluated once per composite and shared with `collect_wires`,
         // which needs them to make endpoint units concrete. Computing them in

@@ -1,0 +1,37 @@
+// §6.9.3 groups, every legal shape. Parse-only, so what the recorded AST shows
+// is the bookkeeping: groups by index with their parents, and each instance
+// naming its innermost group. Wires inside a group are ordinary wires.
+package tests;
+
+node Groups {
+    inputs  { u: double(-); }
+    outputs { y: double(-); z: double(-); }
+
+    structure {
+        node pre : Gain {};                 // in no group
+
+        /// The forward path. A doc comment is legal here (§3.2), and a
+        /// parse-only test proves it is not mistaken for anything else.
+        group "Forward Path" {
+            node a : Gain { k = 2.0; };
+
+            // Nested, to any depth, and a child composite may sit in one.
+            group "Inner" {
+                node b : Gain {};
+                node sub : Vehicle;
+            }
+            self.u --> pre --> a --> b;     // a wire inside a group
+        }
+
+        // The same label under a different parent is fine.
+        group "Return Path" {
+            group "Inner" { node c : Gain {}; }
+        }
+
+        // `group` is contextual: an instance may be called `group`, and a
+        // wire may start from it, because neither is followed by a string.
+        node group : Gain {};
+        b --> group --> self.y;
+        group.y --> c --> self.z;
+    }
+}

@@ -1,0 +1,56 @@
+﻿%% --------------------------------------------------------------------------
+%%  GENERATED — DO NOT EDIT.
+%%  Topology for: Grp   root: grp.Grp
+
+%%  Signal flow, as the model RUNS. Composites are flattened by now
+%%  (§15.2), so a subgraph is the path prefix one left behind, not a
+%%  runtime object. Nodes are listed in §8.5 schedule order.
+%%  A subgraph may instead be a §6.9.3 group: a labelled box with
+%%  no path, drawn for the reader and absent from everything else.
+
+%%    A --> B    B's `output()` READS this input: an algebraic
+%%               dependency, and what the §8.5 sort is over
+%%    A -.-> B   it does not. The value reaches B through a state, so
+%%               the edge orders nothing and a cycle through it is
+%%               legal (§8.6)
+%%    ( )        the root boundary: the host writes in, reads out
+%%    thick      the node owns continuous state — the solver
+%%               integrates it, so every edge leaving it is delayed
+
+%%  Base step 0.001 s  (1000.0 Hz); a node that samples slower says so.
+%% --------------------------------------------------------------------------
+flowchart LR
+    se_in_u(["in.u<br/>m/s^2"])
+    pre["pre<br/>se.math.Sum"]
+    subgraph sg1["Forward"]
+        direction LR
+        s1["s1<br/>se.math.Sum"]
+        subgraph sg2["Inner"]
+            direction LR
+            subgraph sg3["in1"]
+                direction LR
+                subgraph sg4["Gain Stage"]
+                    direction LR
+                    in1_z["z<br/>se.math.Sum"]
+                end
+            end
+        end
+    end
+    subgraph sg5["in2"]
+        direction LR
+        subgraph sg6["Gain Stage"]
+            direction LR
+            in2_z["z<br/>se.math.Sum"]
+        end
+    end
+    se_out0(["out in2.z.y<br/>m/s^2"])
+
+    se_in_u -->|"a (m/s^2)"| pre
+    se_k0(["1.0"]) -->|"b (m/s^2)"| pre
+    pre -->|"y (m/s^2)"| s1
+    se_k1(["1.0"]) -->|"b (m/s^2)"| s1
+    s1 -->|"y (m/s^2)"| in1_z
+    se_k2(["0.0"]) -->|"b (m/s^2)"| in1_z
+    in1_z -->|"y (m/s^2)"| in2_z
+    se_k3(["0.0"]) -->|"b (m/s^2)"| in2_z
+    in2_z --> se_out0

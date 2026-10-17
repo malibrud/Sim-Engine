@@ -1,0 +1,52 @@
+// §6.9.3 groups, as the topology diagram sees them. Diagram-only: the manifest
+// and the generated code are what they would be with every `group` deleted,
+// which Grp.manifest pins.
+//
+// What the recorded Grp.topology.json shows:
+//   - a group owned by the root, holding a leaf and a nested group;
+//   - a composite (`in1`) drawn inside that nested group;
+//   - a group inside `Stage`, which appears once per instance of `Stage`:
+//     inside `in1`, deep in the root's groups, and inside `in2`, in none;
+//   - a doc comment carried onto the group it documents;
+//   - `pre`, in no group at all.
+package grp;
+
+use se.math;
+
+node Grp {
+    inputs  { u: double(m/s^2); }
+    outputs { y: double(m/s^2); }
+
+    structure {
+        node pre : math.Sum (m/s^2);
+
+        /// Where the signal goes first.
+        ///
+        ///     y = u + 2
+        group "Forward" {
+            node s1 : math.Sum (m/s^2);
+            group "Inner" {
+                node in1 : Stage;
+            }
+        }
+        node in2 : Stage;
+
+        self --> pre.a;
+        1.0  --> pre.b;
+        pre  --> s1.a;
+        1.0  --> s1.b;
+        s1 --> in1 --> in2 --> self;
+    }
+}
+
+node Stage {
+    inputs  { u: double(m/s^2); }
+    outputs { y: double(m/s^2); }
+
+    structure {
+        group "Gain Stage" { node z : math.Sum (m/s^2); }
+        self --> z.a;
+        0.0  --> z.b;
+        z    --> self;
+    }
+}

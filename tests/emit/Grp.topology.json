@@ -1,0 +1,38 @@
+﻿{
+"name": "Grp",
+"root": "grp.Grp",
+"step": "0.001",
+"solver": "rk4",
+"clusters": [
+ {"id": "g1", "kind": "group", "name": "Forward", "path": "", "parent": null, "file": "tests/emit/lib/grp/Grp.se", "line": 26, "doc": "Where the signal goes first.\n\n    y = u + 2"},
+ {"id": "g2", "kind": "group", "name": "Inner", "path": "", "parent": "g1", "file": "tests/emit/lib/grp/Grp.se", "line": 28, "doc": null},
+ {"id": "g3", "kind": "composite", "name": "in1", "path": "in1", "parent": "g2"},
+ {"id": "g4", "kind": "group", "name": "Gain Stage", "path": "in1", "parent": "g3", "file": "tests/emit/lib/grp/Grp.se", "line": 47, "doc": null},
+ {"id": "g5", "kind": "composite", "name": "in2", "path": "in2", "parent": null},
+ {"id": "g6", "kind": "group", "name": "Gain Stage", "path": "in2", "parent": "g5", "file": "tests/emit/lib/grp/Grp.se", "line": 47, "doc": null}
+],
+"nodes": [
+ {"id": "pre", "kind": "leaf", "name": "pre", "path": "pre", "type": "se.math.Sum", "cluster": null, "order": 0, "rate": null, "solver": false, "file": "stdlib/se/math/Sum.se", "line": 11, "ins": [{"name": "a", "type": "m/s^2"}, {"name": "b", "type": "m/s^2"}], "outs": [{"name": "y", "type": "m/s^2"}], "states": []},
+ {"id": "s1", "kind": "leaf", "name": "s1", "path": "s1", "type": "se.math.Sum", "cluster": "g1", "order": 1, "rate": null, "solver": false, "file": "stdlib/se/math/Sum.se", "line": 11, "ins": [{"name": "a", "type": "m/s^2"}, {"name": "b", "type": "m/s^2"}], "outs": [{"name": "y", "type": "m/s^2"}], "states": []},
+ {"id": "in1_z", "kind": "leaf", "name": "z", "path": "in1.z", "type": "se.math.Sum", "cluster": "g4", "order": 2, "rate": null, "solver": false, "file": "stdlib/se/math/Sum.se", "line": 11, "ins": [{"name": "a", "type": "m/s^2"}, {"name": "b", "type": "m/s^2"}], "outs": [{"name": "y", "type": "m/s^2"}], "states": []},
+ {"id": "in2_z", "kind": "leaf", "name": "z", "path": "in2.z", "type": "se.math.Sum", "cluster": "g6", "order": 3, "rate": null, "solver": false, "file": "stdlib/se/math/Sum.se", "line": 11, "ins": [{"name": "a", "type": "m/s^2"}, {"name": "b", "type": "m/s^2"}], "outs": [{"name": "y", "type": "m/s^2"}], "states": []},
+ {"id": "in.u", "kind": "in", "name": "in.u", "type": "m/s^2"},
+ {"id": "out.0", "kind": "out", "name": "out.in2.z.y", "type": "m/s^2"},
+ {"id": "const.0", "kind": "const", "name": "1.0"},
+ {"id": "const.1", "kind": "const", "name": "1.0"},
+ {"id": "const.2", "kind": "const", "name": "0.0"},
+ {"id": "const.3", "kind": "const", "name": "0.0"}
+],
+"edges": [
+ {"from": "in.u", "fromPort": "out", "to": "pre", "toPort": "a", "type": "m/s^2", "feedthrough": true},
+ {"from": "const.0", "fromPort": "out", "to": "pre", "toPort": "b", "type": "m/s^2", "feedthrough": true},
+ {"from": "pre", "fromPort": "y", "to": "s1", "toPort": "a", "type": "m/s^2", "feedthrough": true},
+ {"from": "const.1", "fromPort": "out", "to": "s1", "toPort": "b", "type": "m/s^2", "feedthrough": true},
+ {"from": "s1", "fromPort": "y", "to": "in1_z", "toPort": "a", "type": "m/s^2", "feedthrough": true},
+ {"from": "const.2", "fromPort": "out", "to": "in1_z", "toPort": "b", "type": "m/s^2", "feedthrough": true},
+ {"from": "in1_z", "fromPort": "y", "to": "in2_z", "toPort": "a", "type": "m/s^2", "feedthrough": true},
+ {"from": "const.3", "fromPort": "out", "to": "in2_z", "toPort": "b", "type": "m/s^2", "feedthrough": true},
+ {"from": "in2_z", "fromPort": "y", "to": "out.0", "toPort": "in", "type": "m/s^2", "feedthrough": true}
+],
+"settings": []
+}

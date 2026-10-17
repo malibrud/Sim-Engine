@@ -1710,14 +1710,26 @@ bool Parser::parse_build_list(std::vector<ast::BuildStmt>& out) {
 
 bool Parser::parse_structure(ast::Structure& out) {
     if (!expect(Tok::LBrace, "SE0201", "to open `structure`")) return false;
+    if (!parse_structure_body(out, static_cast<std::size_t>(-1))) return false;
+    return expect(Tok::RBrace, "SE0201", "to close `structure`");
+}
 
+// The statements of a `structure` block, or of a `group` inside one, up to but
+// not including the closing `}`. `group` is the index of the enclosing group
+// in `out.groups`, or npos at the top.
+bool Parser::parse_structure_body(ast::Structure& out, std::size_t group) {
     while (!at(Tok::RBrace) && !at_end()) {
         const std::uint32_t before = tok_.loc.offset;
 
         if (at(Tok::KwNode)) {
             ast::Instance inst;
+            inst.group = group;
             if (parse_instance(inst)) out.instances.push_back(std::move(inst));
             else recover_in_list(Tok::RBrace);
+        } else if (at(Tok::Ident) && tok_.text == "group" && peek().kind == Tok::String) {
+            // §6.9.3 — contextual: an identifier followed by a string literal is
+            // never a wire, so `group` stays usable as an instance name.
+            if (!parse_group(out, group)) return false;
         } else if (at(Tok::KwSelf) || at(Tok::Ident) || at(Tok::Number) || at(Tok::Plus) ||
                    at(Tok::Minus)) {
             // A number, `+` or `-` starts a literal source (§6.9.2). Nothing
@@ -1731,15 +1743,61 @@ bool Parser::parse_structure(ast::Structure& out) {
             err("SE0211", tok_.loc,
                 std::string("expected a child instance or a wire, found ") + describe(tok_.kind),
                 "expected `node` or an endpoint",
-                {note("`structure` holds `node name : Def { ... };` instances and "
-                      "`a.b --> c.d;` wires (\xc2\xa7""6.9)")});
+                {note("`structure` holds `node name : Def { ... };` instances, "
+                      "`a.b --> c.d;` wires (\xc2\xa7""6.9), and `group \"label\" { ... }` "
+                      "blocks of either (\xc2\xa7""6.9.3)")});
             recover_in_list(Tok::RBrace);
         }
 
         if (give_up()) return false;
         if (tok_.loc.offset == before && !at(Tok::RBrace)) advance();
     }
-    return expect(Tok::RBrace, "SE0201", "to close `structure`");
+    return true;
+}
+
+// §6.9.3 — `group "label" { … }`. The current token is `group`, and the next
+// is known to be a string literal.
+bool Parser::parse_group(ast::Structure& out, std::size_t parent) {
+    ast::Group g;
+    g.loc = tok_.loc;
+    g.parent = parent;
+    advance();  // group
+    const Loc label_loc = tok_.loc;
+    g.label = tok_.text;
+    advance();  // the label
+
+    if (g.label.find_first_not_of(" \t") == std::string::npos) {
+        err("SE0217", label_loc, "a group's label is empty", "empty label",
+            {help("the label is the box's title on the topology diagram")});
+    } else {
+        for (const ast::Group& other : out.groups) {
+            if (other.parent != parent || other.label != g.label) continue;
+            err("SE0216", label_loc, "duplicate group label \"" + g.label + "\"",
+                "already used by a sibling group",
+                {note("first used here", src_.path() + ":" + std::to_string(other.loc.line)),
+                 help("two boxes with one title, or one box merged from two places, "
+                      "would each surprise the reader; give each group its own label")});
+            break;
+        }
+    }
+
+    const std::size_t index = out.groups.size();
+    out.groups.push_back(std::move(g));
+    const std::size_t instances_before = out.instances.size();
+
+    if (!expect(Tok::LBrace, "SE0201", "to open the group")) return false;
+    if (!parse_structure_body(out, index)) return false;
+    if (!expect(Tok::RBrace, "SE0201", "to close the group")) return false;
+
+    // Nested groups append their instances too, so this counts the subtree.
+    if (out.instances.size() == instances_before)
+        warn("SE0218", out.groups[index].loc,
+             "group \"" + out.groups[index].label + "\" holds no instances",
+             "draws nothing",
+             {note("a group draws a box around the instances declared inside it; wires "
+                   "placed in a group do not move, so this group does not appear on the "
+                   "topology diagram (\xc2\xa7""6.9.3)")});
+    return true;
 }
 
 bool Parser::parse_instance(ast::Instance& out) {

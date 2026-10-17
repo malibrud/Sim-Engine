@@ -231,14 +231,24 @@ enum class Script { Ps1, Sh };
 // what. Leaves are referred to by their index in `Model::leaves`, so a printer
 // that wants more than the graph -- settings, states -- reads the leaf itself.
 struct Topo {
-    // The composite tree, recovered from the leaf paths. [0] is the root, and
-    // a group's leaves are in §8.5 schedule order.
-    struct Group {
-        std::string name;                  // last path segment; "" for the root
-        std::string path;                  // root-relative: "fl.whl"
+    // The boxes on the diagram: the composite tree, recovered from the leaf
+    // paths, with each composite's §6.9.3 groups nested inside it. [0] is the
+    // root composite, and a cluster's leaves are in §8.5 schedule order. A
+    // cluster exists only if some leaf sits beneath it, so an empty group
+    // (SE0218) draws nothing.
+    struct Cluster {
+        bool is_group = false;             // a §6.9.3 group, not a composite
+        std::string name;                  // composite: last path segment ("" for
+                                           // the root); group: its label
+        std::string path;                  // composite: root-relative ("fl.whl");
+                                           // group: the composite that owns it
         std::size_t parent = 0;            // meaningless for [0]
         std::vector<std::size_t> leaves;
         std::vector<std::size_t> subs;
+        // A group only: where it is written, and its `///` text.
+        std::string file;
+        std::uint32_t line = 0;
+        std::string doc;
     };
     // A root output the host may read, collapsed from `boundary_out`'s
     // field-by-field rows back onto the port they came from.
@@ -263,7 +273,7 @@ struct Topo {
         bool feedthrough = false;          // `output()` reads it (§8.3)
     };
 
-    std::vector<Group> groups;
+    std::vector<Cluster> clusters;
     std::vector<std::size_t> rank;         // leaf index -> §8.5 position
     std::vector<std::string> rate;         // leaf index -> "200 Hz", or ""
     std::vector<std::string> in_type;      // per `boundary_in`
@@ -2692,37 +2702,68 @@ Topo Emitter::topology() const {
         t.rate[i] = buf;
     }
 
-    // ---- the composite tree, recovered from the paths ----------------------
-    std::map<std::string, std::size_t> group_of;
-    t.groups.push_back(Topo::Group{});
-    group_of[std::string()] = 0;
+    // ---- the cluster tree: composites from the paths, groups from §6.9.3 ---
+    //  Built lazily from the leaves upward, so a model with no groups gets
+    //  exactly the clusters, in exactly the order, it always did.
+    constexpr std::size_t npos = static_cast<std::size_t>(-1);
+    std::map<std::string, std::size_t> composite_of;
+    std::map<std::size_t, std::size_t> group_cluster;     // Model::groups index -> cluster
+    t.clusters.push_back(Topo::Cluster{});
+    composite_of[std::string()] = 0;
 
-    std::function<std::size_t(const std::string&)> ensure =
-        [&](const std::string& path) -> std::size_t {
-        auto it = group_of.find(path);
-        if (it != group_of.end()) return it->second;
+    auto attach = [&](Topo::Cluster c, std::size_t parent) {
+        c.parent = parent;
+        t.clusters.push_back(std::move(c));
+        const std::size_t id = t.clusters.size() - 1;
+        t.clusters[parent].subs.push_back(id);
+        return id;
+    };
+    std::function<std::size_t(const std::string&)> composite;
+    std::function<std::size_t(std::size_t)> group;
+    // The box an instance at `path` is drawn in: its innermost group, or else
+    // the composite it is a child of.
+    auto container = [&](const std::string& path) -> std::size_t {
+        auto g = m_.instance_group.find(path);
+        if (g != m_.instance_group.end()) return group(g->second);
         const std::size_t dot = path.rfind('.');
-        const std::size_t parent =
-            ensure(dot == std::string::npos ? std::string() : path.substr(0, dot));
-        Topo::Group g;
-        g.name = dot == std::string::npos ? path : path.substr(dot + 1);
-        g.path = path;
-        g.parent = parent;
-        t.groups.push_back(g);
-        const std::size_t id = t.groups.size() - 1;
-        group_of[path] = id;
-        t.groups[parent].subs.push_back(id);
+        return composite(dot == std::string::npos ? std::string() : path.substr(0, dot));
+    };
+    composite = [&](const std::string& path) -> std::size_t {
+        auto it = composite_of.find(path);
+        if (it != composite_of.end()) return it->second;
+        const std::size_t parent = container(path);
+        const std::size_t dot = path.rfind('.');
+        Topo::Cluster c;
+        c.name = dot == std::string::npos ? path : path.substr(dot + 1);
+        c.path = path;
+        const std::size_t id = attach(std::move(c), parent);
+        composite_of[path] = id;
+        return id;
+    };
+    group = [&](std::size_t gi) -> std::size_t {
+        auto it = group_cluster.find(gi);
+        if (it != group_cluster.end()) return it->second;
+        const Model::Group& g = m_.groups[gi];
+        const std::size_t parent = g.parent != npos ? group(g.parent) : composite(g.owner);
+        Topo::Cluster c;
+        c.is_group = true;
+        c.name = g.label;
+        c.path = g.owner;
+        c.file = g.file;
+        c.line = g.line;
+        c.doc = g.doc;
+        const std::size_t id = attach(std::move(c), parent);
+        group_cluster[gi] = id;
         return id;
     };
 
     for (std::size_t i = 0; i < m_.leaves.size(); ++i) {
         const std::string& path = m_.leaves[i].path;
-        const std::size_t dot = path.rfind('.');
-        t.groups[ensure(dot == std::string::npos ? std::string() : path.substr(0, dot))]
-            .leaves.push_back(i);
+        // The root itself may be a leaf, and it is in no group.
+        t.clusters[path.empty() ? 0 : container(path)].leaves.push_back(i);
     }
-    for (Topo::Group& g : t.groups)
-        std::sort(g.leaves.begin(), g.leaves.end(),
+    for (Topo::Cluster& c : t.clusters)
+        std::sort(c.leaves.begin(), c.leaves.end(),
                   [&](std::size_t a, std::size_t b) { return t.rank[a] < t.rank[b]; });
 
     // ---- the root boundary the host drives ---------------------------------
@@ -2870,6 +2911,10 @@ std::string Emitter::topology_mermaid(const Topo& topo) const {
     cmt("Signal flow, as the model RUNS. Composites are flattened by now");
     cmt("(§15.2), so a subgraph is the path prefix one left behind, not a");
     cmt("runtime object. Nodes are listed in §8.5 schedule order.");
+    if (!m_.groups.empty()) {
+        cmt("A subgraph may instead be a §6.9.3 group: a labelled box with");
+        cmt("no path, drawn for the reader and absent from everything else.");
+    }
     cmt("");
     cmt("  A --> B    B's `output()` READS this input: an algebraic");
     cmt("             dependency, and what the §8.5 sort is over");
@@ -2900,7 +2945,7 @@ std::string Emitter::topology_mermaid(const Topo& topo) const {
     //  the order the tick calls them.
     std::function<void(std::size_t, const std::string&)> draw =
         [&](std::size_t g, const std::string& ind) {
-        for (std::size_t i : topo.groups[g].leaves) {
+        for (std::size_t i : topo.clusters[g].leaves) {
             const Leaf& leaf = m_.leaves[i];
             const std::size_t dot = leaf.path.rfind('.');
             std::string name = leaf.path.empty()
@@ -2911,8 +2956,8 @@ std::string Emitter::topology_mermaid(const Topo& topo) const {
             if (!topo.rate[i].empty()) text += "<br/>" + topo.rate[i];
             t << ind << id(leaf.ident) << "[" << lab(text) << "]\n";
         }
-        for (std::size_t sub : topo.groups[g].subs) {
-            t << ind << "subgraph sg" << sub << "[" << lab(topo.groups[sub].name) << "]\n";
+        for (std::size_t sub : topo.clusters[g].subs) {
+            t << ind << "subgraph sg" << sub << "[" << lab(topo.clusters[sub].name) << "]\n";
             t << ind << "    direction LR\n";
             draw(sub, ind + "    ");
             t << ind << "end\n";
@@ -3034,9 +3079,9 @@ std::string Emitter::topology_json(const Topo& topo) const {
     Out t;
     auto gid = [](std::size_t g) { return g == 0 ? std::string("null") : jstr("g" + std::to_string(g)); };
 
-    std::vector<std::size_t> group_of(m_.leaves.size(), 0);
-    for (std::size_t g = 0; g < topo.groups.size(); ++g)
-        for (std::size_t i : topo.groups[g].leaves) group_of[i] = g;
+    std::vector<std::size_t> cluster_of(m_.leaves.size(), 0);
+    for (std::size_t c = 0; c < topo.clusters.size(); ++c)
+        for (std::size_t i : topo.clusters[c].leaves) cluster_of[i] = c;
 
     t << "{\n";
     t << "\"name\": " << jstr(m_.name) << ",\n";
@@ -3044,14 +3089,21 @@ std::string Emitter::topology_json(const Topo& topo) const {
     t << "\"step\": " << jstr(dbl(m_.step)) << ",\n";
     t << "\"solver\": " << jstr(m_.solver) << ",\n";
 
-    // ---- composites ----------------------------------------------------------
-    t << "\"groups\": [";
-    for (std::size_t g = 1; g < topo.groups.size(); ++g) {
-        const Topo::Group& gr = topo.groups[g];
-        t << (g > 1 ? ",\n " : "\n ") << "{\"id\": " << gid(g) << ", \"name\": " << jstr(gr.name)
-          << ", \"path\": " << jstr(gr.path) << ", \"parent\": " << gid(gr.parent) << "}";
+    // ---- clusters: composites and §6.9.3 groups --------------------------------
+    //  A composite's `path` is its own; a group's is the composite that owns
+    //  it, and a group alone has a source location and a `doc`.
+    t << "\"clusters\": [";
+    for (std::size_t g = 1; g < topo.clusters.size(); ++g) {
+        const Topo::Cluster& c = topo.clusters[g];
+        t << (g > 1 ? ",\n " : "\n ") << "{\"id\": " << gid(g) << ", \"kind\": "
+          << (c.is_group ? "\"group\"" : "\"composite\"") << ", \"name\": " << jstr(c.name)
+          << ", \"path\": " << jstr(c.path) << ", \"parent\": " << gid(c.parent);
+        if (c.is_group)
+            t << ", \"file\": " << jstr(line_path(c.file))
+              << ", \"line\": " << static_cast<std::size_t>(c.line) << ", \"doc\": " << jopt(c.doc);
+        t << "}";
     }
-    t << (topo.groups.size() > 1 ? "\n],\n" : "],\n");
+    t << (topo.clusters.size() > 1 ? "\n],\n" : "],\n");
 
     // ---- nodes: leaves, then the terminals ------------------------------------
     //  Ids are the leaves' generated identifiers, which are unique (I5) and
@@ -3065,7 +3117,7 @@ std::string Emitter::topology_json(const Topo& topo) const {
                                      : (dot == std::string::npos ? leaf.path : leaf.path.substr(dot + 1));
         std::string r = "{\"id\": " + jstr(leaf.ident) + ", \"kind\": \"leaf\", \"name\": " + jstr(name) +
                         ", \"path\": " + jstr(leaf.path) + ", \"type\": " + jstr(leaf.node->fq) +
-                        ", \"group\": " + gid(group_of[i]) + ", \"order\": " +
+                        ", \"cluster\": " + gid(cluster_of[i]) + ", \"order\": " +
                         std::to_string(topo.rank[i]) + ", \"rate\": " + jopt(topo.rate[i]) +
                         ", \"solver\": " + jbool(leaf.has_continuous());
         if (leaf.node->file && leaf.node->def)

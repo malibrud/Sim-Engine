@@ -1,0 +1,28 @@
+﻿=== tests/ok/Groups.se ===
+model-file
+  package tests
+  node Groups  [line 6]  kind=composite
+    inputs
+      u: double(-)
+    outputs
+      y: double(-)
+      z: double(-)
+    structure
+      group #0 "Forward Path"
+      group #1 "Inner" in #0
+      group #2 "Return Path"
+      group #3 "Inner" in #2
+      node pre : Gain
+      node a : Gain   [group #0]
+        k = 2.0
+      node b : Gain   [group #1]
+      node sub : Vehicle   [group #1]
+      node c : Gain   [group #3]
+      node group : Gain
+      self.u --> pre
+      pre --> a
+      a --> b
+      b --> group
+      group --> self.y
+      group.y --> c
+      c --> self.z

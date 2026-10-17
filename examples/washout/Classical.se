@@ -173,135 +173,143 @@ node Classical {
 
     structure {
 
-        //----------------------------------
-        // Head Offset, In
-        //----------------------------------
+        /// The datum's acceleration, carried out to the head, where the
+        /// washout runs. Both channels read this, never `ain`.
+        ///
+        ///     a = ain + wdin x r + win x (win x r)
+        group "Head Offset, In" {
+            node toHead: kin.TranslateAcc (m) {
+                r = param.headPos;
+            };
+        }
 
-        // The datum's acceleration, carried out to the head. Both channels
-        // read this, never `ain`.
-        node toHead: kin.TranslateAcc (m) {
-            r = param.headPos;
-        };
+        /// The X and Y accelerations, low passed, become the steady lean that
+        /// stands in for them. `TiltCalc` inverts a = g*sin(tilt), and
+        /// `kin.EulerToQuat` puts that lean in the form the attitude channel
+        /// wants: `qTilt`.
+        group "Tilt Coordination Channel" {
+            node xyAccel: math.Vec3GetXY(m/s^2) {};
+            node tiltScale : math.Scale2 (m/s^2, -) {
+                k  = param.tltGain;
+            };
 
-        //----------------------------------
-        // Tilt Coordination Channel Nodes
-        //----------------------------------
+            node tiltLocalFilt: sig.ct.SecondOrderLowpass2 (m/s^2) {
+                wn = 3.1(rad/s);
+                z = 1.4;
+            };
+            // The lean inverts a = g*sin(tilt), and the gravity term cancels
+            // grav*sin(tilt) of it: one g, or a sustained acceleration leaves
+            // a*(1 - grav/G) in the translational channel. So `G` is not its
+            // own setting here but `grav`'s, and overriding `grav.z` reaches it.
+            node tiltCalc: TiltCalc {
+                G = param.grav.z;
+            };
+            node tiltQuat: kin.EulerToQuat {};
+        }
 
-        node xyAccel: math.Vec3GetXY(m/s^2) {};
-        node tiltScale : math.Scale2 (m/s^2, -) {
-            k  = param.tltGain;
-        };
+        /// win -> scale/limit -> high pass -> a quaternion integrator whose
+        /// leak returns it to neutral: `qWash`.
+        group "Rotation Channel" {
+            node rotScale : sig.ScaleLimit3 (rad/s) {
+                gain  = param.rotGain;
+                limit = param.rotLimit;
+            };
 
-        node tiltLocalFilt: sig.ct.SecondOrderLowpass2 (m/s^2) {
-            wn = 3.1(rad/s);
-            z = 1.4;
-        };
-        // The lean inverts a = g*sin(tilt), and the gravity term cancels
-        // grav*sin(tilt) of it: one g, or a sustained acceleration leaves
-        // a*(1 - grav/G) in the translational channel. So `G` is not its own
-        // setting here but `grav`'s, and overriding `grav.z` reaches it.
-        node tiltCalc: TiltCalc {
-            G = param.grav.z;
-        };
-        node tiltQuat: kin.EulerToQuat {};
+            node rotLocalFilt: sig.ct.SecondOrderSystem3 (rad/s) {
+                // s^2 / (s^2 + 2*zeta*wn*s + wn^2), wn = 1.02 rad/s, zeta = 1.0
+                A = { 1.0, 2.04, 1.0404 };
+                B = { 1.0, 0.0,  0.0  };
+            };
 
-        //----------------------------------
-        // Rotation Channel Nodes
-        //----------------------------------
+            // The leak is the whole rotation channel's washout:
+            // `QuatIntegrator` with the return-to-neutral folded in, so the
+            // cycle stays inside one leaf and this graph has none.
+            node rotQ: kin.QuatLeakyIntegrator {
+                wc = param.rotLeak;
+            };
+        }
 
-        node rotScale : sig.ScaleLimit3 (rad/s) {
-            gain  = param.rotGain;
-            limit = param.rotLimit;
-        };
+        /// The two channels composed, `qCmd = qWash (x) qTilt`, as a
+        /// quaternion, as Euler angles, and with its body rate:
+        ///
+        ///     wcmd = R(qTilt)^T * (w_hp - wc*log qWash)  +  w_tilt
+        group "Commanded Attitude" {
+            node qCmd: kin.MulQuatQuat {};            // qWash (x) qTilt
+            node eCmd: kin.QuatToEuler {};
 
-        node rotLocalFilt: sig.ct.SecondOrderSystem3 (rad/s) {
-            // s^2 / (s^2 + 2*zeta*wn*s + wn^2), wn = 1.02 rad/s, zeta = 1.0
-            A = { 1.0, 2.04, 1.0404 };
-            B = { 1.0, 0.0,  0.0  };
-        };
+            node wWash:  math.Diff3 (rad/s);          // w_hp - wc*log qWash
+            node tiltR:  kin.QuatToRot {};
+            node wWashT: kin.MulRotInvVec (rad/s);    // R(qTilt)^T * wWash
+            node wTilt:  kin.EulerRateToAngRate {};
+            node wCmd:   math.Sum3 (rad/s);
+        }
 
-        // The leak is the whole rotation channel's washout: `QuatIntegrator`
-        // with the return-to-neutral folded in, so the cycle stays inside one
-        // leaf and this graph has none.
-        node rotQ: kin.QuatLeakyIntegrator {
-            wc = param.rotLeak;
-        };
+        /// a -> scale/limit -> f = a - g -> + gravity through the commanded
+        /// attitude -> local high pass -> into the inertial frame -> global
+        /// high pass -> integrated twice: the head's acceleration, velocity
+        /// and position, before "Head Offset, Out" takes the lever arm off.
+        group "Translational Channel" {
+            node transScale : sig.ScaleLimit3 (m/s^2) {
+                gain  = param.trnGain;
+                limit = param.trnLimit;
+            };
+            node sf: math.Diff3 (m/s^2);             // f = a - g
 
-        //----------------------------------
-        // Commanded Attitude Nodes
-        //----------------------------------
+            // The commanded attitude, as a matrix, for both reads of it.
+            node cmdR:     kin.QuatToRot {};
+            node gBody:    kin.MulRotInvVec (m/s^2); // R(qCmd)^T * grav     B11
+            node a1:       math.Sum3 (m/s^2);        // f + R(qCmd)^T * grav
+            node toGlobal: kin.MulRotVec (m/s^2);    // platform -> inertial B13
 
-        node qCmd: kin.MulQuatQuat {};            // qWash (x) qTilt
-        node eCmd: kin.QuatToEuler {};
+            node transLocalFilt: sig.ct.SecondOrderSystem3 (m/s^2) {
+                // s^2 / (s^2 + 2*zeta*wn*s + wn^2), wn = 3.1 rad/s, zeta = 1.4
+                A = { 1.0, 8.68, 9.61 };
+                B = { 1.0, 0.0,  0.0  };
+            };
 
-        node wWash:  math.Diff3 (rad/s);          // w_hp - wc*log qWash
-        node tiltR:  kin.QuatToRot {};
-        node wWashT: kin.MulRotInvVec (rad/s);    // R(qTilt)^T * wWash
-        node wTilt:  kin.EulerRateToAngRate {};
-        node wCmd:   math.Sum3 (rad/s);
+            node transGlobalAcc: sig.ct.FirstOrderSystem3 (m/s^2) {
+                A = { 1.0, 0.2 };
+                B = { 1.0, 0.0 };
+            };
 
-        //----------------------------------
-        // Translational Channel Nodes
-        //----------------------------------
+            // PLAIN integrators, as washout_Classical.h:443-450 has them, so
+            // that `vout` is the integral of `aout` and `pout` of `vout`. The
+            // washing is the high passes' job and they have done it: `aout` is
+            // already third-order high passed. This one was a
+            // `LeakyIntegrator3` at 0.2 rad/s -- the global high pass's own
+            // pole, applied a second time -- which left `aout` alone and put
+            // `pout` up to 7.5 cm from what the C++ integrates out of the same
+            // `aout` (VerticalAccel.sim has the comparison).
+            node transGlobalVel: sig.ct.Integrator3 (m/s^2);
 
-        node transScale : sig.ScaleLimit3 (m/s^2) {
-            gain  = param.trnGain;
-            limit = param.trnLimit;
-        };
-        node sf: math.Diff3 (m/s^2);             // f = a - g
+            node transGlobalPos: sig.ct.Integrator3 (m/s);
+        }
 
-        // The commanded attitude, as a matrix, for both reads of it.
-        node cmdR:     kin.QuatToRot {};
-        node gBody:    kin.MulRotInvVec (m/s^2); // R(qCmd)^T * grav     B11
-        node a1:       math.Sum3 (m/s^2);        // f + R(qCmd)^T * grav
-        node toGlobal: kin.MulRotVec (m/s^2);    // platform -> inertial B13
+        /// Each is the head's quantity less the lever arm's share of it,
+        /// turned into the inertial frame by `cmdR`:
+        ///
+        ///     pout = p - (R r - r)
+        ///     vout = v - R (w x r)
+        ///     aout = a - R (wd x r + w x (w x r))
+        group "Head Offset, Out" {
+            node wdCmd:  sig.ct.Differentiator3 (rad/s) {
+                wc = param.wdcRoll;
+            };
 
-        node transLocalFilt: sig.ct.SecondOrderSystem3 (m/s^2) {
-            // s^2 / (s^2 + 2*zeta*wn*s + wn^2), wn = 3.1 rad/s, zeta = 1.4
-            A = { 1.0, 8.68, 9.61 };
-            B = { 1.0, 0.0,  0.0  };
-        };
+            node armR:   kin.MulRotVec (m);                 // R r
+            node armP:   math.Diff3 (m);                    // R r - r
+            node pDatum: math.Diff3 (m);
 
-        node transGlobalAcc: sig.ct.FirstOrderSystem3 (m/s^2) {
-            A = { 1.0, 0.2 };
-            B = { 1.0, 0.0 };
-        };
+            node armV:   math.Cross3 (rad/s, m);            // w x r
+            node armVG:  kin.MulRotVec (m/s);               // R (w x r)
+            node vDatum: math.Diff3 (m/s);
 
-        // PLAIN integrators, as washout_Classical.h:443-450 has them, so that
-        // `vout` is the integral of `aout` and `pout` of `vout`. The washing
-        // is the high passes' job and they have done it: `aout` is already
-        // third-order high passed. This one was a `LeakyIntegrator3` at
-        // 0.2 rad/s -- the global high pass's own pole, applied a second
-        // time -- which left `aout` alone and put `pout` up to 7.5 cm from
-        // what the C++ integrates out of the same `aout` (VerticalAccel.sim
-        // has the comparison).
-        node transGlobalVel: sig.ct.Integrator3 (m/s^2);
-
-        node transGlobalPos: sig.ct.Integrator3 (m/s);
-
-        //----------------------------------
-        // Head Offset, Out
-        //----------------------------------
-
-        // Each is the head's quantity less the lever arm's share of it,
-        // turned into the inertial frame by `cmdR`.
-        node wdCmd:  sig.ct.Differentiator3 (rad/s) {
-            wc = param.wdcRoll;
-        };
-
-        node armR:   kin.MulRotVec (m);                 // R r
-        node armP:   math.Diff3 (m);                    // R r - r
-        node pDatum: math.Diff3 (m);
-
-        node armV:   math.Cross3 (rad/s, m);            // w x r
-        node armVG:  kin.MulRotVec (m/s);               // R (w x r)
-        node vDatum: math.Diff3 (m/s);
-
-        node armT:   math.Cross3 (rad/s^2, m);          // wd x r
-        node armC:   math.CrossCross3 (rad/s, rad/s, m);// w x (w x r)
-        node armA:   math.Sum3 (m/s^2);
-        node armAG:  kin.MulRotVec (m/s^2);             // R (wd x r + w x (w x r))
-        node aDatum: math.Diff3 (m/s^2);
+            node armT:   math.Cross3 (rad/s^2, m);          // wd x r
+            node armC:   math.CrossCross3 (rad/s, rad/s, m);// w x (w x r)
+            node armA:   math.Sum3 (m/s^2);
+            node armAG:  kin.MulRotVec (m/s^2);             // R (wd x r + w x (w x r))
+            node aDatum: math.Diff3 (m/s^2);
+        }
 
         //----------------------------------
         // Signal Flow Connections

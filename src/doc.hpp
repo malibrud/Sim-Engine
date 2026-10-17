@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "diag.hpp"
+#include "lexer.hpp"
 
 namespace se {
 
@@ -32,6 +33,12 @@ struct DocOptions {
 // reported (nothing is written), 2 on a driver failure.
 int generate_docs(const std::vector<std::string>& inputs, Diagnostics& diag,
                   const DocOptions& opt);
+
+// The `///` text documenting whatever starts on `line`: the run of leading
+// lines ending directly above it, then any trailing comment on the line itself,
+// one per line. Empty when there is none. §6.9.3 reads a group's this way, for
+// the topology page, without running the `--doc` pass.
+std::string doc_comment_at(const std::vector<DocLine>& lines, std::uint32_t line);
 
 }  // namespace se
 

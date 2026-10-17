@@ -96,6 +96,8 @@ private:
     bool parse_native_list(std::vector<ast::NativeDecl>& out);
     bool parse_build_list(std::vector<ast::BuildStmt>& out);
     bool parse_structure(ast::Structure& out);
+    bool parse_structure_body(ast::Structure& out, std::size_t group);
+    bool parse_group(ast::Structure& out, std::size_t parent);
     bool parse_instance(ast::Instance& out);
     bool parse_wire_stmt(std::vector<ast::Wire>& out);
     bool parse_endpoint(ast::Endpoint& out);

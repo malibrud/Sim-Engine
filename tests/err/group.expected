@@ -1,0 +1,51 @@
+﻿error[SE0216]: duplicate group label "Path"
+  --> tests/err/group.se:12:15
+   |
+12 |         group "Path" { node b : Gain {}; }
+   |               ^^^^^^ already used by a sibling group
+   = note: first used here  [tests/err/group.se:11]
+   = help: two boxes with one title, or one box merged from two places, would each surprise the reader; give each group its own label
+
+error[SE0217]: a group's label is empty
+  --> tests/err/group.se:22:15
+   |
+22 |         group "" { node a : Gain {}; }
+   |               ^^ empty label
+   = help: the label is the box's title on the topology diagram
+
+error[SE0217]: a group's label is empty
+  --> tests/err/group.se:23:15
+   |
+23 |         group "   " { node b : Gain {}; }
+   |               ^^^^^ empty label
+   = help: the label is the box's title on the topology diagram
+
+warning[SE0218]: group "Nothing" holds no instances
+  --> tests/err/group.se:34:9
+   |
+34 |         group "Nothing" {}
+   |         ^^^^^ draws nothing
+   = note: a group draws a box around the instances declared inside it; wires placed in a group do not move, so this group does not appear on the topology diagram (§6.9.3)
+
+warning[SE0218]: group "Wires only" holds no instances
+  --> tests/err/group.se:35:9
+   |
+35 |         group "Wires only" { self.u --> a --> self.y; }
+   |         ^^^^^ draws nothing
+   = note: a group draws a box around the instances declared inside it; wires placed in a group do not move, so this group does not appear on the topology diagram (§6.9.3)
+
+warning[SE0218]: group "Also empty" holds no instances
+  --> tests/err/group.se:36:25
+   |
+36 |         group "Outer" { group "Also empty" {} }
+   |                         ^^^^^ draws nothing
+   = note: a group draws a box around the instances declared inside it; wires placed in a group do not move, so this group does not appear on the topology diagram (§6.9.3)
+
+warning[SE0218]: group "Outer" holds no instances
+  --> tests/err/group.se:36:9
+   |
+36 |         group "Outer" { group "Also empty" {} }
+   |         ^^^^^ draws nothing
+   = note: a group draws a box around the instances declared inside it; wires placed in a group do not move, so this group does not appear on the topology diagram (§6.9.3)
+
+3 errors, 4 warnings emitted

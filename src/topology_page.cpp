@@ -40,8 +40,8 @@ const char* const kPage[] = {
 <style>
 :root {
   --bg: #f7f7f5; --panel: #ffffff; --fg: #1d1d1f; --muted: #6b6b70; --line: #d6d6d2;
-  --node-bg: #ffffff; --node-stroke: #55565c; --group-bg: rgba(60, 90, 160, 0.05);
-  --group-stroke: #9aa6c2; --edge: #6d6f78; --pill-bg: #eef1f6; --rate: #8a5a00;
+  --node-bg: #ffffff; --node-stroke: #55565c; --comp-bg: rgba(60, 90, 160, 0.05);
+  --comp-stroke: #9aa6c2; --edge: #6d6f78; --pill-bg: #eef1f6; --rate: #8a5a00;
   --sel: #c2410c; --up: #2563eb; --down: #059669; --warn: #b45309;
   --font: Arial, Helvetica, sans-serif; --mono: Consolas, "SFMono-Regular", Menlo, monospace;
   color-scheme: light;
@@ -49,15 +49,15 @@ const char* const kPage[] = {
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     --bg: #17181b; --panel: #1f2024; --fg: #e8e8ea; --muted: #9a9aa2; --line: #34353b;
-    --node-bg: #23252a; --node-stroke: #a4a6ae; --group-bg: rgba(120, 150, 220, 0.07);
-    --group-stroke: #4b5675; --edge: #8e909a; --pill-bg: #2a2f3a; --rate: #e0a84a;
+    --node-bg: #23252a; --node-stroke: #a4a6ae; --comp-bg: rgba(120, 150, 220, 0.07);
+    --comp-stroke: #4b5675; --edge: #8e909a; --pill-bg: #2a2f3a; --rate: #e0a84a;
     --sel: #fb923c; --up: #60a5fa; --down: #34d399; --warn: #f59e0b; color-scheme: dark;
   }
 }
 :root[data-theme="dark"] {
   --bg: #17181b; --panel: #1f2024; --fg: #e8e8ea; --muted: #9a9aa2; --line: #34353b;
-  --node-bg: #23252a; --node-stroke: #a4a6ae; --group-bg: rgba(120, 150, 220, 0.07);
-  --group-stroke: #4b5675; --edge: #8e909a; --pill-bg: #2a2f3a; --rate: #e0a84a;
+  --node-bg: #23252a; --node-stroke: #a4a6ae; --comp-bg: rgba(120, 150, 220, 0.07);
+  --comp-stroke: #4b5675; --edge: #8e909a; --pill-bg: #2a2f3a; --rate: #e0a84a;
   --sel: #fb923c; --up: #60a5fa; --down: #34d399; --warn: #f59e0b; color-scheme: dark;
 }
 * { box-sizing: border-box; }
@@ -111,6 +111,8 @@ main { flex: 1; display: flex; min-height: 0; }
 #panel .goto { cursor: pointer; color: var(--up); font-family: var(--mono); }
 #panel .goto:hover { text-decoration: underline; }
 #panel .none { color: var(--muted); font-style: italic; }
+#panel .doc p { margin: 8px 0; line-height: 1.45; }
+#panel .doc pre { font-family: var(--mono); font-size: 12px; white-space: pre-wrap; margin: 6px 0; }
 
 #canvas text { font-family: var(--font); fill: var(--fg); }
 #canvas text[fill="#666666"] { fill: var(--muted); }
@@ -124,12 +126,14 @@ main { flex: 1; display: flex; min-height: 0; }
 #canvas .node { cursor: pointer; }
 #canvas .edge path { stroke: var(--edge); }
 #canvas .edge polygon { fill: var(--edge); stroke: var(--edge); }
-#canvas .cluster > polygon, #canvas .cluster > path { fill: var(--group-bg); stroke: var(--group-stroke); cursor: pointer; }
+#canvas .cluster > polygon, #canvas .cluster > path { fill: var(--comp-bg); stroke: var(--comp-stroke); cursor: pointer; }
 #canvas .cluster:hover > polygon, #canvas .cluster:hover > path { stroke: var(--node-stroke); }
 #canvas .cluster.sel > polygon, #canvas .cluster.sel > path { stroke: var(--sel); stroke-width: 2.5; }
 #canvas .cluster text { cursor: pointer; font-weight: bold; }
+#canvas .cluster[data-kind="group"] > polygon, #canvas .cluster[data-kind="group"] > path { fill: none; }
+#canvas .cluster[data-kind="group"] > text { font-weight: normal; }
 #canvas path.hit { stroke: transparent !important; stroke-dasharray: none; fill: none; }
-[data-node], [data-edge], [data-group] { transition: opacity .12s; }
+[data-node], [data-edge], [data-cluster] { transition: opacity .12s; }
 .hl [data-node]:not(.sel):not(.up):not(.down), .hl [data-edge]:not(.up):not(.down) { opacity: .18; }
 .hl [data-node].sel > :is(polygon, path)[stroke] { stroke: var(--sel) !important; stroke-width: 3; }
 .hl [data-node].up > :is(polygon, path)[stroke] { stroke: var(--up) !important; stroke-width: 2.2; }
@@ -162,8 +166,9 @@ main { flex: 1; display: flex; min-height: 0; }
       <div><svg width="34" height="8"><line x1="0" y1="4" x2="34" y2="4" stroke="var(--edge)" stroke-width="1.5" stroke-dasharray="5 4"/></svg>delayed: <span class="k">reaches it through a state; a loop through it is legal</span></div>
       <div><svg width="34" height="14"><rect x="2" y="2" width="30" height="10" fill="var(--node-bg)" stroke="var(--node-stroke)" stroke-width="3"/></svg>owns continuous state <span class="k">(the solver integrates it)</span></div>
       <div><svg width="34" height="14"><rect x="2" y="2" width="30" height="10" rx="5" fill="var(--pill-bg)" stroke="var(--node-stroke)"/></svg>root input / output, or a constant</div>
-      <div><svg width="34" height="14"><rect x="2" y="2" width="30" height="10" rx="2" fill="var(--group-bg)" stroke="var(--group-stroke)"/></svg>composite <span class="k">(a path prefix; flattened at run time)</span></div>
-      <div class="k">Click a node or composite for its details: <span style="color:var(--up)">what feeds it</span>, <span style="color:var(--down)">what it feeds</span>. Double-click a composite to collapse or expand it. Drag to pan, wheel to zoom.</div>
+      <div><svg width="34" height="14"><rect x="2" y="2" width="30" height="10" rx="2" fill="var(--comp-bg)" stroke="var(--comp-stroke)"/></svg>composite <span class="k">(a path prefix; flattened at run time)</span></div>
+      <div><svg width="34" height="14"><rect x="2" y="2" width="30" height="10" rx="2" fill="none" stroke="var(--comp-stroke)" stroke-dasharray="4 3"/></svg>group <span class="k">(diagram only; no path)</span></div>
+      <div class="k">Click a node, composite or group for its details: <span style="color:var(--up)">what feeds it</span>, <span style="color:var(--down)">what it feeds</span>. Double-click a composite or group to collapse or expand it. Drag to pan, wheel to zoom.</div>
     </details>
   </div>
   <aside id="panel"></aside>
@@ -183,42 +188,48 @@ const q = s => '"' + String(s).replace(/\\/g, "\\\\").replace(/"/g, '\\"') + '"'
 
 // ---- the model, indexed --------------------------------------------------------
 const byId = new Map(T.nodes.map(n => [n.id, n]));
-const groupById = new Map(T.groups.map(g => [g.id, g]));
+// Clusters are the boxes: composites (a path prefix) and section 6.9.3 groups
+// (diagram only). A group's `path` is the composite that owns it.
+const clusterById = new Map(T.clusters.map(c => [c.id, c]));
 const label = n => n.kind === "leaf" ? (n.path || "<root>") : n.name;
+const rel = (base, p) => base ? p.slice(base.length + 1) : p;
+const under = (n, cid) => { for (let c = n.cluster; c; c = clusterById.get(c).parent) if (c === cid) return true; return false; };
 for (const n of T.nodes) {
   if (n.kind === "in" || n.kind === "const") { n.ins = []; n.outs = [{ name: "out", type: n.type || "" }]; }
   if (n.kind === "out") { n.ins = [{ name: "in", type: n.type }]; n.outs = []; }
 }
 $("sub").textContent = `root ${T.root} · step ${T.step} s · ${T.solver}`;
 
-// ---- the view: what is visible, given the collapsed composites ----------------
+// ---- the view: what is visible, given the collapsed clusters ------------------
 const collapsed = new Set();
 let showDelayed = true;
 function buildView() {
-  // The outermost collapsed composite at or above `gid`, or null.
-  const hiddenBy = gid => {
+  // The outermost collapsed cluster at or above `cid`, or null.
+  const hiddenBy = cid => {
     let top = null;
-    for (let g = gid; g; g = groupById.get(g).parent) if (collapsed.has(g)) top = g;
+    for (let c = cid; c; c = clusterById.get(c).parent) if (collapsed.has(c)) top = c;
     return top;
   };
   const nodes = new Map();
-  const groups = T.groups.filter(g => hiddenBy(g.id) === null);
-  for (const g of T.groups) {
-    if (!collapsed.has(g.id) || hiddenBy(g.parent) !== null) continue;
-    const leaves = T.nodes.filter(n => n.kind === "leaf" && hiddenBy(n.group) === g.id).length;
-    nodes.set("G:" + g.id, { id: "G:" + g.id, kind: "group", gid: g.id, name: g.name, path: g.path,
-      group: g.parent, leaves, ins: [], outs: [] });
+  const clusters = T.clusters.filter(c => hiddenBy(c.id) === null);
+  for (const c of T.clusters) {
+    if (!collapsed.has(c.id) || hiddenBy(c.parent) !== null) continue;
+    const leaves = T.nodes.filter(n => n.kind === "leaf" && hiddenBy(n.cluster) === c.id).length;
+    nodes.set("G:" + c.id, { id: "G:" + c.id, kind: "collapsed", cid: c.id, ckind: c.kind, name: c.name,
+      path: c.path, cluster: c.parent, leaves, ins: [], outs: [] });
   }
+  // A leaf inside a collapsed cluster is drawn as that cluster, its ports
+  // prefixed by the leaf's path below the composite that owns the cluster.
   const rep = new Map();
   for (const n of T.nodes) {
-    const h = n.kind === "leaf" ? hiddenBy(n.group) : null;
-    if (h) rep.set(n.id, { id: "G:" + h, prefix: n.path.slice(groupById.get(h).path.length + 1) + "." });
+    const h = n.kind === "leaf" ? hiddenBy(n.cluster) : null;
+    if (h) rep.set(n.id, { id: "G:" + h, prefix: rel(clusterById.get(h).path, n.path) + "." });
     else { rep.set(n.id, { id: n.id, prefix: "" }); nodes.set(n.id, { ...n, ins: n.ins.map(p => p.name), outs: n.outs.map(p => p.name) }); }
   }
   const edges = [], seen = new Set();
   for (const e of T.edges) {
     const f = rep.get(e.from), t = rep.get(e.to);
-    if (f.prefix && t.prefix && f.id === t.id) continue;          // inside one collapsed composite
+    if (f.prefix && t.prefix && f.id === t.id) continue;          // inside one collapsed cluster
     const fromPort = f.prefix + e.fromPort, toPort = t.prefix + e.toPort;
 )SETP",
     R"SETP(    const fn = nodes.get(f.id), tn = nodes.get(t.id);
@@ -230,7 +241,7 @@ function buildView() {
     seen.add(key);
     edges.push({ from: f.id, fromPort, to: t.id, toPort, type: e.type, feedthrough: e.feedthrough });
   }
-  return { nodes: [...nodes.values()], groups, edges };
+  return { nodes: [...nodes.values()], clusters, edges };
 }
 
 // ---- DOT -------------------------------------------------------------------------
@@ -240,8 +251,8 @@ function nodeLabel(n) {
     return `<<TABLE BORDER="1" STYLE="ROUNDED" CELLBORDER="0" CELLSPACING="0" CELLPADDING="5" BGCOLOR="#eef1f6">` +
       `<TR><TD PORT="p"><B>${esc(n.name)}</B>${n.type ? `<BR/><FONT POINT-SIZE="11" COLOR="#666666">${esc(n.type)}</FONT>` : ""}</TD></TR></TABLE>>`;
   }
-  const head = n.kind === "group"
-    ? `<B>▸ ${esc(n.name)}</B><BR/><FONT POINT-SIZE="11" COLOR="#666666">composite · ${n.leaves} leaves</FONT>`
+  const head = n.kind === "collapsed"
+    ? `<B>▸ ${esc(n.name)}</B><BR/><FONT POINT-SIZE="11" COLOR="#666666">${n.ckind} · ${n.leaves} leaves</FONT>`
     : `<B>${esc(n.name)}</B><BR/><FONT POINT-SIZE="11" COLOR="#666666">${esc(n.type)}</FONT>` +
       (n.rate ? `<BR/><FONT POINT-SIZE="11" COLOR="#8a5a00">${esc(n.rate)}</FONT>` : "");
   const rows = Math.max(n.ins.length, n.outs.length);
@@ -256,7 +267,9 @@ function nodeLabel(n) {
     const b = i < n.outs.length ? `<TD PORT="o${i}" ALIGN="RIGHT"><FONT POINT-SIZE="11">${esc(n.outs[i])}</FONT></TD>` : `<TD></TD>`;
     body += `<TR>${a}${b}</TR>`;
   }
-  const style = n.kind === "group" ? ` STYLE="DASHED"` : "";
+  // Collapsed: a composite is a dashed box, a group a dashed ROUNDED one, as
+  // its open frame is.
+  const style = n.kind !== "collapsed" ? "" : n.ckind === "group" ? ` STYLE="ROUNDED,DASHED"` : ` STYLE="DASHED"`;
   return `<<TABLE BORDER="${n.solver ? 3 : 1}"${style} CELLBORDER="0" CELLSPACING="0" CELLPADDING="3" BGCOLOR="white">` +
     `<TR><TD COLSPAN="2" ALIGN="LEFT" BALIGN="LEFT" CELLPADDING="5">${head}</TD></TR>` +
     (rows ? `<HR/>${body}` : "") + `</TABLE>>`;
@@ -267,24 +280,25 @@ function toDot(view) {
     `  node [shape=plain, fontname="Arial", fontsize=13];`,
     `  edge [arrowsize=0.6, penwidth=1.2];`];
   const kids = new Map();
-  for (const g of view.groups) {
-    const p = g.parent || null;
+  for (const c of view.clusters) {
+    const p = c.parent || null;
     if (!kids.has(p)) kids.set(p, []);
-    kids.get(p).push(g);
+    kids.get(p).push(c);
   }
-  const emitNodes = (gid, ind) => {
-    for (const n of view.nodes.filter(n => (n.group || null) === gid))
+  const emitNodes = (cid, ind) => {
+    for (const n of view.nodes.filter(n => (n.cluster || null) === cid))
       L.push(`${ind}${q(n.id)} [id=${q("n:" + n.id)}, label=${nodeLabel(n)}];`);
   };
-  const emitGroup = (g, ind) => {
-    L.push(`${ind}subgraph ${q("cluster_" + g.id)} {`);
-    L.push(`${ind}  id=${q("c:" + g.id)}; label=${q("▾ " + g.name)}; style="rounded"; color="#9aa6c2"; margin=10;`);
-    emitNodes(g.id, ind + "  ");
-    for (const c of kids.get(g.id) || []) emitGroup(c, ind + "  ");
+  const emitCluster = (c, ind) => {
+    const style = c.kind === "group" ? "rounded,dashed" : "rounded";
+    L.push(`${ind}subgraph ${q("cluster_" + c.id)} {`);
+    L.push(`${ind}  id=${q("c:" + c.id)}; label=${q("▾ " + c.name)}; style="${style}"; color="#9aa6c2"; margin=10;`);
+    emitNodes(c.id, ind + "  ");
+    for (const k of kids.get(c.id) || []) emitCluster(k, ind + "  ");
     L.push(`${ind}}`);
   };
   emitNodes(null, "  ");
-  for (const g of kids.get(null) || []) emitGroup(g, "  ");
+  for (const c of kids.get(null) || []) emitCluster(c, "  ");
   const ins = view.nodes.filter(n => n.kind === "in").map(n => q(n.id));
   const outs = view.nodes.filter(n => n.kind === "out").map(n => q(n.id));
   if (ins.length) L.push(`  { rank=min; ${ins.join("; ")}; }`);
@@ -319,7 +333,10 @@ function render(keepZoom) {
     const id = e.getAttribute("id");
     if (id.startsWith("n:")) e.dataset.node = id.slice(2);
     else if (id.startsWith("e:")) e.dataset.edge = id.slice(2);
-    else if (id.startsWith("c:")) e.dataset.group = id.slice(2);
+    else if (id.startsWith("c:")) {
+      e.dataset.cluster = id.slice(2);
+      e.dataset.kind = clusterById.get(id.slice(2)).kind;
+    }
   });
   g0.querySelectorAll("[data-edge] path").forEach(p => {   // a wide, invisible hover target
     const t = p.cloneNode();
@@ -396,10 +413,10 @@ function select(id, quiet) {
   vp.classList.remove("hl");
   vp.querySelectorAll(".sel,.up,.down").forEach(e => e.classList.remove("sel", "up", "down"));
   if (!id) { $("panel").classList.remove("open"); return; }
-  if (id.startsWith("C:")) {                      // a composite's frame
-    const f = vp.querySelector(`[data-group="${CSS.escape(id.slice(2))}"]`);
+  if (id.startsWith("C:")) {                      // a cluster's open frame
+    const f = vp.querySelector(`[data-cluster="${CSS.escape(id.slice(2))}"]`);
     if (f) f.classList.add("sel");
-    if (!quiet) panelGroup(groupById.get(id.slice(2)));
+    if (!quiet) panelCluster(clusterById.get(id.slice(2)));
     return;
   }
   const E = state.view.edges, up = new Set(), down = new Set();
@@ -429,15 +446,15 @@ function select(id, quiet) {
   });
   if (!quiet) {
     const n = state.view.nodes.find(n => n.id === id);
-    if (n.kind === "group") panelGroup(groupById.get(n.gid));
+    if (n.kind === "collapsed") panelCluster(clusterById.get(n.cid));
     else panelNode(byId.get(id));
   }
 }
 function goto(id) {
-  // Reveal a node hidden inside a collapsed composite before selecting it.
+  // Reveal a node hidden inside a collapsed cluster before selecting it.
   const n = byId.get(id);
   let changed = false;
-  for (let g = n && n.group; g; g = groupById.get(g).parent) if (collapsed.delete(g)) changed = true;
+  for (let c = n && n.cluster; c; c = clusterById.get(c).parent) if (collapsed.delete(c)) changed = true;
   if (changed) render(true);
   select(id);
   const el = vp.querySelector(`[data-node="${CSS.escape(id)}"]`);
@@ -445,24 +462,24 @@ function goto(id) {
 }
 svg.addEventListener("click", ev => {
   if (drag && drag.moved) return;
-  const g = ev.target.closest("[data-node],[data-group]");
+  const g = ev.target.closest("[data-node],[data-cluster]");
   if (!g) { select(null); return; }
-  const id = g.dataset.node || "C:" + g.dataset.group;
+  const id = g.dataset.node || "C:" + g.dataset.cluster;
   select(id === state.sel ? null : id);
 });
 svg.addEventListener("dblclick", ev => {
-  const g = ev.target.closest("[data-node],[data-group]");
+  const g = ev.target.closest("[data-node],[data-cluster]");
   if (!g) return;
-  if (g.dataset.group) toggle(g.dataset.group);
+  if (g.dataset.cluster) toggle(g.dataset.cluster);
   else {
     const n = state.view.nodes.find(n => n.id === g.dataset.node);
-    if (n && n.kind === "group") toggle(n.gid);
+    if (n && n.kind === "collapsed") toggle(n.cid);
   }
 });
-function toggle(gid) {
-  collapsed.has(gid) ? collapsed.delete(gid) : collapsed.add(gid);
-  if (state.sel === "C:" + gid) state.sel = "G:" + gid;
-  else if (state.sel === "G:" + gid) state.sel = "C:" + gid;
+function toggle(cid) {
+  collapsed.has(cid) ? collapsed.delete(cid) : collapsed.add(cid);
+  if (state.sel === "C:" + cid) state.sel = "G:" + cid;
+  else if (state.sel === "G:" + cid) state.sel = "C:" + cid;
   render(true);
 }
 
@@ -510,14 +527,29 @@ function panelNode(n) {
   }
   show(h);
 }
-function panelGroup(g) {
-  const leaves = T.nodes.filter(n => n.kind === "leaf" && (n.path.startsWith(g.path + ".")));
-  let h = `<button class="close" title="Close">✕</button><h2>${esc(g.path)}</h2><div class="k">composite · ${leaves.length} leaves · a path prefix, flattened at run time (section 15.2)</div>`;
-  h += `<p><button id="tog">${collapsed.has(g.id) ? "Expand" : "Collapse"}</button></p>`;
-  h += `<h3>Settings</h3>` + settingsOf(g.path);
+// A `///` block as paragraphs; an indented line is an equation, kept as written.
+function docHtml(text) {
+  return `<div class="doc">` + text.split(/\n[ \t]*\n/).map(p => {
+    const lines = p.split("\n");
+    if (lines.every(l => /^\s/.test(l))) return `<pre>${esc(p)}</pre>`;
+    return `<p>${esc(lines.map(l => l.trim()).join(" "))}</p>`;
+  }).join("") + `</div>`;
+}
+function panelCluster(c) {
+  const leaves = T.nodes.filter(n => n.kind === "leaf" && under(n, c.id));
+  let h = `<button class="close" title="Close">✕</button>`;
+  if (c.kind === "group") {
+    h += `<h2>${esc(c.name)}</h2><div class="k">group in ${esc(c.path || "the root")} · ${leaves.length} leaves · diagram only, no path (section 6.9.3)</div>`;
+    if (c.doc) h += docHtml(c.doc);
+  } else {
+    h += `<h2>${esc(c.path)}</h2><div class="k">composite · ${leaves.length} leaves · a path prefix, flattened at run time (section 15.2)</div>`;
+  }
+  h += `<p><button id="tog">${collapsed.has(c.id) ? "Expand" : "Collapse"}</button></p>`;
+  if (c.kind === "group") h += sourceLink(c);
+  else h += `<h3>Settings</h3>` + settingsOf(c.path);
   h += `<h3>Leaves</h3>` + leaves.sort((a, b) => a.order - b.order).map(n => goLink(n.id)).join("<br>");
   show(h);
-  $("tog").onclick = () => toggle(g.id);
+  $("tog").onclick = () => toggle(c.id);
 }
 function show(h) {
   P.innerHTML = h;
@@ -531,21 +563,24 @@ P.addEventListener("click", ev => {
 
 // ---- tooltip ------------------------------------------------------------------------
 svg.addEventListener("mousemove", ev => {
-  const g = ev.target.closest("[data-node],[data-edge],[data-group]");
+  const g = ev.target.closest("[data-node],[data-edge],[data-cluster]");
   if (!g || (drag && drag.moved)) { tip.style.display = "none"; return; }
   let h = "";
+  // How a collapsed cluster is named: a composite by its path, a group by its label.
+  const cname = c => c.kind === "group" ? c.name : c.path;
   if (g.dataset.edge) {
     const e = state.view.edges[+g.dataset.edge];
-    const nm = id => { const n = state.view.nodes.find(n => n.id === id); return n.kind === "leaf" ? n.path || "<root>" : n.kind === "group" ? n.path : n.name; };
+    const nm = id => { const n = state.view.nodes.find(n => n.id === id); return n.kind === "leaf" ? n.path || "<root>" : n.kind === "collapsed" ? cname(clusterById.get(n.cid)) : n.name; };
     h = `<b>${esc(nm(e.from))}${e.fromPort !== "out" ? "." + esc(e.fromPort) : ""} → ${esc(nm(e.to))}${e.toPort !== "in" ? "." + esc(e.toPort) : ""}</b><br>${esc(e.type)}<br>` +
       `<span class="m">${e.feedthrough ? "feedthrough: orders the schedule" : "delayed: through a state, orders nothing"}</span>`;
   } else if (g.dataset.node) {
     const n = state.view.nodes.find(n => n.id === g.dataset.node);
     h = n.kind === "leaf" ? `<b>${esc(n.path || "<root>")}</b><br>${esc(n.type)}` :
-        n.kind === "group" ? `<b>${esc(n.path)}</b><br><span class="m">collapsed · double-click to expand</span>` :
+        n.kind === "collapsed" ? `<b>${esc(cname(clusterById.get(n.cid)))}</b><br><span class="m">collapsed ${n.ckind} · double-click to expand</span>` :
         `<b>${esc(n.name)}</b>${n.type ? "<br>" + esc(n.type) : ""}`;
   } else {
-    h = `<b>${esc(groupById.get(g.dataset.group).path)}</b><br><span class="m">composite · double-click to collapse</span>`;
+    const c = clusterById.get(g.dataset.cluster);
+    h = `<b>${esc(cname(c))}</b><br><span class="m">${c.kind} · double-click to collapse</span>`;
   }
   tip.innerHTML = h;
   tip.style.display = "block";
@@ -562,19 +597,21 @@ $("theme").onclick = () => {
 };
 $("delayed").onchange = () => { showDelayed = $("delayed").checked; render(true); };
 $("expand").onclick = () => { collapsed.clear(); render(); };
-$("collapse").onclick = () => { collapsed.clear(); for (const g of T.groups) if (!g.parent) collapsed.add(g.id); render(); };
+$("collapse").onclick = () => { collapsed.clear(); for (const c of T.clusters) if (!c.parent) collapsed.add(c.id); render(); };
+// Only composites have paths to find; a group is reached by what is in it.
+const composites = T.clusters.filter(c => c.kind === "composite");
 $("paths").innerHTML = T.nodes.filter(n => n.kind === "leaf").map(n => `<option value="${esc(n.path)}">`).join("") +
-  T.groups.map(g => `<option value="${esc(g.path)}">`).join("");
+  composites.map(c => `<option value="${esc(c.path)}">`).join("");
 $("find").addEventListener("change", () => {
   const v = $("find").value.trim();
   const n = T.nodes.find(n => n.kind === "leaf" && n.path === v);
   if (n) { goto(n.id); return; }
-  const g = T.groups.find(g => g.path === v);
+  const g = composites.find(c => c.path === v);
   if (g) {
-    for (let p = g.parent; p; p = groupById.get(p).parent) collapsed.delete(p);
+    for (let p = g.parent; p; p = clusterById.get(p).parent) collapsed.delete(p);
     render(true);
     select(collapsed.has(g.id) ? "G:" + g.id : "C:" + g.id);
-    const el = vp.querySelector(collapsed.has(g.id) ? `[data-node="${CSS.escape("G:" + g.id)}"]` : `[data-group="${CSS.escape(g.id)}"]`);
+    const el = vp.querySelector(collapsed.has(g.id) ? `[data-node="${CSS.escape("G:" + g.id)}"]` : `[data-cluster="${CSS.escape(g.id)}"]`);
     if (el) centerOn(el);
   }
 });

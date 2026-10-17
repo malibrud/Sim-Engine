@@ -6,5 +6,6 @@
 
 | Name | Summary |
 |---|---|
+| [`Cascade`](docfix.md#cascade) | Two lags in series, the second slower than the first. |
 | [`Lag`](docfix.md#lag) | Follows its input through a first-order lag. |
 | [`Pair`](docfix.md#pair) | A pair of values sharing one unit. |

@@ -400,6 +400,17 @@ function Check-TopologyHtml($label, $outDir, $golden) {
                 if ($ports -notcontains $end[1]) { $problems += "$($end[0]) has no port $($end[1]) on its $($end[2])" }
             }
         }
+        # Every box a leaf or a box sits in must exist, or the page's parent
+        # walks (collapse, reveal, the details panel) dereference nothing.
+        $clusters = @{}
+        foreach ($c in $t.clusters) { $clusters[$c.id] = $c }
+        foreach ($c in $t.clusters) {
+            if ($c.kind -ne 'composite' -and $c.kind -ne 'group') { $problems += "cluster $($c.id) has kind '$($c.kind)'" }
+            if ($c.parent -and -not $clusters[$c.parent]) { $problems += "cluster $($c.id)'s parent $($c.parent) is not a cluster" }
+        }
+        foreach ($n in $t.nodes) {
+            if ($n.kind -eq 'leaf' -and $n.cluster -and -not $clusters[$n.cluster]) { $problems += "leaf $($n.id)'s cluster $($n.cluster) is not a cluster" }
+        }
     }
     if ($problems.Count -gt 0) {
         Write-Host "FAIL $label : $($problems[0..([Math]::Min(3, $problems.Count) - 1)] -join '; ')" -ForegroundColor Red

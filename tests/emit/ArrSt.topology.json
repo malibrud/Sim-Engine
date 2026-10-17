@@ -3,9 +3,9 @@
 "root": "arrst.ArrSt",
 "step": "0.001",
 "solver": "rk4",
-"groups": [],
+"clusters": [],
 "nodes": [
- {"id": "root", "kind": "leaf", "name": "<root>", "path": "", "type": "arrst.ArrSt", "group": null, "order": 0, "rate": null, "solver": true, "file": "tests/emit/lib/arrst/ArrSt.se", "line": 19, "ins": [], "outs": [{"name": "sum", "type": "-"}, {"name": "tail", "type": "-"}, {"name": "first", "type": "-"}], "states": [{"name": "x", "kind": "continuous", "unit": "-", "initial": "1.0", "extent": "[param.n]", "slot": null}, {"name": "total", "kind": "continuous", "unit": "-", "initial": "0.0", "extent": null, "slot": null}, {"name": "h", "kind": "discrete", "unit": "-", "initial": "0.0", "extent": "[param.n]", "slot": null}, {"name": "tick", "kind": "discrete", "unit": "-", "initial": "0", "extent": null, "slot": null}]},
+ {"id": "root", "kind": "leaf", "name": "<root>", "path": "", "type": "arrst.ArrSt", "cluster": null, "order": 0, "rate": null, "solver": true, "file": "tests/emit/lib/arrst/ArrSt.se", "line": 19, "ins": [], "outs": [{"name": "sum", "type": "-"}, {"name": "tail", "type": "-"}, {"name": "first", "type": "-"}], "states": [{"name": "x", "kind": "continuous", "unit": "-", "initial": "1.0", "extent": "[param.n]", "slot": null}, {"name": "total", "kind": "continuous", "unit": "-", "initial": "0.0", "extent": null, "slot": null}, {"name": "h", "kind": "discrete", "unit": "-", "initial": "0.0", "extent": "[param.n]", "slot": null}, {"name": "tick", "kind": "discrete", "unit": "-", "initial": "0", "extent": null, "slot": null}]},
  {"id": "out.0", "kind": "out", "name": "out.sum", "type": "-"},
  {"id": "out.1", "kind": "out", "name": "out.tail", "type": "-"},
  {"id": "out.2", "kind": "out", "name": "out.first", "type": "-"}

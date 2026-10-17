@@ -6,8 +6,29 @@
 
 | Name | Summary |
 |---|---|
+| [`Cascade`](#cascade) | Two lags in series, the second slower than the first. |
 | [`Lag`](#lag) | Follows its input through a first-order lag. |
 | [`Pair`](#pair) | A pair of values sharing one unit. |
+
+---
+
+## Cascade
+
+`node docfix.Cascade` · composite · [source](../../../tests/doc/lib/docfix/Cascade.se)
+
+Two lags in series, the second slower than the first.
+
+### Inputs
+
+| Name | Type | Description |
+|---|---|---|
+| `vin` | `double(m)` | signal to follow |
+
+### Outputs
+
+| Name | Type | Description |
+|---|---|---|
+| `vout` | `double(m)` | twice-lagged signal |
 
 ---
 

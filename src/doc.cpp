@@ -255,6 +255,11 @@ void collect_decls(const ast::ModelFile& f, const std::string& stem, std::vector
             add(x.loc.line, &x, x.loc, "var `" + x.name + "`", false);
         for (const ast::NativeDecl& x : n.natives)
             add(x.loc.line, &x, x.loc, "native `" + x.name + "`", false);
+        // §6.9.3 — documentable so `///` above one is not SE0701, but never
+        // required and never on a reference page: a group is internal layout,
+        // and its comment is for the topology diagram.
+        for (const ast::Group& g : n.structure.groups)
+            add(g.loc.line, &g, g.loc, "group \"" + g.label + "\"", false);
     }
 }
 
@@ -803,6 +808,25 @@ int generate_docs(const std::vector<std::string>& inputs, Diagnostics& diag,
     while (ix.size() > 1 && ix[ix.size() - 1] == '\n' && ix[ix.size() - 2] == '\n') ix.pop_back();
     ok = write_text((fs::path(opt.out_dir) / "index.md").generic_string(), ix, opt.quiet) && ok;
     return ok ? 0 : 2;
+}
+
+std::string doc_comment_at(const std::vector<DocLine>& lines, std::uint32_t line) {
+    std::string out;
+    auto add = [&](const std::string& t) {
+        if (!out.empty()) out += '\n';
+        out += t;
+    };
+    // The leading run: consecutive non-trailing lines, the last directly above.
+    std::size_t end = 0;
+    while (end < lines.size() && lines[end].line < line) ++end;
+    std::size_t begin = end;
+    while (begin > 0 && !lines[begin - 1].trailing &&
+           lines[begin - 1].line + (end - begin) + 1 == line)
+        --begin;
+    for (std::size_t k = begin; k < end; ++k) add(lines[k].text);
+    for (std::size_t k = end; k < lines.size() && lines[k].line == line; ++k)
+        if (lines[k].trailing) add(lines[k].text);
+    return out;
 }
 
 }  // namespace se

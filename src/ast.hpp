@@ -201,6 +201,10 @@ struct Instance {             // node whl : Wheel { … };
     Loc unit_args_loc;
     std::vector<Binding> bindings;
     Loc loc;
+    // §6.9.3 — the innermost `group` this instance was declared in, as an
+    // index into the enclosing `Structure::groups`, or npos. Diagram-only:
+    // nothing but the topology printers reads it.
+    std::size_t group = static_cast<std::size_t>(-1);
 };
 
 struct Endpoint {             // self.port | instance.port | instance.rec.field | 0.0 (m)
@@ -237,9 +241,20 @@ struct Wire {                 // source --> dest, dest, …;
     Loc loc;
 };
 
+// §6.9.3 — `group "Tilt Channel" { … }`: a labelled box on the topology
+// diagram and nothing else. Its instances and wires stay in the flat lists
+// below, each instance pointing at its innermost group, so no stage that
+// resolves or elaborates a composite has to know groups exist.
+struct Group {
+    std::string label;
+    std::size_t parent = static_cast<std::size_t>(-1);   // npos: directly in `structure`
+    Loc loc;                                             // the `group` keyword
+};
+
 struct Structure {
     std::vector<Instance> instances;
     std::vector<Wire> wires;
+    std::vector<Group> groups;          // parents before children
 };
 
 // Presence + location of an at-most-once section (§6, SE0220).

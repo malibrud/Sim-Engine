@@ -3,17 +3,17 @@
 "root": "litwire.LitWire",
 "step": "0.001",
 "solver": "rk4",
-"groups": [
- {"id": "g1", "name": "inner", "path": "inner", "parent": null}
+"clusters": [
+ {"id": "g1", "kind": "composite", "name": "inner", "path": "inner", "parent": null}
 ],
 "nodes": [
- {"id": "s1", "kind": "leaf", "name": "s1", "path": "s1", "type": "se.math.Sum", "group": null, "order": 0, "rate": null, "solver": false, "file": "stdlib/se/math/Sum.se", "line": 11, "ins": [{"name": "a", "type": "m/s^2"}, {"name": "b", "type": "m/s^2"}], "outs": [{"name": "y", "type": "m/s^2"}], "states": []},
- {"id": "s2", "kind": "leaf", "name": "s2", "path": "s2", "type": "se.math.Sum", "group": null, "order": 1, "rate": null, "solver": false, "file": "stdlib/se/math/Sum.se", "line": 11, "ins": [{"name": "a", "type": "m/s^2"}, {"name": "b", "type": "m/s^2"}], "outs": [{"name": "y", "type": "m/s^2"}], "states": []},
- {"id": "s3", "kind": "leaf", "name": "s3", "path": "s3", "type": "se.math.Sum", "group": null, "order": 2, "rate": null, "solver": false, "file": "stdlib/se/math/Sum.se", "line": 11, "ins": [{"name": "a", "type": "m/s^2"}, {"name": "b", "type": "m/s^2"}], "outs": [{"name": "y", "type": "m/s^2"}], "states": []},
- {"id": "s4", "kind": "leaf", "name": "s4", "path": "s4", "type": "se.math.Sum", "group": null, "order": 3, "rate": null, "solver": false, "file": "stdlib/se/math/Sum.se", "line": 11, "ins": [{"name": "a", "type": "m/s^2"}, {"name": "b", "type": "m/s^2"}], "outs": [{"name": "y", "type": "m/s^2"}], "states": []},
- {"id": "s5", "kind": "leaf", "name": "s5", "path": "s5", "type": "se.math.Sum", "group": null, "order": 4, "rate": null, "solver": false, "file": "stdlib/se/math/Sum.se", "line": 11, "ins": [{"name": "a", "type": "m/s^2"}, {"name": "b", "type": "m/s^2"}], "outs": [{"name": "y", "type": "m/s^2"}], "states": []},
- {"id": "s6", "kind": "leaf", "name": "s6", "path": "s6", "type": "se.math.Sum", "group": null, "order": 6, "rate": null, "solver": false, "file": "stdlib/se/math/Sum.se", "line": 11, "ins": [{"name": "a", "type": "m/s^2"}, {"name": "b", "type": "m/s^2"}], "outs": [{"name": "y", "type": "m/s^2"}], "states": []},
- {"id": "inner_z", "kind": "leaf", "name": "z", "path": "inner.z", "type": "se.math.Sum", "group": "g1", "order": 5, "rate": null, "solver": false, "file": "stdlib/se/math/Sum.se", "line": 11, "ins": [{"name": "a", "type": "m/s^2"}, {"name": "b", "type": "m/s^2"}], "outs": [{"name": "y", "type": "m/s^2"}], "states": []},
+ {"id": "s1", "kind": "leaf", "name": "s1", "path": "s1", "type": "se.math.Sum", "cluster": null, "order": 0, "rate": null, "solver": false, "file": "stdlib/se/math/Sum.se", "line": 11, "ins": [{"name": "a", "type": "m/s^2"}, {"name": "b", "type": "m/s^2"}], "outs": [{"name": "y", "type": "m/s^2"}], "states": []},
+ {"id": "s2", "kind": "leaf", "name": "s2", "path": "s2", "type": "se.math.Sum", "cluster": null, "order": 1, "rate": null, "solver": false, "file": "stdlib/se/math/Sum.se", "line": 11, "ins": [{"name": "a", "type": "m/s^2"}, {"name": "b", "type": "m/s^2"}], "outs": [{"name": "y", "type": "m/s^2"}], "states": []},
+ {"id": "s3", "kind": "leaf", "name": "s3", "path": "s3", "type": "se.math.Sum", "cluster": null, "order": 2, "rate": null, "solver": false, "file": "stdlib/se/math/Sum.se", "line": 11, "ins": [{"name": "a", "type": "m/s^2"}, {"name": "b", "type": "m/s^2"}], "outs": [{"name": "y", "type": "m/s^2"}], "states": []},
+ {"id": "s4", "kind": "leaf", "name": "s4", "path": "s4", "type": "se.math.Sum", "cluster": null, "order": 3, "rate": null, "solver": false, "file": "stdlib/se/math/Sum.se", "line": 11, "ins": [{"name": "a", "type": "m/s^2"}, {"name": "b", "type": "m/s^2"}], "outs": [{"name": "y", "type": "m/s^2"}], "states": []},
+ {"id": "s5", "kind": "leaf", "name": "s5", "path": "s5", "type": "se.math.Sum", "cluster": null, "order": 4, "rate": null, "solver": false, "file": "stdlib/se/math/Sum.se", "line": 11, "ins": [{"name": "a", "type": "m/s^2"}, {"name": "b", "type": "m/s^2"}], "outs": [{"name": "y", "type": "m/s^2"}], "states": []},
+ {"id": "s6", "kind": "leaf", "name": "s6", "path": "s6", "type": "se.math.Sum", "cluster": null, "order": 6, "rate": null, "solver": false, "file": "stdlib/se/math/Sum.se", "line": 11, "ins": [{"name": "a", "type": "m/s^2"}, {"name": "b", "type": "m/s^2"}], "outs": [{"name": "y", "type": "m/s^2"}], "states": []},
+ {"id": "inner_z", "kind": "leaf", "name": "z", "path": "inner.z", "type": "se.math.Sum", "cluster": "g1", "order": 5, "rate": null, "solver": false, "file": "stdlib/se/math/Sum.se", "line": 11, "ins": [{"name": "a", "type": "m/s^2"}, {"name": "b", "type": "m/s^2"}], "outs": [{"name": "y", "type": "m/s^2"}], "states": []},
  {"id": "out.0", "kind": "out", "name": "out.s6.y", "type": "m/s^2"},
  {"id": "const.0", "kind": "const", "name": "5.0"},
  {"id": "const.1", "kind": "const", "name": "7.0"},

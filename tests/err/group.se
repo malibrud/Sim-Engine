@@ -1,0 +1,38 @@
+// §6.9.3 — SE0216 a label used twice by sibling groups, SE0217 an empty label,
+// SE0218 (a warning) a group that holds no instances, including one that holds
+// only wires: wires do not move, so it would draw nothing.
+package tests;
+
+node DupLabel {
+    inputs  { u: double(-); }
+    outputs { y: double(-); }
+
+    structure {
+        group "Path" { node a : Gain {}; }
+        group "Path" { node b : Gain {}; }
+        self.u --> a --> b --> self.y;
+    }
+}
+
+node EmptyLabel {
+    inputs  { u: double(-); }
+    outputs { y: double(-); }
+
+    structure {
+        group "" { node a : Gain {}; }
+        group "   " { node b : Gain {}; }
+        self.u --> a --> b --> self.y;
+    }
+}
+
+node EmptyGroup {
+    inputs  { u: double(-); }
+    outputs { y: double(-); }
+
+    structure {
+        node a : Gain {};
+        group "Nothing" {}
+        group "Wires only" { self.u --> a --> self.y; }
+        group "Outer" { group "Also empty" {} }
+    }
+}

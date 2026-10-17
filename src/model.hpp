@@ -465,6 +465,22 @@ struct Model {
     RecordConfig record;
     LogConfig log;
 
+    // §6.9.3 — every `group` of every composite instance, diagram-only. A
+    // composite instantiated twice contributes its groups twice, once per
+    // `owner`. Parents precede their children.
+    struct Group {
+        std::string owner;             // the composite's path, "" for the root
+        std::string label;
+        std::size_t parent = static_cast<std::size_t>(-1);   // npos: directly in `owner`
+        std::string file;              // where the `group` keyword is
+        std::uint32_t line = 0;
+        std::string doc;               // its `///` block, lines joined by '\n'
+    };
+    std::vector<Group> groups;
+    // Child instance path ("fl.whl", leaf or composite) -> its innermost group.
+    // An instance declared outside every group has no entry.
+    std::map<std::string, std::size_t> instance_group;
+
     const Program* program = nullptr;
 };
 

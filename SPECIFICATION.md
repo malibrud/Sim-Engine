@@ -308,9 +308,9 @@ node Lag {
 - A `///` that follows other text on its line documents the declaration that
   begins on that line.
 - The declarations that may be documented are `node`, `type`, unit parameters,
-  settings, inputs, outputs, states, `vars`, `native` members and record
-  fields. A doc comment that documents none of them is `SE0701`; one whose line
-  begins more than one is `SE0703`.
+  settings, inputs, outputs, states, `vars`, `native` members, record fields,
+  and a composite's `group`s (§6.9.3). A doc comment that documents none of
+  them is `SE0701`; one whose line begins more than one is `SE0703`.
 
 A `///` inside a verbatim region is C++ text and is never a doc comment.
 
@@ -778,7 +778,7 @@ There is exactly one `node` concept, and its kind is **inferred**:
   must have no outputs, since nothing could compute them.
 
 A composite **declares no states and no code**. Its state is the union of its
-descendants'. That falls directly out of the design intent — a group node "just
+descendants'. That falls directly out of the design intent — a composite "just
 groups and aggregates" and should never do real work — and it is what lets the
 composite leave no runtime trace at all (§15.2).
 
@@ -1645,9 +1645,9 @@ binding    := identifier '=' expression ';'
   Flow-down goes strictly parent → child.
 - Binding an unknown setting, or binding one twice, is an error (`SE0441`).
 
-Why declarative and not imperative: under an imperative scheme, every group node
+Why declarative and not imperative: under an imperative scheme, every composite
 would need hand-written C++ solely to pass a number down, which contradicts §6.1
-— a group node does no work. Declarative flow-down also makes required settings
+— a composite does no work. Declarative flow-down also makes required settings
 statically checkable, and keeps the flow-down graph *visible to the compiler*,
 which is what lets §6.2b re-evaluate it in dependency order at configuration
 without the user writing an ordering anywhere.
@@ -1830,6 +1830,71 @@ endpoint := ( 'self' | identifier ) { '.' identifier }
   input-to-input wire is an error (`SE0443`), except through `self`, where
   `self.<input>` is a source and `self.<output>` is a destination — the boundary's
   polarity is inverted from the inside, as it must be.
+
+#### 6.9.3 Groups
+
+A large composite has sections — a filter's translational, rotational and tilt
+channels, say — and a reader of its topology diagram wants to see them. A
+**group** draws a labelled box around some of a composite's children:
+
+```
+structure {
+    /// The X and Y accelerations, low passed, become the steady lean that
+    /// stands in for them.
+    group "Tilt Channel" {
+        node xyAccel:  math.Vec3GetXY (m/s^2) {};
+        node tiltCalc: TiltCalc { G = param.grav.z; };
+        node tiltQuat: kin.EulerToQuat {};
+    }
+
+    group "Head Offset, Out" { ... }
+
+    toHead --> xyAccel;
+    tiltCalc.tilt --> tiltQuat;
+}
+```
+
+```
+group := 'group' string '{' { instance | wire | group } '}'
+```
+
+- **A group is diagram-only.** It changes no path, no generated identifier, no
+  setting, no `.sim` address and no §8.5 order: `xyAccel` above is still
+  `xyAccel`, never `tilt.xyAccel`. Deleting every group from a model changes
+  the topology outputs (§15) and nothing else. That is the whole point of the
+  construct and its whole limit. A section that should have its own settings,
+  ports or path is a child composite, which already exists; a group is for
+  the case where the sections are too cross-wired to be worth the ports.
+- **`group` is a contextual keyword.** Inside `structure`, an identifier
+  followed by a string literal is never a wire or an instance, so `group` is
+  recognised only there and stays legal as an instance name: `node group : Gain;`
+  and `group --> b;` mean what they always did.
+- **The label is a string literal** (§3.6), because it is a title for a person
+  to read, and a title has spaces and commas in it. Nothing refers to a group,
+  so it needs no identifier.
+- **Membership is by declaration.** An instance belongs to the innermost group
+  its `node` statement is written in, so it is in at most one, which is also
+  all a Graphviz cluster allows. Wires may be written inside a group, beside the
+  nodes they connect, but a wire belongs to no group: it is drawn between its
+  endpoints, wherever they are.
+- **Groups nest to any depth**, and a child composite declared in a group is
+  drawn inside it. A group's box holds its members together on the page, so one
+  group around two sections that sit at opposite ends of the signal flow folds
+  the layout back on itself. Two sibling groups do not.
+- **A group documents.** A `///` block directly above one (§3.2) is shown with
+  it on the topology page. It is never required (`SE0702` is about public
+  interfaces), and `sec --doc` does not publish it: a reference page documents
+  what a node offers, and a group is how its inside is laid out.
+
+Three mistakes are caught at stage 2, because each would otherwise surface as a
+puzzling picture rather than a message:
+
+- A label used twice by **sibling** groups is an error (`SE0216`). Two boxes
+  with one title, and one box merged from two places, would each surprise the
+  reader. The same label under different parents is fine.
+- An empty label, or one of only blanks, is an error (`SE0217`).
+- A group that declares no instances is a **warning** (`SE0218`). It draws
+  nothing, and if it holds wires, its author probably expected them to move.
 
 ### 6.10 Accessors
 
@@ -3940,11 +4005,14 @@ of thing wearing the same name.
 | `SE0208` | 2 | Expected `;` |
 | `SE0209` | 2 | Unbalanced braces at end of file |
 | `SE0210` | 2 | Wildcard import is not supported |
-| `SE0211` | 2 | Expected a wire, an instance, or `}` in `structure` |
+| `SE0211` | 2 | Expected a wire, an instance, a `group`, or `}` in `structure` |
 | `SE0212` | 2 | Malformed wire endpoint |
 | `SE0213` | 2 | Expected `-->` |
 | `SE0214` | 2 | An interior endpoint of a wire chain is not a bare instance name |
 | `SE0215` | 2 | A literal wire endpoint is a destination |
+| `SE0216` | 2 | Two sibling groups share a label |
+| `SE0217` | 2 | A group's label is empty |
+| `SE0218` | 2 | A group declares no instances (warning) |
 | `SE0220` | 2 | Duplicate section in a node |
 | `SE0221` | 2 | Unknown section name |
 | `SE0230` | 2 | State kind (`continuous`/`discrete`) omitted |

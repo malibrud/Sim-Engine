@@ -1,0 +1,19 @@
+// A composite with a documented group. The group's `///` block is for the
+// topology diagram: it must attach (no SE0701) and must NOT appear on the
+// reference page, which documents interfaces, not internal layout.
+package docfix;
+
+/// Two lags in series, the second slower than the first.
+node Cascade {
+    inputs  { vin: double(m); }    /// signal to follow
+    outputs { vout: double(m); }   /// twice-lagged signal
+
+    structure {
+        /// UNPUBLISHED: this sentence must never reach docfix.md.
+        group "Lags" {
+            node a : Lag (m) { gain = 1.0; };
+            node b : Lag (m) { gain = 1.0; tau = 1.0; };
+        }
+        self --> a --> b --> self;
+    }
+}
