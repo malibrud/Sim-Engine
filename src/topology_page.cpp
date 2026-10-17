@@ -134,7 +134,9 @@ main { flex: 1; display: flex; min-height: 0; }
 #canvas .cluster[data-kind="group"] > text { font-weight: normal; }
 #canvas path.hit { stroke: transparent !important; stroke-dasharray: none; fill: none; }
 [data-node], [data-edge], [data-cluster] { transition: opacity .12s; }
-.hl [data-node]:not(.sel):not(.up):not(.down), .hl [data-edge]:not(.up):not(.down) { opacity: .18; }
+.hl [data-node]:not(.sel):not(.up):not(.down), .hl [data-edge]:not(.sel):not(.up):not(.down) { opacity: .18; }
+.hl [data-edge].sel path:not(.hit) { stroke: var(--sel) !important; stroke-width: 3; }
+.hl [data-edge].sel polygon { fill: var(--sel) !important; stroke: var(--sel) !important; }
 .hl [data-node].sel > :is(polygon, path)[stroke] { stroke: var(--sel) !important; stroke-width: 3; }
 .hl [data-node].up > :is(polygon, path)[stroke] { stroke: var(--up) !important; stroke-width: 2.2; }
 .hl [data-node].down > :is(polygon, path)[stroke] { stroke: var(--down) !important; stroke-width: 2.2; }
@@ -168,7 +170,7 @@ main { flex: 1; display: flex; min-height: 0; }
       <div><svg width="34" height="14"><rect x="2" y="2" width="30" height="10" rx="5" fill="var(--pill-bg)" stroke="var(--node-stroke)"/></svg>root input / output, or a constant</div>
       <div><svg width="34" height="14"><rect x="2" y="2" width="30" height="10" rx="2" fill="var(--comp-bg)" stroke="var(--comp-stroke)"/></svg>composite <span class="k">(a path prefix; flattened at run time)</span></div>
       <div><svg width="34" height="14"><rect x="2" y="2" width="30" height="10" rx="2" fill="none" stroke="var(--comp-stroke)" stroke-dasharray="4 3"/></svg>group <span class="k">(diagram only; no path)</span></div>
-      <div class="k">Click a node, composite or group for its details: <span style="color:var(--up)">what feeds it</span>, <span style="color:var(--down)">what it feeds</span>. Double-click a composite or group to collapse or expand it. Drag to pan, wheel to zoom.</div>
+      <div class="k">Click a node, wire, composite or group for its details: <span style="color:var(--up)">what feeds it</span>, <span style="color:var(--down)">what it feeds</span>. Double-click a composite or group to collapse or expand it. Drag to pan, wheel to zoom.</div>
     </details>
   </div>
   <aside id="panel"></aside>
@@ -239,7 +241,9 @@ function buildView() {
     const key = [f.id, fromPort, t.id, toPort].join("|");
     if (seen.has(key)) continue;
     seen.add(key);
-    edges.push({ from: f.id, fromPort, to: t.id, toPort, type: e.type, feedthrough: e.feedthrough });
+    // `wire` is the model's own edge, for the details panel: a collapsed
+    // cluster's prefixed port says where a wire goes, not what it connects.
+    edges.push({ from: f.id, fromPort, to: t.id, toPort, type: e.type, feedthrough: e.feedthrough, key, wire: e });
   }
   return { nodes: [...nodes.values()], clusters, edges };
 }
@@ -348,7 +352,7 @@ function render(keepZoom) {
   state.w = vb[2]; state.h = vb[3];
   const leaves = state.view.nodes.filter(n => n.kind === "leaf").length;
   $("stat").textContent = `${leaves} of ${T.nodes.filter(n => n.kind === "leaf").length} leaves shown · ${(performance.now() - t0).toFixed(0)} ms`;
-  if (state.sel && !document.querySelector(`[data-node="${CSS.escape(state.sel)}"]`)) select(null);
+  if (state.sel && !selected(state.sel)) select(null);
   else select(state.sel, true);
   if (!keepZoom) home();
 }
@@ -408,15 +412,39 @@ addEventListener("pointermove", ev => {
 addEventListener("pointerup", () => { setTimeout(() => { drag = null; }, 0); svg.classList.remove("dragging"); });
 
 // ---- selection: highlight + details panel -----------------------------------------
+//  An id is a node's, "C:<cluster>" for an open cluster's frame, or
+//  "E:<key>" for a wire. A wire is held by its endpoints and ports rather than
+//  its index, because the index changes whenever the view is rebuilt.
+const edgeIndex = key => state.view.edges.findIndex(e => e.key === key);
+function selected(id) {
+  if (id.startsWith("C:")) return vp.querySelector(`[data-cluster="${CSS.escape(id.slice(2))}"]`);
+  if (id.startsWith("E:")) {
+    const i = edgeIndex(id.slice(2));
+    return i < 0 ? null : vp.querySelector(`[data-edge="${i}"]`);
+  }
+  return vp.querySelector(`[data-node="${CSS.escape(id)}"]`);
+}
 function select(id, quiet) {
   state.sel = id;
   vp.classList.remove("hl");
   vp.querySelectorAll(".sel,.up,.down").forEach(e => e.classList.remove("sel", "up", "down"));
   if (!id) { $("panel").classList.remove("open"); return; }
   if (id.startsWith("C:")) {                      // a cluster's open frame
-    const f = vp.querySelector(`[data-cluster="${CSS.escape(id.slice(2))}"]`);
+    const f = selected(id);
     if (f) f.classList.add("sel");
     if (!quiet) panelCluster(clusterById.get(id.slice(2)));
+    return;
+  }
+  if (id.startsWith("E:")) {                      // one wire: it and its two ends
+    const e = state.view.edges[edgeIndex(id.slice(2))];
+    if (!e) return;
+    vp.classList.add("hl");
+    selected(id).classList.add("sel");
+    vp.querySelectorAll("[data-node]").forEach(g => {
+      if (g.dataset.node === e.from) g.classList.add("up");
+      else if (g.dataset.node === e.to) g.classList.add("down");
+    });
+    if (!quiet) panelEdge(e);
     return;
   }
   const E = state.view.edges, up = new Set(), down = new Set();
@@ -462,9 +490,9 @@ function goto(id) {
 }
 svg.addEventListener("click", ev => {
   if (drag && drag.moved) return;
-  const g = ev.target.closest("[data-node],[data-cluster]");
+  const g = ev.target.closest("[data-node],[data-edge],[data-cluster]");
   if (!g) { select(null); return; }
-  const id = g.dataset.node || "C:" + g.dataset.cluster;
+  const id = g.dataset.node || (g.dataset.edge ? "E:" + state.view.edges[+g.dataset.edge].key : "C:" + g.dataset.cluster);
   select(id === state.sel ? null : id);
 });
 svg.addEventListener("dblclick", ev => {
@@ -525,6 +553,24 @@ function panelNode(n) {
     h += `<h3>States</h3>` + (n.states.length ? `<table>${n.states.map(s =>
       `<tr><td>${esc(s.name)}${s.extent ? ` <span class="k">[${esc(s.extent)}]</span>` : ""}<div class="from">${s.kind}${s.slot !== null ? " · x[" + s.slot + "]" : ""}</div></td><td class="v">${esc(s.initial)}</td><td class="u">${esc(s.unit)}</td></tr>`).join("")}</table>` : `<p class="none">none</p>`);
   }
+  show(h);
+}
+// A wire: the model's own endpoints, even when one is drawn as a collapsed cluster.
+function panelEdge(e) {
+  const w = e.wire, src = byId.get(w.from), dst = byId.get(w.to);
+  const text = (n, port, dflt) => label(n) + (port !== dflt ? "." + port : "");
+  const link = (n, port, dflt) => goLink(n.id) + (port !== dflt ? "." + esc(port) : "");
+  const portType = (n, side, port) => { const p = n[side].find(p => p.name === port); return p ? p.type : ""; };
+  const st = portType(src, "outs", w.fromPort), dt = portType(dst, "ins", w.toPort);
+  let h = `<button class="close" title="Close">✕</button><h2>${esc(text(src, w.fromPort, "out"))} → ${esc(text(dst, w.toPort, "in"))}</h2>`;
+  h += `<div class="k">wire · ${esc(w.type)}${w.type !== dt ? " · converted on the way" : ""}</div>`;
+  h += `<table><tr><td>from</td><td>${link(src, w.fromPort, "out")}</td><td class="u">${esc(st)}</td></tr>` +
+    `<tr><td>to</td><td>${link(dst, w.toPort, "in")}</td><td class="u">${esc(dt)}</td></tr></table>`;
+  h += `<h3>Ordering</h3><p>${w.feedthrough
+    ? "Feedthrough: the destination's <code>output()</code> reads this input, so the source runs first in the section 8.5 schedule."
+    : "Delayed: the destination reads it only through a state, so it orders nothing, and a loop through it is legal (section 8.6)."}</p>`;
+  if (e.from !== w.from || e.to !== w.to)
+    h += `<p class="k">Drawn to or from a collapsed cluster; expand it to see the wire's own end.</p>`;
   show(h);
 }
 // A `///` block as paragraphs; an indented line is an equation, kept as written.
