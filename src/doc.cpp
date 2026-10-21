@@ -230,7 +230,7 @@ void collect_decls(const ast::ModelFile& f, const std::string& stem, std::vector
     };
     for (const ast::TypeDef& t : f.types) {
         const bool pub = t.name == stem;
-        add(t.loc.line, &t, t.loc, "type `" + t.name + "`", pub, true);
+        add(t.start_line ? t.start_line : t.loc.line, &t, t.loc, "type `" + t.name + "`", pub, true);
         for (const ast::UnitParamDecl& u : t.unit_params)
             add(u.loc.line, &u, u.loc, "unit parameter `" + u.name + "`", false);
         for (const ast::FieldDecl& x : t.fields)
@@ -238,7 +238,7 @@ void collect_decls(const ast::ModelFile& f, const std::string& stem, std::vector
     }
     for (const ast::NodeDef& n : f.nodes) {
         const bool pub = n.name == stem;
-        add(n.loc.line, &n, n.loc, "node `" + n.name + "`", pub, true);
+        add(n.start_line ? n.start_line : n.loc.line, &n, n.loc, "node `" + n.name + "`", pub, true);
         for (const ast::UnitParamDecl& u : n.unit_params)
             add(u.loc.line, &u, u.loc, "unit parameter `" + u.name + "`", false);
         for (const ast::SettingDecl& s : n.settings)
@@ -259,7 +259,7 @@ void collect_decls(const ast::ModelFile& f, const std::string& stem, std::vector
         // required and never on a reference page: a group is internal layout,
         // and its comment is for the topology diagram.
         for (const ast::Group& g : n.structure.groups)
-            add(g.loc.line, &g, g.loc, "group \"" + g.label + "\"", false);
+            add(g.start_line ? g.start_line : g.loc.line, &g, g.loc, "group \"" + g.label + "\"", false);
     }
 }
 
@@ -271,17 +271,35 @@ void attach(FileDocs& fd, Diagnostics& diag) {
     std::map<std::uint32_t, std::vector<const Decl*>> by_line;
     for (const Decl& d : decls) by_line[d.line].push_back(&d);
 
+    // §6.15 — the lines where an annotated declaration's keyword sits. Such a
+    // declaration begins at its first annotation, so a `///` aimed at the
+    // keyword has slipped between the two.
+    std::set<std::uint32_t> annotated;
+    for (const ast::TypeDef& t : fd.file->types)
+        if (t.start_line && t.start_line != t.loc.line) annotated.insert(t.loc.line);
+    for (const ast::NodeDef& n : fd.file->nodes) {
+        if (n.start_line && n.start_line != n.loc.line) annotated.insert(n.loc.line);
+        for (const ast::Group& g : n.structure.groups)
+            if (g.start_line && g.start_line != g.loc.line) annotated.insert(g.loc.line);
+    }
+
     const std::vector<DocLine>& lines = fd.file->doc_lines;
     auto target = [&](std::uint32_t line, const DocLine& first, bool trailing) -> const Decl* {
         const auto it = by_line.find(line);
         if (it == by_line.end()) {
+            std::vector<Attachment> att;
+            att.push_back(note("a `///` block documents the declaration directly below it; a "
+                               "trailing `///` documents the declaration on its own line "
+                               "(\xc2\xa7""3.2)"));
+            if (annotated.count(line))
+                att.push_back(help("this declaration begins at its annotation, so its doc "
+                                   "comment goes above the `@` (\xc2\xa7""6.15)"));
+            else
+                att.push_back(help("use `//` for a comment that is not documentation"));
             diag.error("SE0701", *fd.src, doc_loc(first), "doc comment documents nothing",
                        trailing ? "no declaration starts on this line"
                                 : "no declaration on the line below",
-                       {note("a `///` block documents the declaration directly below it; a "
-                             "trailing `///` documents the declaration on its own line "
-                             "(\xc2\xa7""3.2)"),
-                        help("use `//` for a comment that is not documentation")});
+                       std::move(att));
             return nullptr;
         }
         if (it->second.size() > 1) {

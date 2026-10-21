@@ -4,7 +4,7 @@
 "step": "0.001",
 "solver": "rk4",
 "clusters": [
- {"id": "g1", "kind": "composite", "name": "bq3", "path": "bq3", "parent": null}
+ {"id": "g1", "kind": "composite", "name": "bq3", "path": "bq3", "parent": null, "collapsed": true}
 ],
 "nodes": [
  {"id": "src", "kind": "leaf", "name": "src", "path": "src", "type": "contbq.ContBq#Step", "cluster": null, "order": 0, "rate": null, "solver": false, "file": "tests/emit/lib/contbq/ContBq.se", "line": 66, "ins": [], "outs": [{"name": "u", "type": "-"}], "states": []},

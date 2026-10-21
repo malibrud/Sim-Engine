@@ -1,15 +1,21 @@
 // A composite with a documented group. The group's `///` block is for the
 // topology diagram: it must attach (no SE0701) and must NOT appear on the
 // reference page, which documents interfaces, not internal layout.
+//
+// Both are annotated (§6.15). A declaration begins at its first annotation,
+// so each `///` above an `@diagram` still documents the declaration below,
+// and the annotation itself never reaches the page.
 package docfix;
 
 /// Two lags in series, the second slower than the first.
+@diagram(collapsed)
 node Cascade {
     inputs  { vin: double(m); }    /// signal to follow
     outputs { vout: double(m); }   /// twice-lagged signal
 
     structure {
         /// UNPUBLISHED: this sentence must never reach docfix.md.
+        @diagram(collapsed)
         group "Lags" {
             node a : Lag (m) { gain = 1.0; };
             node b : Lag (m) { gain = 1.0; tau = 1.0; };

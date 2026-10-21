@@ -78,6 +78,14 @@ private:
     ast::ExprPtr parse_primary();
     bool parse_bindings(std::vector<ast::Binding>& out);
 
+    // ─── Annotations (§6.15) ─────────────────────────────────────────────────
+    // Where an annotation sits; the key table says which keys each site takes.
+    enum class AnnotSite { Definition, Type, Group, Instance };
+    bool parse_annotations(std::vector<ast::Annotation>& out);
+    void apply_annotations(const std::vector<ast::Annotation>& in, AnnotSite site,
+                           ast::DiagramHints& out);
+    void stray_annotations(const std::vector<ast::Annotation>& in, const char* caret);
+
     // ─── Model file ──────────────────────────────────────────────────────────
     bool parse_type_def(ast::TypeDef& out);
     bool parse_node_def(ast::NodeDef& out);
@@ -97,7 +105,8 @@ private:
     bool parse_build_list(std::vector<ast::BuildStmt>& out);
     bool parse_structure(ast::Structure& out);
     bool parse_structure_body(ast::Structure& out, std::size_t group);
-    bool parse_group(ast::Structure& out, std::size_t parent);
+    bool parse_group(ast::Structure& out, std::size_t parent,
+                     std::vector<ast::Annotation> annotations);
     bool parse_instance(ast::Instance& out);
     bool parse_wire_stmt(std::vector<ast::Wire>& out);
     bool parse_endpoint(ast::Endpoint& out);

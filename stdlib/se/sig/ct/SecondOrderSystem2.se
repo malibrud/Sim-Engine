@@ -3,6 +3,7 @@ package se.sig.ct;
 use se.math;
 use se.sig.ct;
 
+@diagram(collapsed)
 node SecondOrderSystem2 {
     units { U; }
 

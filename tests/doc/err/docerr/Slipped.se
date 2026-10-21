@@ -1,0 +1,19 @@
+package docerr;
+
+/// A composite whose second doc block slipped below its annotation.
+@diagram(collapsed)
+/// Between the annotation and the keyword, so it documents nothing.
+node Slipped {
+    inputs  {
+        a: double(-);    /// the first operand
+        b: double(-);    /// the second operand
+    }
+    outputs { y: double(-); }                 /// the sum, scaled
+
+    structure {
+        node s : Bad;
+        self.a --> s.a;
+        self.b --> s.b;
+        s --> self;
+    }
+}

@@ -1,0 +1,32 @@
+// §6.15 — SE0321, at stage 3: a leaf is one box already, so neither its
+// definition nor an instance of it may say `collapsed` or `expanded`. The
+// definition reports once however often it is used; each instance reports
+// for itself.
+package collbad;
+
+use se.math;
+
+node CollBad {
+    inputs  { u: double(-); }
+    outputs { y: double(-); }
+
+    structure {
+        @diagram(collapsed) node s : math.Sum (-);
+        @diagram(expanded)  node t : math.Sum (-);
+        node l1 : Leafy;
+        node l2 : Leafy;
+        self --> s.a;
+        0.0  --> s.b;
+        s --> t.a;
+        0.0  --> t.b;
+        t --> l1 --> l2 --> self;
+    }
+}
+
+@diagram(collapsed)
+node Leafy {
+    inputs  { u: double(-); }
+    outputs { y: double(-); }
+
+    output(u) { out.y = in.u; }
+}

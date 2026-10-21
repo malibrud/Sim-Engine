@@ -619,6 +619,13 @@ NodeInfo* Resolver::resolve_node(FileInfo& file, const ast::NodeDef& def,
                           "at all (§6.1, §15.2)"),
                      help("move the code into a child leaf node")});
     }
+    // §6.15 — only a composite has a box to collapse.
+    if (!def.is_composite() && def.diagram.collapse != ast::DiagramHints::Collapse::Unset)
+        diag_.error("SE0321", *file.src, def.diagram.collapse_loc,
+                    "`collapsed` on node `" + def.name + "`, which is not a composite",
+                    "a leaf is drawn as one box already",
+                    {note("`@diagram(collapsed)` starts a composite's box closed on the "
+                          "topology page (§6.15)")});
 
     for (const ast::SettingDecl& s : def.settings) {
         NodeInfo::SettingInfo si;
@@ -721,6 +728,19 @@ NodeInfo* Resolver::resolve_node(FileInfo& file, const ast::NodeDef& def,
         const NodeInfo* child =
             resolve_node_ref(file, inst.definition, *file.src, inst.definition.loc);
         if (child) info->children[inst.name] = child;
+        // §6.15 — as for a definition. Kind is syntactic (§6.1), so a child
+        // still being resolved (SE0312) already knows it.
+        if (child && child->def && !child->def->is_composite() &&
+            inst.diagram.collapse != ast::DiagramHints::Collapse::Unset) {
+            const bool c = inst.diagram.collapse == ast::DiagramHints::Collapse::Collapsed;
+            diag_.error("SE0321", *file.src, inst.diagram.collapse_loc,
+                        std::string("`") + (c ? "collapsed" : "expanded") + "` on instance `" +
+                            inst.name + "`, whose node `" + child->fq + "` is not a composite",
+                        "a leaf is drawn as one box already",
+                        {note("`@diagram(" + std::string(c ? "collapsed" : "expanded") +
+                              ")` sets whether a composite's box starts closed on the "
+                              "topology page (§6.15)")});
+        }
     }
 
     check_node(*info);

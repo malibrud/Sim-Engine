@@ -58,6 +58,7 @@ const char* describe(Tok k) {
         case Tok::Slash:          return "`/`";
         case Tok::Caret:          return "`^`";
         case Tok::Percent:        return "`%`";
+        case Tok::At:             return "`@`";
     }
     return "a token";
 }
@@ -375,6 +376,7 @@ Token Lexer::next() {
         case '/': return one(Tok::Slash);
         case '^': return one(Tok::Caret);
         case '%': return one(Tok::Percent);
+        case '@': return one(Tok::At);
         case '~':
             // `~=` is the tolerant comparison in a `tests` set (§6.13). A bare
             // `~` is not a token, and saying so beats the generic message.

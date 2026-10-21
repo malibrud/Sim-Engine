@@ -1,0 +1,28 @@
+﻿=== tests/ok/Annot.se ===
+model-file
+  package tests
+  node Mechanics  [line 8]  kind=composite  @diagram(collapsed)
+    inputs
+      u: double(-)
+    outputs
+      y: double(-)
+    structure
+      node g : Gain
+      self --> g
+      g --> self
+  node Spread  [line 24]  kind=composite  @diagram(collapsed)
+    inputs
+      u: double(-)
+    outputs
+      y: double(-)
+    structure
+      group #0 "Tail"  @diagram(collapsed)
+      node m1 : Mechanics  @diagram(expanded)
+      node m2 : Mechanics  @diagram(collapsed)
+      node m3 : Mechanics   [group #0]
+      node m4 : Mechanics   [group #0]  @diagram(collapsed)
+      self --> m1
+      m1 --> m2
+      m2 --> m3
+      m3 --> m4
+      m4 --> self

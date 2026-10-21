@@ -206,7 +206,9 @@ void Parser::recover_in_node_body() {
 void Parser::recover_to_definition() {
     int depth = 0;
     while (!at_end()) {
-        if (depth == 0 && (tok_.kind == Tok::KwNode || tok_.kind == Tok::KwType)) return;
+        if (depth == 0 && (tok_.kind == Tok::KwNode || tok_.kind == Tok::KwType ||
+                           tok_.kind == Tok::At))
+            return;
         if (tok_.kind == Tok::LBrace) ++depth;
         else if (tok_.kind == Tok::RBrace && depth > 0) --depth;
         advance();
@@ -830,14 +832,41 @@ std::unique_ptr<ast::ModelFile> Parser::parse_model_file() {
     while (!at_end() && !give_up()) {
         const std::uint32_t before = tok_.loc.offset;
 
+        // §6.15 — annotations lead the definition they annotate, and the
+        // definition begins at the first of them.
+        std::vector<ast::Annotation> annots;
+        if (at(Tok::At)) {
+            if (!parse_annotations(annots)) {
+                recover_to_definition();
+                continue;
+            }
+            if (!at(Tok::KwType) && !at(Tok::KwNode)) {
+                stray_annotations(annots, "expected a `node` or `type` definition to follow");
+                continue;
+            }
+        }
+        const std::uint32_t first_line = annots.empty() ? 0 : annots.front().loc.line;
+
         if (at(Tok::KwType)) {
             ast::TypeDef t;
-            if (parse_type_def(t)) file->types.push_back(std::move(t));
-            else recover_to_definition();
+            ast::DiagramHints none;
+            apply_annotations(annots, AnnotSite::Type, none);
+            if (parse_type_def(t)) {
+                t.start_line = first_line ? first_line : t.loc.line;
+                file->types.push_back(std::move(t));
+            } else {
+                recover_to_definition();
+            }
         } else if (at(Tok::KwNode)) {
             ast::NodeDef n;
-            if (parse_node_def(n)) file->nodes.push_back(std::move(n));
-            else recover_to_definition();
+            apply_annotations(annots, AnnotSite::Definition, n.diagram);
+            n.annotations = std::move(annots);
+            if (parse_node_def(n)) {
+                n.start_line = first_line ? first_line : n.loc.line;
+                file->nodes.push_back(std::move(n));
+            } else {
+                recover_to_definition();
+            }
         } else if (at(Tok::KwBuild)) {
             // A package manifest's file-level build block (§2.6).
             const Loc loc = tok_.loc;
@@ -1001,6 +1030,14 @@ bool Parser::parse_node_item(ast::NodeDef& node) {
         case Tok::KwOnStep:
         case Tok::KwFinal:
             return parse_method(node);
+
+        case Tok::At: {
+            // §6.15 — nothing inside a node body takes an annotation yet.
+            std::vector<ast::Annotation> annots;
+            if (!parse_annotations(annots)) return false;
+            stray_annotations(annots, "nothing inside a node body takes one");
+            return true;
+        }
 
         case Tok::KwNode:
             err("SE0211", loc, "child instance outside a `structure` block",
@@ -1709,6 +1746,201 @@ bool Parser::parse_build_list(std::vector<ast::BuildStmt>& out) {
     return expect(Tok::RBrace, "SE0201", "to close `build`");
 }
 
+// ─── Annotations (§6.15) ─────────────────────────────────────────────────────
+
+// `@name` or `@name(key, key = value, ...)`, any number in a row. The current
+// token is `@`. Only the syntax is checked here; what the keys mean is
+// checked by `apply_annotations`, once the declaration they lead is known.
+bool Parser::parse_annotations(std::vector<ast::Annotation>& out) {
+    while (at(Tok::At)) {
+        ast::Annotation a;
+        a.loc = tok_.loc;
+        advance();  // @
+        if (!at(Tok::Ident)) {
+            err("SE0201", tok_.loc,
+                std::string("expected an annotation name after `@`, found ") +
+                    describe(tok_.kind),
+                "expected a name",
+                {note("an annotation reads `@diagram(collapsed)` (\xc2\xa7""6.15)")});
+            return false;
+        }
+        a.name = tok_.text;
+        // The caret spans `@name`, so an unknown name is underlined whole.
+        a.loc.length = tok_.loc.offset + tok_.loc.length - a.loc.offset;
+        advance();
+
+        if (accept(Tok::LParen)) {
+            while (!at(Tok::RParen)) {
+                if (!at(Tok::Ident)) {
+                    err("SE0201", tok_.loc,
+                        std::string("expected a key, found ") + describe(tok_.kind),
+                        "expected a key",
+                        {note("an argument is a key, or `key = value` (\xc2\xa7""6.15)")});
+                    return false;
+                }
+                ast::AnnotationArg arg;
+                arg.key = tok_.text;
+                arg.loc = tok_.loc;
+                advance();
+                if (accept(Tok::Equal)) {
+                    const bool neg = accept(Tok::Minus);
+                    if (at(Tok::String) && !neg) {
+                        arg.kind = ast::AnnotationArg::Kind::String;
+                    } else if (at(Tok::Number)) {
+                        arg.kind = ast::AnnotationArg::Kind::Number;
+                    } else if (at(Tok::Ident) && !neg) {
+                        arg.kind = ast::AnnotationArg::Kind::Ident;
+                    } else {
+                        err("SE0201", tok_.loc,
+                            std::string("expected a value, found ") + describe(tok_.kind),
+                            "expected a string, a number or a name",
+                            {note("an annotation's values are literals, never expressions "
+                                  "(\xc2\xa7""6.15)")});
+                        return false;
+                    }
+                    arg.value = (neg ? "-" : "") + tok_.text;
+                    advance();
+                }
+                a.args.push_back(std::move(arg));
+                if (!accept(Tok::Comma)) break;
+            }
+            if (!expect(Tok::RParen, "SE0201", "to close the annotation")) return false;
+        }
+        out.push_back(std::move(a));
+    }
+    return true;
+}
+
+namespace {
+
+// §6.15 — the `@diagram` keys. A new rendering preference is a row here, and
+// nothing else in the parser changes.
+struct DiagramKey {
+    const char* name;
+    bool definition, group, instance;   // where it may appear; a `type` takes none
+};
+const DiagramKey diagram_keys[] = {
+    {"collapsed", true, true, true},
+    {"expanded", false, false, true},
+};
+
+const std::vector<const char*>& diagram_key_names() {
+    static std::vector<const char*> v;
+    if (v.empty())
+        for (const DiagramKey& k : diagram_keys) v.push_back(k.name);
+    return v;
+}
+
+}  // namespace
+
+// Check `in` against the key table for `site`, and record what it means in
+// `out`. Strict: every mistake is an error, because a mistyped key that drew
+// nothing would look exactly like a key that worked.
+void Parser::apply_annotations(const std::vector<ast::Annotation>& in, AnnotSite site,
+                               ast::DiagramHints& out) {
+    const char* site_name = site == AnnotSite::Definition ? "a node definition"
+                            : site == AnnotSite::Type     ? "a `type`"
+                            : site == AnnotSite::Group    ? "a group"
+                                                          : "an instance";
+    const ast::Annotation* first = nullptr;
+    for (const ast::Annotation& a : in) {
+        if (a.name != "diagram") {
+            std::vector<Attachment> att;
+            const std::string did = closest(a.name, {"diagram"}, 2);
+            if (!did.empty()) att.push_back(help("did you mean `@" + did + "`?"));
+            att.push_back(note("the only annotation is `@diagram` (\xc2\xa7""6.15)"));
+            err("SE0280", a.loc, "unknown annotation `@" + a.name + "`", "", std::move(att));
+            continue;
+        }
+        if (first) {
+            err("SE0286", a.loc, "a second `@diagram` on one declaration", "",
+                {note("first here", src_.path() + ":" + std::to_string(first->loc.line)),
+                 help("put every key in one `@diagram(...)`, so a declaration's hints "
+                      "are written in one place (\xc2\xa7""6.15)")});
+            continue;
+        }
+        first = &a;
+        if (a.args.empty())
+            err("SE0283", a.loc, "`@diagram` names no keys", "",
+                {note("the keys are `collapsed` and `expanded` (\xc2\xa7""6.15)")});
+
+        std::vector<const ast::AnnotationArg*> seen;
+        for (const ast::AnnotationArg& arg : a.args) {
+            const DiagramKey* key = nullptr;
+            for (const DiagramKey& k : diagram_keys)
+                if (arg.key == k.name) key = &k;
+            if (!key) {
+                std::vector<Attachment> att;
+                const std::string did = closest(arg.key, diagram_key_names(), 2);
+                if (!did.empty()) att.push_back(help("did you mean `" + did + "`?"));
+                att.push_back(note("the `@diagram` keys are `collapsed` and `expanded` "
+                                   "(\xc2\xa7""6.15)"));
+                err("SE0281", arg.loc, "unknown `@diagram` key `" + arg.key + "`", "",
+                    std::move(att));
+                continue;
+            }
+            const ast::AnnotationArg* dup = nullptr;
+            for (const ast::AnnotationArg* p : seen)
+                if (p->key == arg.key) dup = p;
+            if (dup) {
+                err("SE0284", arg.loc, "duplicate `@diagram` key `" + arg.key + "`",
+                    "already given",
+                    {note("first here", src_.path() + ":" + std::to_string(dup->loc.line))});
+                continue;
+            }
+            seen.push_back(&arg);
+
+            const bool allowed = site == AnnotSite::Definition ? key->definition
+                                 : site == AnnotSite::Group    ? key->group
+                                 : site == AnnotSite::Instance ? key->instance
+                                                               : false;
+            if (!allowed) {
+                std::vector<Attachment> att;
+                if (site == AnnotSite::Type)
+                    att.push_back(note("a record type is never drawn on the topology diagram"));
+                else if (arg.key == "expanded")
+                    att.push_back(note("everything is drawn expanded unless it says "
+                                       "`collapsed`; `expanded` is for an instance, to "
+                                       "override its definition's `collapsed`"));
+                std::vector<std::string> where;
+                if (key->definition) where.push_back("a node definition");
+                if (key->group) where.push_back("a group");
+                if (key->instance) where.push_back("an instance");
+                std::string list;
+                for (std::size_t k = 0; k < where.size(); ++k)
+                    list += (k == 0 ? "" : k + 1 == where.size() ? " or " : ", ") + where[k];
+                att.push_back(help("`" + arg.key + "` belongs on " + list));
+                err("SE0282", arg.loc, "`" + arg.key + "` is not allowed on " + site_name, "",
+                    std::move(att));
+                continue;
+            }
+            if (arg.kind != ast::AnnotationArg::Kind::Flag) {
+                err("SE0283", arg.loc, "`" + arg.key + "` is a flag and takes no value",
+                    "remove the `= " + arg.value + "`");
+                continue;
+            }
+
+            const auto want = arg.key == "collapsed" ? ast::DiagramHints::Collapse::Collapsed
+                                                     : ast::DiagramHints::Collapse::Expanded;
+            if (out.collapse != ast::DiagramHints::Collapse::Unset && out.collapse != want) {
+                err("SE0285", arg.loc, "`collapsed` and `expanded` together", "",
+                    {note("an instance starts either collapsed or expanded (\xc2\xa7""6.15)")});
+                continue;
+            }
+            out.collapse = want;
+            out.collapse_loc = arg.loc;
+        }
+    }
+}
+
+// Annotations followed by nothing they can lead. Reported once, at the first.
+void Parser::stray_annotations(const std::vector<ast::Annotation>& in, const char* caret) {
+    if (in.empty()) return;
+    err("SE0287", in.front().loc, "this annotation annotates nothing", caret,
+        {note("an annotation leads the declaration below it: a `node` definition, a "
+              "`group`, or an instance in `structure` (\xc2\xa7""6.15)")});
+}
+
 // ─── Structure (§6.9) ────────────────────────────────────────────────────────
 
 bool Parser::parse_structure(ast::Structure& out) {
@@ -1724,15 +1956,33 @@ bool Parser::parse_structure_body(ast::Structure& out, std::size_t group) {
     while (!at(Tok::RBrace) && !at_end()) {
         const std::uint32_t before = tok_.loc.offset;
 
+        // §6.15 — an instance or a group may be annotated; a wire may not, yet.
+        std::vector<ast::Annotation> annots;
+        if (at(Tok::At)) {
+            if (!parse_annotations(annots)) {
+                recover_in_list(Tok::RBrace);
+                if (give_up()) return false;
+                continue;
+            }
+            const bool is_group =
+                at(Tok::Ident) && tok_.text == "group" && peek().kind == Tok::String;
+            if (!at(Tok::KwNode) && !is_group) {
+                stray_annotations(annots, "expected an instance or a group to follow");
+                continue;
+            }
+        }
+
         if (at(Tok::KwNode)) {
             ast::Instance inst;
             inst.group = group;
+            apply_annotations(annots, AnnotSite::Instance, inst.diagram);
+            inst.annotations = std::move(annots);
             if (parse_instance(inst)) out.instances.push_back(std::move(inst));
             else recover_in_list(Tok::RBrace);
         } else if (at(Tok::Ident) && tok_.text == "group" && peek().kind == Tok::String) {
             // §6.9.3 — contextual: an identifier followed by a string literal is
             // never a wire, so `group` stays usable as an instance name.
-            if (!parse_group(out, group)) return false;
+            if (!parse_group(out, group, std::move(annots))) return false;
         } else if (at(Tok::KwSelf) || at(Tok::Ident) || at(Tok::Number) || at(Tok::Plus) ||
                    at(Tok::Minus)) {
             // A number, `+` or `-` starts a literal source (§6.9.2). Nothing
@@ -1748,7 +1998,8 @@ bool Parser::parse_structure_body(ast::Structure& out, std::size_t group) {
                 "expected `node` or an endpoint",
                 {note("`structure` holds `node name : Def { ... };` instances, "
                       "`a.b --> c.d;` wires (\xc2\xa7""6.9), and `group \"label\" { ... }` "
-                      "blocks of either (\xc2\xa7""6.9.3)")});
+                      "blocks of either (\xc2\xa7""6.9.3); an instance or a group may "
+                      "be preceded by `@diagram(...)` (\xc2\xa7""6.15)")});
             recover_in_list(Tok::RBrace);
         }
 
@@ -1760,10 +2011,14 @@ bool Parser::parse_structure_body(ast::Structure& out, std::size_t group) {
 
 // §6.9.3 — `group "label" { … }`. The current token is `group`, and the next
 // is known to be a string literal.
-bool Parser::parse_group(ast::Structure& out, std::size_t parent) {
+bool Parser::parse_group(ast::Structure& out, std::size_t parent,
+                         std::vector<ast::Annotation> annotations) {
     ast::Group g;
     g.loc = tok_.loc;
     g.parent = parent;
+    g.start_line = annotations.empty() ? g.loc.line : annotations.front().loc.line;
+    apply_annotations(annotations, AnnotSite::Group, g.diagram);
+    g.annotations = std::move(annotations);
     advance();  // group
     const Loc label_loc = tok_.loc;
     g.label = tok_.text;

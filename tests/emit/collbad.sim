@@ -1,0 +1,7 @@
+// §6.15 — SE0321: `collapsed` or `expanded` where there is no box to collapse.
+sim CollBad {
+    root: collbad.CollBad {};
+
+    step:     1 (ms);
+    duration: 2 (ms);
+}

@@ -37,6 +37,7 @@ enum class Tok {
     Arrow,      // -->
     TildeEqual, // ~=  (§6.13)
     Plus, Minus, Star, Slash, Caret, Percent,
+    At,         // @  (§6.15)
 };
 
 struct Token {

@@ -233,6 +233,7 @@ node Classical {
         /// quaternion, as Euler angles, and with its body rate:
         ///
         ///     wcmd = R(qTilt)^T * (w_hp - wc*log qWash)  +  w_tilt
+        @diagram(collapsed)
         group "Commanded Attitude" {
             node qCmd: kin.MulQuatQuat {};            // qWash (x) qTilt
             node eCmd: kin.QuatToEuler {};
@@ -291,6 +292,7 @@ node Classical {
         ///     pout = p - (R r - r)
         ///     vout = v - R (w x r)
         ///     aout = a - R (wd x r + w x (w x r))
+        @diagram(collapsed)
         group "Head Offset, Out" {
             node wdCmd:  sig.ct.Differentiator3 (rad/s) {
                 wc = param.wdcRoll;

@@ -1,0 +1,65 @@
+﻿%% --------------------------------------------------------------------------
+%%  GENERATED — DO NOT EDIT.
+%%  Topology for: Coll   root: coll.Coll
+
+%%  Signal flow, as the model RUNS. Composites are flattened by now
+%%  (§15.2), so a subgraph is the path prefix one left behind, not a
+%%  runtime object. Nodes are listed in §8.5 schedule order.
+%%  A subgraph may instead be a §6.9.3 group: a labelled box with
+%%  no path, drawn for the reader and absent from everything else.
+
+%%    A --> B    B's `output()` READS this input: an algebraic
+%%               dependency, and what the §8.5 sort is over
+%%    A -.-> B   it does not. The value reaches B through a state, so
+%%               the edge orders nothing and a cycle through it is
+%%               legal (§8.6)
+%%    ( )        the root boundary: the host writes in, reads out
+%%    thick      the node owns continuous state — the solver
+%%               integrates it, so every edge leaving it is delayed
+
+%%  Base step 0.001 s  (1000.0 Hz); a node that samples slower says so.
+%% --------------------------------------------------------------------------
+flowchart LR
+    se_in_u(["in.u<br/>m/s^2"])
+    subgraph sg1["a"]
+        direction LR
+        a_s["s<br/>se.math.Sum"]
+        subgraph sg2["q"]
+            direction LR
+            a_q_z["z<br/>se.math.Sum"]
+        end
+    end
+    subgraph sg3["b"]
+        direction LR
+        b_s["s<br/>se.math.Sum"]
+        subgraph sg4["q"]
+            direction LR
+            b_q_z["z<br/>se.math.Sum"]
+        end
+    end
+    subgraph sg5["Tail"]
+        direction LR
+        subgraph sg6["c"]
+            direction LR
+            c_z["z<br/>se.math.Sum"]
+        end
+    end
+    subgraph sg7["d"]
+        direction LR
+        d_z["z<br/>se.math.Sum"]
+    end
+    se_out0(["out d.z.y<br/>m/s^2"])
+
+    se_in_u -->|"a (m/s^2)"| a_s
+    se_k0(["0.0"]) -->|"b (m/s^2)"| a_s
+    a_s -->|"y (m/s^2)"| a_q_z
+    se_k1(["0.0"]) -->|"b (m/s^2)"| a_q_z
+    a_q_z -->|"y (m/s^2)"| b_s
+    se_k2(["0.0"]) -->|"b (m/s^2)"| b_s
+    b_s -->|"y (m/s^2)"| b_q_z
+    se_k3(["0.0"]) -->|"b (m/s^2)"| b_q_z
+    b_q_z -->|"y (m/s^2)"| c_z
+    se_k4(["0.0"]) -->|"b (m/s^2)"| c_z
+    c_z -->|"y (m/s^2)"| d_z
+    se_k5(["0.0"]) -->|"b (m/s^2)"| d_z
+    d_z --> se_out0

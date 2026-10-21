@@ -69,4 +69,12 @@ error[SE0705]: unknown doc section `Remarks`
    |     ^^^^^^^^^
    = note: the sections are, in order: Conventions, Initial conditions, Accuracy, Limitations, Design notes, See also (§6.14)
 
-7 errors, 3 warnings emitted
+error[SE0701]: doc comment documents nothing
+ --> tests/doc/err/docerr/Slipped.se:5:1
+  |
+5 | /// Between the annotation and the keyword, so it documents nothing.
+  | ^^^ no declaration on the line below
+  = note: a `///` block documents the declaration directly below it; a trailing `///` documents the declaration on its own line (§3.2)
+  = help: this declaration begins at its annotation, so its doc comment goes above the `@` (§6.15)
+
+8 errors, 3 warnings emitted

@@ -17,6 +17,7 @@
 #define SE_MODEL_HPP
 
 #include <map>
+#include <set>
 #include <memory>
 #include <string>
 #include <vector>
@@ -475,11 +476,16 @@ struct Model {
         std::string file;              // where the `group` keyword is
         std::uint32_t line = 0;
         std::string doc;               // its `///` block, lines joined by '\n'
+        bool collapsed = false;        // §6.15 `@diagram(collapsed)`
     };
     std::vector<Group> groups;
     // Child instance path ("fl.whl", leaf or composite) -> its innermost group.
     // An instance declared outside every group has no entry.
     std::map<std::string, std::size_t> instance_group;
+    // §6.15 — the paths of the composite instances the topology page opens
+    // collapsed: the instance's own `@diagram` if it has one, else its
+    // definition's. Never the root, which has no box to collapse.
+    std::set<std::string> collapsed;
 
     const Program* program = nullptr;
 };

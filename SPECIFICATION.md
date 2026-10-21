@@ -307,6 +307,9 @@ node Lag {
   begins on the line immediately after the run.
 - A `///` that follows other text on its line documents the declaration that
   begins on that line.
+- A declaration that carries annotations (§6.15) **begins at its first
+  annotation**, so its doc block goes above the `@`. A `///` between an
+  annotation and the keyword it leads documents nothing (`SE0701`).
 - The declarations that may be documented are `node`, `type`, unit parameters,
   settings, inputs, outputs, states, `vars`, `native` members, record fields,
   and a composite's `group`s (§6.9.3). A doc comment that documents none of
@@ -347,6 +350,8 @@ includes:
 - every sim-file key (`root`, `step`, `solver`, `duration`, `mode`, `sync`,
   `window`, `record`, `log`, `file`, `every`, `signals`, `level`, `levels`) —
   contextual inside `sim`;
+- annotation names and their keys (`diagram`, `collapsed`, `expanded`) —
+  recognised only after an `@` (§6.15);
 - the accessor prefixes (`param`, `in`, `out`, `state`, `der`, `next`,
   `adjust`, `var`) and the builtin namespaces (`log`, `sim`) — these live in
   **C++ scope inside verbatim bodies**, not in the DSL's token stream, so they
@@ -389,12 +394,13 @@ passed through, so that adding escapes later is not a silent behaviour change.
 ### 3.7 Punctuation and operators
 
 ```
-{  }  (  )  ;  ,  :  .  =  -->  +  -  *  /  ^  %
+{  }  (  )  ;  ,  :  .  =  -->  +  -  *  /  ^  %  @
 ```
 
 `-->` is a single token. The lexer is maximal-munch, so `-->` always wins over
 `-` `-` `>`; a lone `>` is not a token in this language and is an error
-(`SE0105`) outside verbatim regions. `%` occurs only as a unit symbol (§4.1).
+(`SE0105`) outside verbatim regions. `%` occurs only as a unit symbol (§4.1),
+and `@` only to open an annotation (§6.15).
 
 ### 3.8 Verbatim regions
 
@@ -1626,7 +1632,7 @@ structure {
 #### 6.9.1 Instances
 
 ```
-instance   := 'node' identifier ':' qualified_name
+instance   := { annotation } 'node' identifier ':' qualified_name
               [ unit_args ] [ '{' { binding } '}' ] ';'
 unit_args  := '(' unit_expr { ',' unit_expr } ')'        // §6.2a
 binding    := identifier '=' expression ';'
@@ -1855,7 +1861,7 @@ structure {
 ```
 
 ```
-group := 'group' string '{' { instance | wire | group } '}'
+group := { annotation } 'group' string '{' { instance | wire | group } '}'
 ```
 
 - **A group is diagram-only.** It changes no path, no generated identifier, no
@@ -2212,6 +2218,89 @@ wants a complete one treats the warning as a failure. Unit parameters, `vars`,
 `native` members and private definitions may be documented but need not be.
 
 An error suppresses the output, as everywhere in `sec` (§16.2).
+
+### 6.15 Annotations
+
+A model says what it computes; sometimes it also wants to say how it should be
+**drawn**. A per-axis wrapper such as `se.sig.ct.Integrator3` — a split, three
+scalar integrators, a merge — is mechanics, and a reader of the topology
+diagram wants it as one box until they ask for more. An **annotation** carries
+that kind of hint:
+
+```
+/// Integrates each axis of a `Vec3`.
+@diagram(collapsed)
+node Integrator3 { ... }
+
+structure {
+    @diagram(expanded) node vel : sig.ct.Integrator3 (m/s^2);
+
+    @diagram(collapsed)
+    group "Head Offset, Out" { ... }
+}
+```
+
+```
+annotation := '@' identifier [ '(' arg { ',' arg } ')' ]
+arg        := identifier [ '=' ( string | number | identifier ) ]
+```
+
+- **An annotation leads the declaration it annotates**: a `node` definition, a
+  `group` (§6.9.3), or an instance in `structure`. It is made of tokens, not
+  comments, so line breaks and blank lines between it and its declaration mean
+  nothing. The declaration **begins at its first annotation**, which is where a
+  doc comment attaches (§3.2): `///`, then `@`, then the keyword. An annotation
+  followed by anything else — a wire, a `use`, a section, the end of a block —
+  annotates nothing (`SE0287`).
+- **It is metadata.** An annotation never changes a path, a generated
+  identifier, a setting, a `.sim` address, the §8.5 order, the unit manifest or
+  a `sec --doc` page. Deleting every annotation from a model changes the
+  topology page (§15) and nothing else.
+- **Why `@` and not a contextual word.** The `@` gives every annotation, at
+  every site, one rule in the grammar, so a new annotation never has to be
+  checked for ambiguity against what each site already accepts. Inside a node
+  body, `name(` already means a lifecycle method or a verbatim member (§6),
+  so a bare `diagram(...)` could not mean anything else there. And the `@` lets
+  a reader skip a line, knowing it does not change what the model computes.
+- **Arguments are literals.** A bare key is a flag; `key = value` takes a
+  string, a number or a name, never an expression. A new key is a row in the
+  compiler's key table, not a change to this grammar.
+
+**`@diagram`** is the only annotation. Its keys are:
+
+| Key | On | Meaning |
+|---|---|---|
+| `collapsed` | node definition, group, instance | The box starts collapsed on the topology page |
+| `expanded` | instance | The box starts open, overriding its definition's `collapsed` |
+
+An instance's own key wins over its definition's. `expanded` on an instance
+whose definition does not say `collapsed` is allowed: it says nothing today, and
+stays correct if the definition gains `collapsed` later. A definition's
+`collapsed` is ignored when that node is the root, since a definition cannot
+know where it will be used, and the root has no box to close.
+
+The page opens in the declared state. **Expand all** and **Collapse all**
+override it, **Reset** returns to it, and finding or selecting a node inside a
+collapsed box opens the box. The Mermaid file (`.topology.md`) ignores
+`@diagram`: it is a static, complete record, and a box drawn closed there could
+never be opened.
+
+Checking is **strict**: every mistake is an error, because a mistyped key that
+drew nothing would look exactly like a key that worked. At stage 2:
+
+- an unknown annotation name (`SE0280`) or key (`SE0281`), with a
+  did-you-mean;
+- a key on a declaration it does not apply to (`SE0282`) — `expanded` on a
+  definition or a group, anything on a `type`;
+- a value given to a flag, or a `@diagram` with no keys (`SE0283`);
+- a key given twice (`SE0284`), or `collapsed` with `expanded` (`SE0285`);
+- two `@diagram`s on one declaration (`SE0286`), for the reason a section is
+  written once (§6, `SE0220`): one declaration's hints are read in one place;
+- an annotation that leads nothing (`SE0287`).
+
+At stage 3, where an instance's definition is known, `collapsed` or `expanded`
+on a leaf, or on an instance of one, is `SE0321`: a leaf is drawn as one box
+already.
 
 ---
 
@@ -4037,6 +4126,14 @@ of thing wearing the same name.
 | `SE0272` | 2 | `~=` with no `within`, or `=` with one |
 | `SE0273` | 2 | Row arity does not match the set header |
 | `SE0274` | 2 | Row has no label |
+| `SE0280` | 2 | Unknown annotation name |
+| `SE0281` | 2 | Unknown `@diagram` key |
+| `SE0282` | 2 | An annotation key is not allowed on this declaration |
+| `SE0283` | 2 | A value on a flag key, or a `@diagram` with no keys |
+| `SE0284` | 2 | Duplicate annotation key |
+| `SE0285` | 2 | `collapsed` together with `expanded` |
+| `SE0286` | 2 | Two `@diagram` annotations on one declaration |
+| `SE0287` | 2 | An annotation that annotates nothing |
 | `SE0301` | 3 | `package` declaration disagrees with the file's location |
 | `SE0302` | 3 | No public declaration matching the file name |
 | `SE0303` | 3 | Imported name collides |
@@ -4050,6 +4147,7 @@ of thing wearing the same name.
 | `SE0315` | 3 | A `param` wire endpoint is a destination, or names no setting |
 | `SE0316` | 4 | The reserved setting `rate` cannot be a wire source |
 | `SE0320` | 3 | Node has both code and a `structure` block |
+| `SE0321` | 3 | `collapsed` or `expanded` on a leaf, or on an instance of one |
 | `SE0330` | 3 | Duplicate member name in a node |
 | `SE0331` | 3 | Member name shadows a generated accessor |
 | `SE0340` | 3 | `outputs` declared but no `output()` |
@@ -4132,7 +4230,11 @@ package_decl    = "package" qualified_name ";" ;
 use_decl        = "use" qualified_name ";" ;
 qualified_name  = IDENT { "." IDENT } ;
 
-definition      = type_def | node_def ;
+definition      = { annotation } ( type_def | node_def ) ;
+
+(* §6.15 — a value is a literal, never an expression. *)
+annotation      = "@" IDENT [ "(" annotation_arg { "," annotation_arg } ")" ] ;
+annotation_arg  = IDENT [ "=" ( STRING | [ "-" ] NUMBER | IDENT ) ] ;
 
 (* ─── record types ───────────────────────────────────────────────────── *)
 
@@ -4202,7 +4304,11 @@ build_primitive = "link" | "include_dir" | "define" | "cflag" ;
 (* ─── structure ──────────────────────────────────────────────────────── *)
 
 structure_sec   = "structure" "{" { structure_item } "}" ;
-structure_item  = instance_decl | wire_stmt ;
+structure_item  = { annotation } ( instance_decl | group_decl ) | wire_stmt ;
+
+(* §6.9.3 — `group` is contextual: an IDENT spelled `group` followed by a
+   STRING. Diagram-only; it changes no path. *)
+group_decl      = "group" STRING "{" { structure_item } "}" ;
 
 instance_decl   = "node" IDENT ":" qualified_name
                   [ unit_args ]                          (* §6.2a *)

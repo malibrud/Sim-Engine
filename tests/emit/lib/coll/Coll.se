@@ -1,0 +1,74 @@
+// §6.15 `@diagram(collapsed)`, as the topology JSON records it. Diagram-only:
+// the manifest and the generated code are what they would be with every
+// annotation deleted, and so is the Mermaid file, which ignores them.
+//
+// What the recorded Coll.topology.json marks `"collapsed": true`:
+//   - `a`, by its definition, `Pair`;
+//   - not `b`, also a `Pair`, whose own `expanded` overrides that;
+//   - `a.q` and `b.q`, by `Quiet`'s definition, nested inside a `Pair`
+//     whichever way that `Pair` starts;
+//   - the group "Tail", by its own annotation, but not the `Plain` inside it;
+//   - `d`, a `Plain`, by its instance's annotation alone;
+//   - never the root, although `Coll` itself says `collapsed`: there is no
+//     box around the root to close.
+package coll;
+
+use se.math;
+
+@diagram(collapsed)
+node Coll {
+    inputs  { u: double(m/s^2); }
+    outputs { y: double(m/s^2); }
+
+    structure {
+        node a : Pair;
+        @diagram(expanded) node b : Pair;
+
+        @diagram(collapsed)
+        group "Tail" {
+            node c : Plain;
+        }
+        @diagram(collapsed) node d : Plain;
+
+        self --> a --> b --> c --> d --> self;
+    }
+}
+
+@diagram(collapsed)
+node Pair {
+    inputs  { u: double(m/s^2); }
+    outputs { y: double(m/s^2); }
+
+    structure {
+        node s : math.Sum (m/s^2);
+        node q : Quiet;
+        self --> s.a;
+        0.0  --> s.b;
+        s --> q --> self;
+    }
+}
+
+@diagram(collapsed)
+node Quiet {
+    inputs  { u: double(m/s^2); }
+    outputs { y: double(m/s^2); }
+
+    structure {
+        node z : math.Sum (m/s^2);
+        self --> z.a;
+        0.0  --> z.b;
+        z    --> self;
+    }
+}
+
+node Plain {
+    inputs  { u: double(m/s^2); }
+    outputs { y: double(m/s^2); }
+
+    structure {
+        node z : math.Sum (m/s^2);
+        self --> z.a;
+        0.0  --> z.b;
+        z    --> self;
+    }
+}

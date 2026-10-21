@@ -180,6 +180,35 @@ struct Helper {               // §11.4 — verbatim private member function
     Loc loc;
 };
 
+// ─── Annotations (§6.15) ─────────────────────────────────────────────────────
+
+// One argument of an annotation: a bare flag (`collapsed`) or `key = value`,
+// where the value is a string, a number or an identifier.
+struct AnnotationArg {
+    enum class Kind { Flag, String, Number, Ident };
+    std::string key;
+    Kind kind = Kind::Flag;
+    std::string value;            // the spelling; a string's decoded text
+    Loc loc;                      // the key
+};
+
+// `@diagram(collapsed)`, kept as written for the dump. The parser checks it
+// against its key table and records what it means in `DiagramHints`, which is
+// all any later stage reads.
+struct Annotation {
+    std::string name;
+    std::vector<AnnotationArg> args;
+    Loc loc;                      // the `@`
+};
+
+// What `@diagram` asked for. Diagram-only: nothing but the topology outputs
+// read it, so it changes no path, no generated code and no order.
+struct DiagramHints {
+    enum class Collapse { Unset, Collapsed, Expanded };
+    Collapse collapse = Collapse::Unset;
+    Loc collapse_loc;
+};
+
 // ─── Structure (§6.9) ────────────────────────────────────────────────────────
 
 struct Binding {              // setting = expression;
@@ -205,6 +234,8 @@ struct Instance {             // node whl : Wheel { … };
     // index into the enclosing `Structure::groups`, or npos. Diagram-only:
     // nothing but the topology printers reads it.
     std::size_t group = static_cast<std::size_t>(-1);
+    std::vector<Annotation> annotations;     // §6.15
+    DiagramHints diagram;
 };
 
 struct Endpoint {             // self.port | instance.port | instance.rec.field | 0.0 (m)
@@ -249,6 +280,11 @@ struct Group {
     std::string label;
     std::size_t parent = static_cast<std::size_t>(-1);   // npos: directly in `structure`
     Loc loc;                                             // the `group` keyword
+    std::vector<Annotation> annotations;                 // §6.15
+    DiagramHints diagram;
+    // The line the declaration begins on: its first annotation's, else the
+    // keyword's. A `///` attaches here (§3.2).
+    std::uint32_t start_line = 0;
 };
 
 struct Structure {
@@ -336,11 +372,15 @@ struct TypeDef {              // §5.2
     std::vector<UnitParamDecl> unit_params;
     std::vector<FieldDecl> fields;
     Loc loc;
+    std::uint32_t start_line = 0;      // as `Group::start_line`
 };
 
 struct NodeDef {              // §6
     std::string name;
     Loc loc;
+    std::vector<Annotation> annotations;     // §6.15
+    DiagramHints diagram;
+    std::uint32_t start_line = 0;            // as `Group::start_line`
 
     SectionMark sec_settings, sec_inputs, sec_outputs, sec_states, sec_vars;
     SectionMark sec_native, sec_declarations, sec_build, sec_structure;

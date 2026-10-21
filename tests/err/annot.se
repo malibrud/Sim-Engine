@@ -1,0 +1,53 @@
+// §6.15 — every stage-2 annotation mistake, one per declaration so each is
+// reported on its own: SE0280 an unknown annotation, SE0281 an unknown key,
+// SE0282 a key where it does not belong, SE0283 a value on a flag or no keys
+// at all, SE0284 a key given twice, SE0285 `collapsed` with `expanded`, SE0286
+// two `@diagram`s on one declaration, SE0287 an annotation that leads nothing.
+package tests;
+
+@diagrm(collapsed)
+node UnknownName { }
+
+@diagram(colapsed)
+node UnknownKey { }
+
+@diagram(expanded)
+node ExpandedOnDefinition { }
+
+@diagram(collapsed)
+type OnAType { x: double(-); }
+
+@diagram(collapsed = yes)
+node ValueOnFlag { }
+
+@diagram
+node NoKeys { }
+
+@diagram(collapsed, collapsed)
+node DuplicateKey { }
+
+@diagram(collapsed)
+@diagram(collapsed)
+node TwoDiagrams { }
+
+node InStructure {
+    inputs  { u: double(-); }
+    outputs { y: double(-); }
+
+    structure {
+        @diagram(expanded) group "Open" { node a : Gain {}; }
+        @diagram(collapsed, expanded) node b : Gain {};
+        @diagram(collapsed) a --> b;
+        self --> a;
+        b --> self;
+        @diagram(collapsed)
+    }
+}
+
+node InBody {
+    @diagram(collapsed)
+    inputs  { u: double(-); }
+}
+
+@diagram(collapsed)
+use tests.Late;

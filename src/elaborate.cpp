@@ -1439,12 +1439,25 @@ void Elaborator::instantiate(const NodeInfo* def, const std::string& path,
             if (g.parent != static_cast<std::size_t>(-1)) mg.parent = group_base + g.parent;
             mg.file = def->file->path;
             mg.line = g.loc.line;
-            mg.doc = doc_comment_at(def->file->ast->doc_lines, g.loc.line);
+            mg.doc = doc_comment_at(def->file->ast->doc_lines, g.start_line);
+            mg.collapsed = g.diagram.collapse == ast::DiagramHints::Collapse::Collapsed;
             m.groups.push_back(std::move(mg));
         }
         for (const ast::Instance& inst : st.instances)
             if (inst.group != static_cast<std::size_t>(-1))
                 m.instance_group[sub(path, inst.name)] = group_base + inst.group;
+
+        // §6.15 — an instance's own `@diagram` wins over its definition's. A
+        // leaf child with one was refused at stage 3 (SE0321).
+        for (const ast::Instance& inst : st.instances) {
+            auto it = def->children.find(inst.name);
+            if (it == def->children.end() || !it->second->composite) continue;
+            using C = ast::DiagramHints::Collapse;
+            const C own = inst.diagram.collapse;
+            const C deflt = it->second->def->diagram.collapse;
+            if (own == C::Collapsed || (own == C::Unset && deflt == C::Collapsed))
+                m.collapsed.insert(sub(path, inst.name));
+        }
 
         // §6.2a — evaluated once per composite and shared with `collect_wires`,
         // which needs them to make endpoint units concrete. Computing them in

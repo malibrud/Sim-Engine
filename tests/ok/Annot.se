@@ -1,0 +1,43 @@
+// §6.15 annotations, every legal shape. Parse-only, so what the recorded AST
+// shows is each annotation after the declaration it leads, as written.
+package tests;
+
+/// A doc comment goes above the annotation, and the definition begins at the
+/// annotation, so this documents `Mechanics`.
+@diagram(collapsed)
+node Mechanics {
+    inputs  { u: double(-); }
+    outputs { y: double(-); }
+
+    structure {
+        node g : Gain {};
+        self --> g --> self;
+    }
+}
+
+// An annotation is tokens, not a comment, so line breaks and blank lines
+// inside or after it mean nothing.
+@diagram(
+    collapsed
+)
+
+node Spread {
+    inputs  { u: double(-); }
+    outputs { y: double(-); }
+
+    structure {
+        // On an instance, `expanded` overrides its definition's `collapsed`.
+        @diagram(expanded) node m1 : Mechanics;
+        @diagram(collapsed)
+        node m2 : Mechanics;
+
+        @diagram(collapsed)
+        group "Tail" {
+            node m3 : Mechanics;
+            // An instance in a group, annotated, with bindings after it.
+            @diagram(collapsed) node m4 : Mechanics {};
+        }
+
+        self --> m1 --> m2 --> m3 --> m4 --> self;
+    }
+}

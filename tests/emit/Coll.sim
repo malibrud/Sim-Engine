@@ -1,0 +1,7 @@
+// §6.15 — which boxes the topology page opens collapsed. See lib/coll/Coll.se.
+sim Coll {
+    root: coll.Coll {};
+
+    step:     1 (ms);
+    duration: 2 (ms);
+}

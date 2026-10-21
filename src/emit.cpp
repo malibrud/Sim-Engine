@@ -249,6 +249,9 @@ struct Topo {
         std::string file;
         std::uint32_t line = 0;
         std::string doc;
+        // §6.15 — the page opens this box collapsed. Mermaid ignores it: a
+        // static diagram cannot be expanded again, so it keeps every leaf.
+        bool collapsed = false;
     };
     // A root output the host may read, collapsed from `boundary_out`'s
     // field-by-field rows back onto the port they came from.
@@ -2736,6 +2739,7 @@ Topo Emitter::topology() const {
         Topo::Cluster c;
         c.name = dot == std::string::npos ? path : path.substr(dot + 1);
         c.path = path;
+        c.collapsed = m_.collapsed.count(path) != 0;
         const std::size_t id = attach(std::move(c), parent);
         composite_of[path] = id;
         return id;
@@ -2752,6 +2756,7 @@ Topo Emitter::topology() const {
         c.file = g.file;
         c.line = g.line;
         c.doc = g.doc;
+        c.collapsed = g.collapsed;
         const std::size_t id = attach(std::move(c), parent);
         group_cluster[gi] = id;
         return id;
@@ -3101,6 +3106,9 @@ std::string Emitter::topology_json(const Topo& topo) const {
         if (c.is_group)
             t << ", \"file\": " << jstr(line_path(c.file))
               << ", \"line\": " << static_cast<std::size_t>(c.line) << ", \"doc\": " << jopt(c.doc);
+        // §6.15 — written only when set, so a model with no `@diagram` emits
+        // the JSON it always did.
+        if (c.collapsed) t << ", \"collapsed\": true";
         t << "}";
     }
     t << (topo.clusters.size() > 1 ? "\n],\n" : "],\n");

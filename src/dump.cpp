@@ -54,6 +54,24 @@ void dump_verbatim(std::ostream& o, int d, const char* label, const Verbatim& v)
       << " bytes): \"" << trim_1line(v.text) << "\"\n";
 }
 
+// §6.15 — annotations as written, normalised, after the declaration they
+// lead. Nothing is printed for a declaration without any, so every older
+// golden reads as it did.
+void dump_annotations(std::ostream& o, const std::vector<ast::Annotation>& as) {
+    for (const ast::Annotation& a : as) {
+        o << "  @" << a.name;
+        if (a.args.empty()) continue;
+        o << "(";
+        for (std::size_t k = 0; k < a.args.size(); ++k) {
+            const ast::AnnotationArg& arg = a.args[k];
+            o << (k ? ", " : "") << arg.key;
+            if (arg.kind == ast::AnnotationArg::Kind::String) o << " = \"" << arg.value << "\"";
+            else if (arg.kind != ast::AnnotationArg::Kind::Flag) o << " = " << arg.value;
+        }
+        o << ")";
+    }
+}
+
 void dump_bindings(std::ostream& o, int d, const std::vector<ast::Binding>& bs) {
     for (const ast::Binding& b : bs)
         o << indent(d) << b.name << " = " << expr_to_string(b.value.get()) << "\n";
@@ -169,7 +187,9 @@ void dump(std::ostream& o, const ast::ModelFile& f) {
 
     for (const ast::NodeDef& n : f.nodes) {
         o << indent(1) << "node " << n.name << "  [line " << n.loc.line << "]  kind="
-          << (n.is_composite() ? "composite" : (n.has_code() ? "leaf" : "stub")) << "\n";
+          << (n.is_composite() ? "composite" : (n.has_code() ? "leaf" : "stub"));
+        dump_annotations(o, n.annotations);
+        o << "\n";
 
         if (n.sec_units.present) {
             o << indent(2) << "units\n";
@@ -246,6 +266,7 @@ void dump(std::ostream& o, const ast::ModelFile& f) {
                 const ast::Group& g = n.structure.groups[k];
                 o << indent(3) << "group #" << k << " \"" << g.label << "\"";
                 if (g.parent != none) o << " in #" << g.parent;
+                dump_annotations(o, g.annotations);
                 o << "\n";
             }
             for (const ast::Instance& i : n.structure.instances) {
@@ -254,6 +275,7 @@ void dump(std::ostream& o, const ast::ModelFile& f) {
                     o << (k ? ", " : " (") << unit_to_string(i.unit_args[k].get());
                 if (!i.unit_args.empty()) o << ")";
                 if (i.group != none) o << "   [group #" << i.group << "]";
+                dump_annotations(o, i.annotations);
                 o << "\n";
                 dump_bindings(o, 4, i.bindings);
             }

@@ -153,7 +153,7 @@ main { flex: 1; display: flex; min-height: 0; }
   <datalist id="paths"></datalist>
   <label title="Wires whose value reaches the consumer through a state"><input type="checkbox" id="delayed" checked> delayed wires</label>
   <button id="fit">Fit</button><button id="one">100%</button>
-  <button id="expand">Expand all</button><button id="collapse">Collapse all</button>
+  <button id="expand">Expand all</button><button id="collapse">Collapse all</button><button id="reset" title="Back to the boxes the model opens collapsed">Reset</button>
   <span class="spacer"></span>
   <span class="stat" id="stat"></span>
   <button id="theme" title="Toggle light/dark">◐</button>
@@ -170,7 +170,7 @@ main { flex: 1; display: flex; min-height: 0; }
       <div><svg width="34" height="14"><rect x="2" y="2" width="30" height="10" rx="5" fill="var(--pill-bg)" stroke="var(--node-stroke)"/></svg>root input / output, or a constant</div>
       <div><svg width="34" height="14"><rect x="2" y="2" width="30" height="10" rx="2" fill="var(--comp-bg)" stroke="var(--comp-stroke)"/></svg>composite <span class="k">(a path prefix; flattened at run time)</span></div>
       <div><svg width="34" height="14"><rect x="2" y="2" width="30" height="10" rx="2" fill="none" stroke="var(--comp-stroke)" stroke-dasharray="4 3"/></svg>group <span class="k">(diagram only; no path)</span></div>
-      <div class="k">Click a node, wire, composite or group for its details: <span style="color:var(--up)">what feeds it</span>, <span style="color:var(--down)">what it feeds</span>. Double-click a composite or group to collapse or expand it. Drag to pan, wheel to zoom.</div>
+      <div class="k">Click a node, wire, composite or group for its details: <span style="color:var(--up)">what feeds it</span>, <span style="color:var(--down)">what it feeds</span>. Double-click a composite or group to collapse or expand it; Reset returns to the boxes the model opens collapsed. Drag to pan, wheel to zoom.</div>
     </details>
   </div>
   <aside id="panel"></aside>
@@ -204,6 +204,9 @@ $("sub").textContent = `root ${T.root} · step ${T.step} s · ${T.solver}`;
 
 // ---- the view: what is visible, given the collapsed clusters ------------------
 const collapsed = new Set();
+// Section 6.15: the boxes the model asks to open collapsed, and what Reset restores.
+const defaults = () => { collapsed.clear(); for (const c of T.clusters) if (c.collapsed) collapsed.add(c.id); };
+defaults();
 let showDelayed = true;
 function buildView() {
   // The outermost collapsed cluster at or above `cid`, or null.
@@ -644,6 +647,7 @@ $("theme").onclick = () => {
 $("delayed").onchange = () => { showDelayed = $("delayed").checked; render(true); };
 $("expand").onclick = () => { collapsed.clear(); render(); };
 $("collapse").onclick = () => { collapsed.clear(); for (const c of T.clusters) if (!c.parent) collapsed.add(c.id); render(); };
+$("reset").onclick = () => { defaults(); render(); };
 // Only composites have paths to find; a group is reached by what is in it.
 const composites = T.clusters.filter(c => c.kind === "composite");
 $("paths").innerHTML = T.nodes.filter(n => n.kind === "leaf").map(n => `<option value="${esc(n.path)}">`).join("") +

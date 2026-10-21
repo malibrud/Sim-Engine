@@ -5,6 +5,7 @@ package se.sig.ct;
 use se.math;
 use se.sig.ct;
 
+@diagram(collapsed)
 node Differentiator3 {
     units { U; }
 

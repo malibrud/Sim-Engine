@@ -258,7 +258,7 @@ overrides that.
 | `Drivetrain.cpp` | Everything behind it: the engine runtime (namespace `se_rt`, the same for every model), the node classes, `Sim::Impl` and the schedule |
 | `main.cpp` | An example host that uses the header alone. `--no-main` suppresses it |
 | `Drivetrain.units.txt` | The unit manifest (§15.6): the contract for an external solver or host, not documentation |
-| `Drivetrain.topology.html` | The signal-flow graph as it actually runs, interactive: open it in a browser, click any node for its settings, states and wiring, collapse composites and `group`s. Laid out by Graphviz, which the page loads from jsDelivr, so it needs a network connection |
+| `Drivetrain.topology.html` | The signal-flow graph as it actually runs, interactive: open it in a browser, click any node for its settings, states and wiring, collapse composites and `group`s, which open collapsed where the model says `@diagram(collapsed)`. Laid out by Graphviz, which the page loads from jsDelivr, so it needs a network connection |
 | `Drivetrain.topology.md` | The same graph as a Mermaid diagram |
 | `se_runtime.hpp` | Only with `--runtime=separate`: the runtime as its own header |
 | `build.ps1`, `build.sh` | The reference build, [below](#building-a-generated-model) |

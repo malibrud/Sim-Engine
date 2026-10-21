@@ -4,6 +4,7 @@ use se.math;
 use se.sig.ct;
 
 
+@diagram(collapsed)
 node SecondOrderLowpass2 {
     units { U; }
 

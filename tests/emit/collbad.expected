@@ -1,0 +1,22 @@
+﻿error[SE0321]: `collapsed` on instance `s`, whose node `se.math.Sum` is not a composite
+  --> tests/emit/lib/collbad/CollBad.se:14:18
+   |
+14 |         @diagram(collapsed) node s : math.Sum (-);
+   |                  ^^^^^^^^^ a leaf is drawn as one box already
+   = note: `@diagram(collapsed)` sets whether a composite's box starts closed on the topology page (§6.15)
+
+error[SE0321]: `expanded` on instance `t`, whose node `se.math.Sum` is not a composite
+  --> tests/emit/lib/collbad/CollBad.se:15:18
+   |
+15 |         @diagram(expanded)  node t : math.Sum (-);
+   |                  ^^^^^^^^ a leaf is drawn as one box already
+   = note: `@diagram(expanded)` sets whether a composite's box starts closed on the topology page (§6.15)
+
+error[SE0321]: `collapsed` on node `Leafy`, which is not a composite
+  --> tests/emit/lib/collbad/CollBad.se:26:10
+   |
+26 | @diagram(collapsed)
+   |          ^^^^^^^^^ a leaf is drawn as one box already
+   = note: `@diagram(collapsed)` starts a composite's box closed on the topology page (§6.15)
+
+3 errors emitted

@@ -1,0 +1,111 @@
+﻿error[SE0280]: unknown annotation `@diagrm`
+ --> tests/err/annot.se:8:1
+  |
+8 | @diagrm(collapsed)
+  | ^^^^^^^
+  = help: did you mean `@diagram`?
+  = note: the only annotation is `@diagram` (§6.15)
+
+error[SE0281]: unknown `@diagram` key `colapsed`
+  --> tests/err/annot.se:11:10
+   |
+11 | @diagram(colapsed)
+   |          ^^^^^^^^
+   = help: did you mean `collapsed`?
+   = note: the `@diagram` keys are `collapsed` and `expanded` (§6.15)
+
+error[SE0282]: `expanded` is not allowed on a node definition
+  --> tests/err/annot.se:14:10
+   |
+14 | @diagram(expanded)
+   |          ^^^^^^^^
+   = note: everything is drawn expanded unless it says `collapsed`; `expanded` is for an instance, to override its definition's `collapsed`
+   = help: `expanded` belongs on an instance
+
+error[SE0282]: `collapsed` is not allowed on a `type`
+  --> tests/err/annot.se:17:10
+   |
+17 | @diagram(collapsed)
+   |          ^^^^^^^^^
+   = note: a record type is never drawn on the topology diagram
+   = help: `collapsed` belongs on a node definition, a group or an instance
+
+error[SE0283]: `collapsed` is a flag and takes no value
+  --> tests/err/annot.se:20:10
+   |
+20 | @diagram(collapsed = yes)
+   |          ^^^^^^^^^ remove the `= yes`
+
+error[SE0283]: `@diagram` names no keys
+  --> tests/err/annot.se:23:1
+   |
+23 | @diagram
+   | ^^^^^^^^
+   = note: the keys are `collapsed` and `expanded` (§6.15)
+
+error[SE0284]: duplicate `@diagram` key `collapsed`
+  --> tests/err/annot.se:26:21
+   |
+26 | @diagram(collapsed, collapsed)
+   |                     ^^^^^^^^^ already given
+   = note: first here  [tests/err/annot.se:26]
+
+error[SE0286]: a second `@diagram` on one declaration
+  --> tests/err/annot.se:30:1
+   |
+30 | @diagram(collapsed)
+   | ^^^^^^^^
+   = note: first here  [tests/err/annot.se:29]
+   = help: put every key in one `@diagram(...)`, so a declaration's hints are written in one place (§6.15)
+
+error[SE0282]: `expanded` is not allowed on a group
+  --> tests/err/annot.se:38:18
+   |
+38 |         @diagram(expanded) group "Open" { node a : Gain {}; }
+   |                  ^^^^^^^^
+   = note: everything is drawn expanded unless it says `collapsed`; `expanded` is for an instance, to override its definition's `collapsed`
+   = help: `expanded` belongs on an instance
+
+error[SE0285]: `collapsed` and `expanded` together
+  --> tests/err/annot.se:39:29
+   |
+39 |         @diagram(collapsed, expanded) node b : Gain {};
+   |                             ^^^^^^^^
+   = note: an instance starts either collapsed or expanded (§6.15)
+
+error[SE0287]: this annotation annotates nothing
+  --> tests/err/annot.se:40:9
+   |
+40 |         @diagram(collapsed) a --> b;
+   |         ^^^^^^^^ expected an instance or a group to follow
+   = note: an annotation leads the declaration below it: a `node` definition, a `group`, or an instance in `structure` (§6.15)
+
+error[SE0287]: this annotation annotates nothing
+  --> tests/err/annot.se:43:9
+   |
+43 |         @diagram(collapsed)
+   |         ^^^^^^^^ expected an instance or a group to follow
+   = note: an annotation leads the declaration below it: a `node` definition, a `group`, or an instance in `structure` (§6.15)
+
+error[SE0287]: this annotation annotates nothing
+  --> tests/err/annot.se:48:5
+   |
+48 |     @diagram(collapsed)
+   |     ^^^^^^^^ nothing inside a node body takes one
+   = note: an annotation leads the declaration below it: a `node` definition, a `group`, or an instance in `structure` (§6.15)
+
+error[SE0287]: this annotation annotates nothing
+  --> tests/err/annot.se:52:1
+   |
+52 | @diagram(collapsed)
+   | ^^^^^^^^ expected a `node` or `type` definition to follow
+   = note: an annotation leads the declaration below it: a `node` definition, a `group`, or an instance in `structure` (§6.15)
+
+error[SE0203]: `use` declaration after a definition
+  --> tests/err/annot.se:53:1
+   |
+53 | use tests.Late;
+   | ^^^ move this above the definitions
+   = note: declaration order is `package`, then all `use`s, then the definitions (§2.5)
+
+15 errors emitted
