@@ -1,0 +1,18 @@
+// A template helper function (§11.4). A helper is verbatim C++ from its first
+// token to its brace, so `template <class In>` is legal, and it is the natural
+// way to share one body between methods whose `in` views are different types.
+// `<` is not a DSL token (§3.7), so the parser has to see it coming: looking
+// one token ahead from `template` used to lex it and report SE0101.
+package tplhelper;
+
+node TplHelper {
+    inputs  { x: double(-); }
+    outputs { y: double(-); }
+    states  { discrete n: double(-) = 0.0; }
+
+    template <class In>
+    double twice(const In& in) const { return 2.0 * in.x; }
+
+    output(x) { out.y = twice(in); }
+    next(x)   { next.n = twice(in); }
+}

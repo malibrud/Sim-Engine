@@ -1017,6 +1017,9 @@ bool Parser::parse_node_item(ast::NodeDef& node) {
             return false;
 
         case Tok::Ident: {
+            // §11.4 — `template <class T> ...` is a helper, and a `<` is not a
+            // token, so decide before lexing one: peek() would report it.
+            if (!peeked_ && lexer_.peek_char() == '<') return parse_helper(node);
             const Tok after = peek().kind;
             // §6.13 — `tests` is contextual, not reserved: it is a section only
             // where a section can start.

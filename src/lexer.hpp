@@ -56,6 +56,12 @@ public:
     // Current scan position, as a zero-length Loc.
     Loc here() const;
 
+    // The next character past whitespace and comments, without lexing or
+    // consuming anything. Lets the parser see that an item continues in C++ --
+    // `template <class T>` -- before token mode reports the `<` as an illegal
+    // character in a region that is about to turn out verbatim (§11.4).
+    char peek_char() const;
+
     // ─── Verbatim scanners (§11) ─────────────────────────────────────────────
     // Each starts at the current position and leaves the position as noted.
     // All return false (having reported) if the region is unterminated.

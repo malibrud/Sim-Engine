@@ -1,0 +1,9 @@
+// §11.4 -- a helper whose signature opens with `template <...>`. No
+// `.expected` file, so this case must emit cleanly; the build loop then checks
+// that the generated C++ compiles.
+sim TplHelper {
+    root: tplhelper.TplHelper {};
+
+    step:     1 (ms);
+    duration: 10 (ms);
+}

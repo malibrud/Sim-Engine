@@ -129,6 +129,26 @@ void Lexer::seek(const Loc& loc) {
 
 // ─── Token mode ──────────────────────────────────────────────────────────────
 
+char Lexer::peek_char() const {
+    std::size_t p = pos_;
+    const std::size_t n = text_.size();
+    while (p < n) {
+        const char c = text_[p];
+        if (c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == '\v') {
+            ++p;
+        } else if (c == '/' && p + 1 < n && text_[p + 1] == '/') {
+            while (p < n && text_[p] != '\n' && text_[p] != '\r') ++p;
+        } else if (c == '/' && p + 1 < n && text_[p + 1] == '*') {
+            const std::size_t end = text_.find("*/", p + 2);
+            if (end == std::string_view::npos) return '\0';
+            p = end + 2;
+        } else {
+            return c;
+        }
+    }
+    return '\0';
+}
+
 void Lexer::skip_trivia() {
     for (;;) {
         const char c = cur();
