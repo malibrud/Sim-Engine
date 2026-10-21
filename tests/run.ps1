@@ -1363,6 +1363,38 @@ if (-not $cl) {
         }
     }
 
+    # SPECIFICATION 7.2 -- `int` settings read by an emitted expression are
+    # widened to double. IntSet divides two `int`s and takes a `max` of an
+    # `int`, on both the node's own derived settings and a child binding, so
+    # the recorded column is 10 exactly. Integer division gives 9; a bare
+    # `int` in `std::max` does not compile, which the build loop reports.
+    if ($emitDirs.ContainsKey('IntSet')) {
+        $isDir = $emitDirs['IntSet']
+        Push-Location $isDir
+        & '.\build\release\bin\IntSet.exe' 2>&1 | Out-Null
+        $ran = ($LASTEXITCODE -eq 0)
+        Pop-Location
+        $worst = [double]::PositiveInfinity
+        $csv = Join-Path $isDir 'intset.csv'
+        if ($ran -and (Test-Path $csv)) {
+            $worst = 0.0
+            foreach ($line in (Get-Content $csv | Select-Object -Skip 1)) {
+                if (-not $line) { continue }
+                $err = [Math]::Abs([double]($line -split ',')[1] - 10.0)
+                if ($err -gt $worst) { $worst = $err }
+            }
+        }
+        if ($worst -eq 0.0) {
+            Write-Host ("ok   build/emit/IntSet : int settings evaluate in double " +
+                        "at configuration") -ForegroundColor Green
+            $script:pass++
+        } else {
+            Write-Host ("FAIL build/emit/IntSet : expected 10, off by " + $worst) `
+                -ForegroundColor Red
+            $script:fail++
+        }
+    }
+
     # SPECIFICATION 4.5 -- angle absorbed into a positive power of length.
     # AngAbs wires w x r, the tangential and the centripetal terms from
     # math.Cross3 into (m/s) and (m/s^2) ports, which only elaborates under the

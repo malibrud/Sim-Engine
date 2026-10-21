@@ -49,11 +49,11 @@ dis_arr[?]  bw5.w2 [param.nbq]    -           dynamic
           src.rate                Hz          = 1000.0
           bw4.fc                  Hz          = 10.0
           bw4.order               -           = 4
-          bw4.nbq                 -           = 2   <- std::floor((std::ceil(bw4.order / 2.0)) + 0.5)
+          bw4.nbq                 -           = 2   <- std::floor((std::ceil((static_cast<double>(bw4.order)) / 2.0)) + 0.5)
           bw4.fs                  Hz          = 1000.0
           bw5.fc                  Hz          = 10.0
           bw5.order               -           = 5
-          bw5.nbq                 -           = 3   <- std::floor((std::ceil(bw5.order / 2.0)) + 0.5)
+          bw5.nbq                 -           = 3   <- std::floor((std::ceil((static_cast<double>(bw5.order)) / 2.0)) + 0.5)
           bw5.fs                  Hz          = 1000.0
 
 [decimation]              # derived from `rate` at configuration

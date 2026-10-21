@@ -1,0 +1,13 @@
+// §7.2 -- `int` settings read by an emitted expression. See
+// lib/intset/IntSet.se for why the recorded column is 10 exactly.
+sim IntSet {
+    root: intset.IntSet {};
+
+    step:     1 (ms);
+    duration: 10 (ms);
+
+    record: {
+        file: "intset.csv";
+        signals { h.y; }
+    }
+}

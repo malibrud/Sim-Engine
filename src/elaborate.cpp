@@ -144,6 +144,21 @@ ExprCode ec_param(std::string owner, std::string name) {
     return c;
 }
 
+// A setting read inside a §7 expression. §7.2 evaluates in `double`, but a
+// setting declared `int`, `float` or `bool` is stored as one, and referenced
+// bare it lets C++ do arithmetic the evaluator never did: `param.a / param.b`
+// over two `int`s divides as integers, and `max(1, param.n)` asks `std::max`
+// for one `T` from a `double` and an `int`, which does not compile. Widening
+// at the reference makes the emitted expression mean what was evaluated.
+ExprCode ec_param_value(std::string owner, std::string name, const std::string& scalar) {
+    ExprCode c = ec_param(std::move(owner), std::move(name));
+    if (scalar == "double") return c;
+    ExprCode r = ec_lit("static_cast<double>(");
+    r.insert(r.end(), c.begin(), c.end());
+    r.push_back(ec_lit(")")[0]);
+    return r;
+}
+
 // Whether the code can be used as an operand without parentheses. A single
 // reference or a single literal can; anything already carrying an operator
 // cannot, and rather than track precedence we parenthesise. The generated
@@ -1133,7 +1148,7 @@ bool Elaborator::settings_of(const NodeInfo* def,
         // setting come out dimensionless, which surfaced as a bogus `SE0410`
         // pointing INTO the library rather than at the binding.
         Value v{it->second.value, lf.type.unit, false};
-        v.code = ec_param(settings_path_, lf.key);
+        v.code = ec_param_value(settings_path_, lf.key, lf.type.scalar);
         v.constant = false;
         env[lf.key] = std::move(v);
     }
@@ -1210,7 +1225,7 @@ bool Elaborator::settings_of(const NodeInfo* def,
                            ("setting `" + s.key + "`").c_str(), d, &code)) {
                     resolved[s.key] = Pin{d, std::move(code), v.constant};
                     Value bound_v{d, s.type.unit, false};
-                    bound_v.code = ec_param(settings_path_, s.key);
+                    bound_v.code = ec_param_value(settings_path_, s.key, s.type.scalar);
                     bound_v.constant = false;
                     env[s.key] = std::move(bound_v);
                 } else {
@@ -1406,7 +1421,7 @@ void Elaborator::instantiate(const NodeInfo* def, const std::string& path,
     Env env;
     for (const SettingValue& s : settings) {
         Value v{s.value, s.unit, false};
-        v.code = ec_param(path, s.name);
+        v.code = ec_param_value(path, s.name, s.scalar);
         v.constant = false;
         env[s.name] = std::move(v);
     }

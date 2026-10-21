@@ -1,0 +1,40 @@
+// `int` settings read by an emitted §7 expression (§7.2, §6.2b).
+//
+// §7 evaluates in `double`, and `sec` gets these values right at elaboration.
+// The risk is the EMITTED form, which configuration re-runs: a setting declared
+// `int` is an `int` member, and read bare it hands C++ two decisions the
+// evaluator never made. `param.a / param.b` over two `int`s divides as
+// integers, and `max(1, param.n)` asks `std::max` to deduce one type from a
+// `double` and an `int`, which does not compile. The reference is widened
+// where it is read, so both mean what was evaluated.
+//
+// Both paths a reference can take are covered: `q` and `m` read this node's own
+// settings, and `h.x` is a child binding that reads the parent's.
+//
+//   h.x = a / b              = 7 / 2       = 3.5   (integer division: 3)
+//   h.z = q + m = a / b + max(1, min(3, n))
+//                            = 3.5 + 3     = 6.5   (integer division: 6)
+//   y   = h.x + h.z                        = 10
+package intset;
+
+node IntSet {
+    settings {
+        a: int(-)    = 7;
+        b: int(-)    = 2;
+        n: int(-)    = 5;
+        q: double(-) = param.a / param.b;
+        m: int(-)    = max(1, min(3, param.n));
+    }
+    outputs { y: double(-); }
+
+    structure {
+        node h : Hold { x = param.a / param.b; z = param.q + param.m; };
+        h --> self.y;
+    }
+}
+
+node Hold {
+    settings { x: double(-); z: double(-); }
+    outputs  { y: double(-); }
+    output() { out.y = param.x + param.z; }
+}
