@@ -34,6 +34,8 @@
           d.z.y                   m/s^2
 
 [settings]                # configurable; value is the elaborated default
+          a.k                     m/s^2       = 0.0
+          b.k                     m/s^2       = 0.0
 
 [decimation]              # derived from `rate` at configuration
 

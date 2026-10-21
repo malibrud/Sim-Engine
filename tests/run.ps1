@@ -418,7 +418,7 @@ function Check-TopologyHtml($label, $outDir, $golden) {
             foreach ($k in @($e.via)) { if ($k -and -not $cports[$k]) { $problems += "wire into $($e.to) passes $k, which no composite declares" } }
         }
         foreach ($n in $t.nodes) {
-            if ($n.kind -eq 'leaf' -and $n.cluster -and -not $clusters[$n.cluster]) { $problems += "leaf $($n.id)'s cluster $($n.cluster) is not a cluster" }
+            if (($n.kind -eq 'leaf' -or $n.kind -eq 'setting') -and $n.cluster -and -not $clusters[$n.cluster]) { $problems += "$($n.kind) $($n.id)'s cluster $($n.cluster) is not a cluster" }
         }
     }
     if ($problems.Count -gt 0) {

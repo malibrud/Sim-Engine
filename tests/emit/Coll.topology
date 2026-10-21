@@ -51,11 +51,11 @@ flowchart LR
     se_out0(["out d.z.y<br/>m/s^2"])
 
     se_in_u -->|"a (m/s^2)"| a_s
-    se_k0(["0.0"]) -->|"b (m/s^2)"| a_s
+    se_k0(["se_cfg_a.k"]) -->|"b (m/s^2)"| a_s
     a_s -->|"y (m/s^2)"| a_q_z
     se_k1(["0.0"]) -->|"b (m/s^2)"| a_q_z
     a_q_z -->|"y (m/s^2)"| b_s
-    se_k2(["0.0"]) -->|"b (m/s^2)"| b_s
+    se_k2(["se_cfg_b.k"]) -->|"b (m/s^2)"| b_s
     b_s -->|"y (m/s^2)"| b_q_z
     se_k3(["0.0"]) -->|"b (m/s^2)"| b_q_z
     b_q_z -->|"y (m/s^2)"| c_z

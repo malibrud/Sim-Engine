@@ -167,7 +167,9 @@ main { flex: 1; display: flex; min-height: 0; }
       <div><svg width="34" height="8"><line x1="0" y1="4" x2="34" y2="4" stroke="var(--edge)" stroke-width="1.5"/></svg>feedthrough: <span class="k">output() reads it, so it orders the schedule</span></div>
       <div><svg width="34" height="8"><line x1="0" y1="4" x2="34" y2="4" stroke="var(--edge)" stroke-width="1.5" stroke-dasharray="5 4"/></svg>delayed: <span class="k">reaches it through a state; a loop through it is legal</span></div>
       <div><svg width="34" height="14"><rect x="2" y="2" width="30" height="10" fill="var(--node-bg)" stroke="var(--node-stroke)" stroke-width="3"/></svg>owns continuous state <span class="k">(the solver integrates it)</span></div>
-      <div><svg width="34" height="14"><rect x="2" y="2" width="30" height="10" rx="5" fill="var(--pill-bg)" stroke="var(--node-stroke)"/></svg>root input / output, or a constant</div>
+      <div><svg width="34" height="14"><polygon points="2,2 26,2 32,7 26,12 2,12" fill="var(--pill-bg)" stroke="var(--node-stroke)"/></svg>root input / output <span class="k">(the host writes / reads it)</span></div>
+      <div><svg width="34" height="14"><polygon points="2,2 27,2 32,7 32,12 2,12" fill="var(--pill-bg)" stroke="var(--node-stroke)"/><polyline points="27,2 27,7 32,7" fill="none" stroke="var(--node-stroke)"/></svg>setting <span class="k">(on the left edge of the box that owns it)</span></div>
+      <div><svg width="34" height="14"><rect x="9" y="2" width="16" height="10" fill="var(--pill-bg)" stroke="var(--node-stroke)"/></svg>literal</div>
       <div><svg width="34" height="14"><rect x="2" y="2" width="30" height="10" rx="2" fill="var(--comp-bg)" stroke="var(--comp-stroke)"/></svg>composite <span class="k">(a path prefix; flattened at run time)</span></div>
       <div><svg width="34" height="14"><rect x="2" y="2" width="30" height="10" rx="2" fill="none" stroke="var(--comp-stroke)" stroke-dasharray="4 3"/></svg>group <span class="k">(diagram only; no path)</span></div>
       <div class="k">Click a node, wire, composite or group for its details: <span style="color:var(--up)">what feeds it</span>, <span style="color:var(--down)">what it feeds</span>. Double-click a composite or group to collapse or expand it; Reset returns to the boxes the model opens collapsed. Drag to pan, wheel to zoom.</div>
@@ -193,11 +195,11 @@ const byId = new Map(T.nodes.map(n => [n.id, n]));
 // Clusters are the boxes: composites (a path prefix) and section 6.9.3 groups
 // (diagram only). A group's `path` is the composite that owns it.
 const clusterById = new Map(T.clusters.map(c => [c.id, c]));
-const label = n => n.kind === "leaf" ? (n.path || "<root>") : n.name;
+const label = n => n.kind === "leaf" ? (n.path || "<root>") : n.kind === "setting" ? n.path : n.name;
 const rel = (base, p) => base ? p.slice(base.length + 1) : p;
 const under = (n, cid) => { for (let c = n.cluster; c; c = clusterById.get(c).parent) if (c === cid) return true; return false; };
 for (const n of T.nodes) {
-  if (n.kind === "in" || n.kind === "const") { n.ins = []; n.outs = [{ name: "out", type: n.type || "" }]; }
+  if (n.kind === "in" || n.kind === "const" || n.kind === "setting") { n.ins = []; n.outs = [{ name: "out", type: n.type || "" }]; }
   if (n.kind === "out") { n.ins = [{ name: "in", type: n.type }]; n.outs = []; }
 }
 $("sub").textContent = `root ${T.root} · step ${T.step} s · ${T.solver}`;
@@ -233,7 +235,7 @@ function buildView() {
   // the cluster.
   const rep = new Map();
   for (const n of T.nodes) {
-    const h = n.kind === "leaf" ? hiddenBy(n.cluster) : null;
+    const h = n.kind === "leaf" || n.kind === "setting" ? hiddenBy(n.cluster) : null;
     if (h) rep.set(n.id, { id: "G:" + h, hid: h, prefix: rel(clusterById.get(h).path, n.path) + "." });
     else { rep.set(n.id, { id: n.id, hid: null, prefix: "" }); nodes.set(n.id, { ...n, ins: n.ins.map(p => p.name), outs: n.outs.map(p => p.name) }); }
   }
@@ -274,10 +276,11 @@ function buildView() {
 // ---- DOT -------------------------------------------------------------------------
 const wired = new Set(T.edges.map(e => e.to + "\u0000" + e.toPort));
 function nodeLabel(n) {
-  if (n.kind === "in" || n.kind === "out" || n.kind === "const") {
-    return `<<TABLE BORDER="1" STYLE="ROUNDED" CELLBORDER="0" CELLSPACING="0" CELLPADDING="5" BGCOLOR="#eef1f6">` +
-      `<TR><TD PORT="p"><B>${esc(n.name)}</B>${n.type ? `<BR/><FONT POINT-SIZE="11" COLOR="#666666">${esc(n.type)}</FONT>` : ""}</TD></TR></TABLE>>`;
-  }
+  // A terminal is a shape of its own (see `shapeOf`), so its label is text.
+  if (n.kind === "setting")
+    return `<<B>${esc(n.name)}</B><BR/><FONT POINT-SIZE="11" COLOR="#666666">${esc(n.path)} · ${esc(n.type)}</FONT>>`;
+  if (terminal(n))
+    return `<<B>${esc(n.name)}</B>${n.type ? `<BR/><FONT POINT-SIZE="11" COLOR="#666666">${esc(n.type)}</FONT>` : ""}>`;
   const head = n.kind === "collapsed"
     ? `<B>▸ ${esc(n.name)}</B><BR/><FONT POINT-SIZE="11" COLOR="#666666">${n.ckind} · ${n.leaves} leaves</FONT>`
     : `<B>${esc(n.name)}</B><BR/><FONT POINT-SIZE="11" COLOR="#666666">${esc(n.type)}</FONT>` +
@@ -301,6 +304,16 @@ function nodeLabel(n) {
     `<TR><TD COLSPAN="2" ALIGN="LEFT" BALIGN="LEFT" CELLPADDING="5">${head}</TD></TR>` +
     (rows ? `<HR/>${body}` : "") + `</TABLE>>`;
 }
+// A root input or output is an arrow along the flow, a setting a page with
+// its corner folded, a literal a small plain box. Leaves and collapsed
+// clusters are HTML tables (shape=plain, the graph's default).
+const terminal = n => n.kind === "in" || n.kind === "out" || n.kind === "const" || n.kind === "setting";
+function shapeOf(n) {
+  if (!terminal(n)) return "";
+  const shape = n.kind === "setting" ? "note" : n.kind === "const" ? "box" : "cds";
+  const margin = n.kind === "const" ? "0.06,0.03" : "0.1,0.04";
+  return `, shape=${shape}, style=filled, fillcolor="#eef1f6", width=0, height=0, margin="${margin}"`;
+}
 function toDot(view) {
   const L = ["digraph G {",
     `  graph [rankdir=LR, bgcolor="transparent", fontname="Arial", fontsize=12, nodesep=0.25, ranksep=0.45, newrank=true, labeljust=l, penwidth=1.2];`,
@@ -314,7 +327,7 @@ function toDot(view) {
   }
   const emitNodes = (cid, ind) => {
     for (const n of view.nodes.filter(n => (n.cluster || null) === cid))
-      L.push(`${ind}${q(n.id)} [id=${q("n:" + n.id)}, label=${nodeLabel(n)}];`);
+      L.push(`${ind}${q(n.id)} [id=${q("n:" + n.id)}${shapeOf(n)}, label=${nodeLabel(n)}];`);
   };
   const emitCluster = (c, ind) => {
     const style = c.kind === "group" ? "rounded,dashed" : "rounded";
@@ -333,11 +346,27 @@ function toDot(view) {
   const vn = new Map(view.nodes.map(n => [n.id, n]));
   const end = (id, dir, p) => {
     const n = vn.get(id);
-    if (n.kind === "in" || n.kind === "out" || n.kind === "const") return `${q(id)}:p:${dir === "o" ? "e" : "w"}`;
+    if (terminal(n)) return `${q(id)}:${dir === "o" ? "e" : "w"}`;
     return `${q(id)}:${dir}${(dir === "o" ? n.outs : n.ins).indexOf(p)}:${dir === "o" ? "e" : "w"}`;
   };
   view.edges.forEach((e, i) =>
     L.push(`  ${end(e.from, "o", e.fromPort)} -> ${end(e.to, "i", e.toPort)} [id=${q("e:" + i)}${e.feedthrough ? "" : ', style="dashed"'}];`));
+  // A setting is an input to the box that owns it, so it sits in that box's
+  // first column. An invisible minlen=0 edge to each node the box is entered
+  // at -- one no wire from inside the box feeds -- keeps it from landing right
+  // of any of them, and the real wires carry that to everything after. Edges
+  // to every node inside would do the same, but they crowd crossing
+  // minimisation and the box doubles in height. No id, so the SVG pass never
+  // adopts one as a wire.
+  const inside = (n, cid) => { if (cid === null) return true; for (let c = n.cluster; c; c = clusterById.get(c).parent) if (c === cid) return true; return false; };
+  const source = n => n.kind === "setting" || n.kind === "const";
+  for (const st of view.nodes.filter(n => n.kind === "setting")) {
+    const cid = st.cluster || null;
+    const fed = new Set(view.edges.filter(e => !source(vn.get(e.from)) && inside(vn.get(e.from), cid)).map(e => e.to));
+    for (const m of view.nodes)
+      if (!source(m) && inside(m, cid) && !fed.has(m.id))
+        L.push(`  ${q(st.id)} -> ${q(m.id)} [style=invis, minlen=0, weight=0];`);
+  }
   L.push("}");
   return L.join("\n");
 }
@@ -537,8 +566,8 @@ function toggle(cid) {
 // ---- the details panel -----------------------------------------------------------
 const P = $("panel");
 const goLink = id => `<span class="goto" data-goto="${esc(id)}">${esc(label(byId.get(id)))}</span>`;
-function settingsOf(owner) {
-  const rows = T.settings.filter(s => s.owner === owner);
+function settingsOf(owner) { return settingRows(T.settings.filter(s => s.owner === owner)); }
+function settingRows(rows) {
   if (!rows.length) return `<p class="none">none</p>`;
   return `<table>${rows.map(s => `<tr><td>${esc(s.name)}${s.structural ? '<span class="badge w" title="fixed at elaboration (section 6.2)">structural</span>' : ""}${s.rate ? '<span class="badge" title="drives decimation (section 9.2)">rate</span>' : ""}` +
     `${s.from ? `<div class="from">← ${esc(s.from)}</div>` : ""}</td><td class="v">${esc(s.value)}</td><td class="u">${esc(s.unit)}</td></tr>`).join("")}</table>`;
@@ -554,8 +583,12 @@ function panelNode(n) {
   if (n.kind === "leaf") {
     h += `<div class="k">${esc(n.type)}</div><div class="k">schedule #${n.order}${n.rate ? " · " + esc(n.rate) : ""}${n.solver ? " · owns continuous state" : ""}</div>`;
     h += sourceLink(n);
+  } else if (n.kind === "setting") {
+    // A record setting is one row per field: `headPos.x`, `headPos.y`, ...
+    h += `<div class="k">${n.owner ? "setting of " + esc(n.owner) : "root setting"} · ${esc(n.type)}</div>`;
+    h += `<h3>Value</h3>` + settingRows(T.settings.filter(s => s.owner === n.owner && (s.name === n.name || s.name.startsWith(n.name + "."))));
   } else {
-    h += `<div class="k">${n.kind === "in" ? "root input: the host writes it" : n.kind === "out" ? "root output: the host reads it" : "constant source (section 6.9.2)"}${n.type ? " · " + esc(n.type) : ""}</div>`;
+    h += `<div class="k">${n.kind === "in" ? "root input: the host writes it" : n.kind === "out" ? "root output: the host reads it" : "literal source (section 6.9.2)"}${n.type ? " · " + esc(n.type) : ""}</div>`;
   }
   const into = T.edges.filter(e => e.to === n.id), outOf = T.edges.filter(e => e.from === n.id);
   const end = (id, port) => byId.get(id).kind === "leaf" ? `${goLink(id)}.${esc(port)}` : goLink(id);
@@ -670,11 +703,11 @@ $("collapse").onclick = () => { collapsed.clear(); for (const c of T.clusters) i
 $("reset").onclick = () => { defaults(); render(); };
 // Only composites have paths to find; a group is reached by what is in it.
 const composites = T.clusters.filter(c => c.kind === "composite");
-$("paths").innerHTML = T.nodes.filter(n => n.kind === "leaf").map(n => `<option value="${esc(n.path)}">`).join("") +
+$("paths").innerHTML = T.nodes.filter(n => n.kind === "leaf" || n.kind === "setting").map(n => `<option value="${esc(n.path)}">`).join("") +
   composites.map(c => `<option value="${esc(c.path)}">`).join("");
 $("find").addEventListener("change", () => {
   const v = $("find").value.trim();
-  const n = T.nodes.find(n => n.kind === "leaf" && n.path === v);
+  const n = T.nodes.find(n => (n.kind === "leaf" || n.kind === "setting") && n.path === v);
   if (n) { goto(n.id); return; }
   const g = composites.find(c => c.path === v);
   if (g) {

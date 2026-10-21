@@ -11,6 +11,9 @@
 //   - `d`, a `Plain`, by its instance's annotation alone;
 //   - never the root, although `Coll` itself says `collapsed`: there is no
 //     box around the root to close.
+//
+// `Pair`'s setting `k`, wired straight to a port, is one `setting` node per
+// `Pair` -- `a.k` and `b.k` -- each in its own `Pair`'s box.
 package coll;
 
 use se.math;
@@ -36,14 +39,15 @@ node Coll {
 
 @diagram(collapsed)
 node Pair {
-    inputs  { u: double(m/s^2); }
-    outputs { y: double(m/s^2); }
+    settings { k: double(m/s^2) = 0.0; }
+    inputs   { u: double(m/s^2); }
+    outputs  { y: double(m/s^2); }
 
     structure {
         node s : math.Sum (m/s^2);
         node q : Quiet;
-        self --> s.a;
-        0.0  --> s.b;
+        self    --> s.a;
+        param.k --> s.b;
         s --> q --> self;
     }
 }

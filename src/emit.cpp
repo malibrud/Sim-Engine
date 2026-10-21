@@ -268,6 +268,9 @@ struct Topo {
         enum class From { Leaf, Boundary, Const };
         From from = From::Leaf;
         std::size_t src = 0;               // leaf index, or index into `consts`
+        // Const from a `param.*`: index into `settings`, which the page draws
+        // instead of the per-wire `consts` entry Mermaid uses.
+        std::size_t setting = static_cast<std::size_t>(-1);
         std::string boundary;              // Boundary: the root input's name
         std::string src_port;              // Leaf: the producer's port
         std::size_t dst = 0;               // consuming leaf
@@ -286,6 +289,16 @@ struct Topo {
     std::vector<std::string> in_type;      // per `boundary_in`
     std::vector<Output> outs;
     std::vector<std::string> consts;       // §6.9.2 constant sources, as text
+    // §6.9.2 — a setting wired as a source, once per setting however many
+    // ports it drives, and in the box of the composite that declares it.
+    struct Setting {
+        std::string owner;                 // "wash", "" at the root
+        std::string name;                  // "headPos"
+        std::string path;                  // "wash.headPos"
+        std::string type;                  // as `topo_type` writes it
+        std::size_t cluster = 0;
+    };
+    std::vector<Setting> settings;
     std::vector<Edge> edges;
 };
 
@@ -2819,6 +2832,28 @@ Topo Emitter::topology() const {
         t.outs.push_back(o);
     }
 
+    // A setting source's node: found by path, or made in its owner's box.
+    std::map<std::string, std::size_t> setting_of;
+    auto setting_node = [&](const ExprTok& ref) -> std::size_t {
+        const std::string path = ref.owner.empty() ? ref.text : ref.owner + "." + ref.text;
+        auto it = setting_of.find(path);
+        if (it != setting_of.end()) return it->second;
+        Topo::Setting st;
+        st.owner = ref.owner;
+        st.name = ref.text;
+        st.path = path;
+        st.cluster = composite(ref.owner);
+        st.type = "?";
+        for (const SettingSlot& slot : m_.settings) {
+            if (slot.owner != ref.owner) continue;
+            if (slot.decl == ref.text) { st.type = topo_type(slot.decl_type); break; }
+            if (slot.name == ref.text) { st.type = slot.unit.str(); break; }  // one field of a record
+        }
+        t.settings.push_back(std::move(st));
+        setting_of[path] = t.settings.size() - 1;
+        return t.settings.size() - 1;
+    };
+
     // ---- wires -------------------------------------------------------------
     for (std::size_t i = 0; i < m_.leaves.size(); ++i) {
         const Leaf& leaf = m_.leaves[i];
@@ -2850,6 +2885,9 @@ Topo Emitter::topology() const {
                 e.src = t.consts.size();
                 t.consts.push_back(src.kind == InputSource::Kind::Const ? dbl(src.value)
                                                                         : render_expr(src.expr));
+                if (src.kind == InputSource::Kind::Param && src.expr.size() == 1 &&
+                    src.expr.front().kind == ExprTok::Kind::Param)
+                    e.setting = setting_node(src.expr.front());
             } else {
                 e.from = Topo::Edge::From::Leaf;
                 e.src = src.producer;
@@ -3181,9 +3219,20 @@ std::string Emitter::topology_json(const Topo& topo) const {
                        ", \"kind\": \"out\", \"name\": " + jstr("out." + topo.outs[k].path) +
                        ", \"type\": " + jstr(topo.outs[k].type) + "}");
     }
+    // A literal is a terminal per wire; a setting, one node however many
+    // wires it drives, so its `consts` entries are not written.
+    std::vector<bool> is_literal(topo.consts.size(), true);
+    for (const Topo::Edge& e : topo.edges)
+        if (e.from == Topo::Edge::From::Const && e.setting != std::string::npos) is_literal[e.src] = false;
     for (std::size_t k = 0; k < topo.consts.size(); ++k)
-        rows.push_back("{\"id\": " + jstr("const." + std::to_string(k)) +
-                       ", \"kind\": \"const\", \"name\": " + jstr(topo.consts[k]) + "}");
+        if (is_literal[k])
+            rows.push_back("{\"id\": " + jstr("const." + std::to_string(k)) +
+                           ", \"kind\": \"const\", \"name\": " + jstr(topo.consts[k]) + "}");
+    for (const Topo::Setting& st : topo.settings)
+        rows.push_back("{\"id\": " + jstr("setting." + st.path) + ", \"kind\": \"setting\", \"name\": " +
+                       jstr(st.name) + ", \"owner\": " + jstr(st.owner) + ", \"path\": " +
+                       jstr(st.path) + ", \"cluster\": " + gid(st.cluster) + ", \"type\": " +
+                       jstr(st.type) + "}");
     t << "\"nodes\": [";
     for (std::size_t k = 0; k < rows.size(); ++k) t << (k ? ",\n " : "\n ") << rows[k];
     t << (rows.empty() ? "],\n" : "\n],\n");
@@ -3197,7 +3246,11 @@ std::string Emitter::topology_json(const Topo& topo) const {
         switch (e.from) {
         case Topo::Edge::From::Leaf: from = m_.leaves[e.src].ident; port = e.src_port; break;
         case Topo::Edge::From::Boundary: from = "in." + e.boundary; port = "out"; break;
-        case Topo::Edge::From::Const: from = "const." + std::to_string(e.src); port = "out"; break;
+        case Topo::Edge::From::Const:
+            from = e.setting != std::string::npos ? "setting." + topo.settings[e.setting].path
+                                     : "const." + std::to_string(e.src);
+            port = "out";
+            break;
         }
         rows.push_back("{\"from\": " + jstr(from) + ", \"fromPort\": " + jstr(port) +
                        ", \"to\": " + jstr(m_.leaves[e.dst].ident) + ", \"toPort\": " +
