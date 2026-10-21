@@ -9,25 +9,21 @@ node Integrator3 {
     inputs  { x: math.Vec3(U); }
     outputs { y: math.Vec3(U*s); }
 
-    structure {
-        // `mg` merges the INTEGRATED axes, so it binds `U*s` and not `U`: the
-        // scalar `ct.Integrator` is U -> U*s, and a `Merge3(U)` here is an
-        // SE0410 on all three wires.
-        node sp: math.Split3(U) {};
-        node mg: math.Merge3(U*s) {};
+    states {
+        continuous y0:  double(-) = 0.0;
+        continuous y1:  double(-) = 0.0;
+        continuous y2:  double(-) = 0.0;
+    }
 
-        // `ix`/`iy`/`iz`, not `x`/`y`/`z`: this node's own ports are named `x`
-        // and `y` after the scalar `ct.Integrator`, and an instance sharing a
-        // port's name is SE0330. `FirstOrderSystem3` gets away with the bare
-        // axis names only because its ports are `vin`/`vout`.
-        node ix: ct.Integrator(U) {};
-        node iy: ct.Integrator(U) {};
-        node iz: ct.Integrator(U) {};
+    derivative(x) {
+        der.y0 = in.x.x;
+        der.y1 = in.x.y;
+        der.y2 = in.x.z;
+    }
 
-        self --> sp;
-        sp.x --> ix --> mg.x;
-        sp.y --> iy --> mg.y;
-        sp.z --> iz --> mg.z;
-        mg  --> self;
+    output() {
+        out.y.x = state.y0;
+        out.y.y = state.y1;
+        out.y.z = state.y2;
     }
 }
