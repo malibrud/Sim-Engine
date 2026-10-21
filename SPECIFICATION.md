@@ -117,9 +117,19 @@ column in §16.4 gives the detecting stage.
 ### 2.1 Files, roots, and packages
 
 A **root** is a directory declared to the compiler from outside the language
-(command line or project manifest), exactly like a C++ include directory. There
-is no in-language root declaration and no environment variable — roots come from
-an explicit, checked-in list, so builds are reproducible.
+(command line or roots file), exactly like a C++ include directory. There is no
+in-language root declaration.
+
+Roots come from three places, in this order: `-I` on the command line; a **roots
+file**, `se.roots`, found by walking up from the input file's directory, whose
+lines are root paths relative to the file (`#` starts a comment); and the
+**toolchain's standard library**, `<dir>/../stdlib` where `<dir>` holds the `sec`
+executable, used when it exists. There is no environment variable: the roots
+file is checked in beside the model and the standard library travels with the
+toolchain, so a checkout plus a pinned `sec` builds the same model anywhere, CI
+included. `--no-default-roots` turns off both the roots file and the standard
+library. A root reached two ways (say `-I stdlib` and the toolchain's copy)
+counts once. With no `-I` and no roots file, the current directory is a root.
 
 Within a root, **the directory path is the package path**, and the package path
 is the C++ namespace path:
@@ -129,8 +139,9 @@ is the C++ namespace path:
 <root>/se/mech/Damper.se          ->  package se.mech, node se.mech.Damper
 ```
 
-The **standard library is one root** shipped with the toolchain, with no special
-status: `std` is an ordinary package name, not reserved. Its "version" is
+The **standard library is one root** shipped with the toolchain, found beside the
+toolchain rather than declared, but resolved exactly as any other root, with no
+other special status: `std` is an ordinary package name, not reserved. Its "version" is
 whatever is on disk at that path; pinning is delegated to whatever already
 manages filesystem contents (vendoring, a submodule), not to a DSL-native
 package-version resolver.
@@ -169,7 +180,7 @@ staircase one base step wide, so RK4 is first-order across that path. A
 exact at every minor step — is a pure extension if that cost ever bites.
 
 **Root collisions.** A package path that resolves in more than one root is an
-error (`SE0305`). A root may be marked `override` in the manifest, which permits
+error (`SE0305`). A root may be marked `override` in the roots file, which permits
 it to shadow nodes at the same path in earlier roots. Shadowing is therefore
 always a declared, visible act — never silent search-order behaviour.
 

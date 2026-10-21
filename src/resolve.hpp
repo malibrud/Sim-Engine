@@ -28,6 +28,8 @@ namespace se {
 // across all of them.
 class Resolver {
 public:
+    // `roots` is the finished search list, in order; the driver assembles it
+    // from -I, se.roots, the toolchain stdlib and the `.` default (§2.1).
     Resolver(Diagnostics& diag, std::vector<std::string> roots);
 
     // Resolves `fq` and everything it reaches. `src`/`loc` locate the request

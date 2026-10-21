@@ -135,7 +135,7 @@ foreach ($f in (Get-ChildItem -Path (Join-Path $root 'tests\err') -File | Sort-O
 # reported, and nothing may be written.
 $colsOut = Join-Path $root 'build\test\cols'
 if (Test-Path $colsOut) { Remove-Item -Recurse -Force $colsOut }
-$colsActual = (& $sec --no-color --max-errors=0 --test -I 'tests/nodetest/lib' `
+$colsActual = (& $sec --no-color --no-default-roots --max-errors=0 --test -I 'tests/nodetest/lib' `
                    -o ($colsOut.Replace('\', '/')) 'tests/nodetest/lib/nt/Cols.se' 2>&1 |
                Out-String) -replace "`r`n", "`n"
 $colsCode = $LASTEXITCODE
@@ -236,9 +236,10 @@ function Run-Emit($simName) {
     if (Test-Path $outDir) { Remove-Item -Recurse -Force $outDir }
     New-Item -ItemType Directory -Force $outDir | Out-Null
 
-    # `stdlib` is a root like any other (sec. 2.1): the standard library gets no
-    # special mechanism, it is simply on the search path.
-    $actual = (& $sec --no-color --quiet --max-errors=0 --emit `
+    # `stdlib` is a root like any other (sec. 2.1). Every call in this suite
+    # passes --no-default-roots and names its roots, so neither the toolchain's
+    # stdlib nor a stray se.roots above the checkout can change a result.
+    $actual = (& $sec --no-color --no-default-roots --quiet --max-errors=0 --emit `
                       -I stdlib -I tests/emit/lib -o ($outDir -replace '\\', '/') $rel 2>&1 | Out-String)
     $code   = $LASTEXITCODE
     $actual = $actual -replace "`r`n", "`n"
@@ -484,7 +485,7 @@ foreach ($ex in $examples) {
     New-Item -ItemType Directory -Force $exDir | Out-Null
     $rootArgs = @()
     foreach ($r in $ex.roots) { $rootArgs += '-I'; $rootArgs += $r }
-    & $sec --no-color --quiet --emit @rootArgs -o ($exDir -replace '\\', '/') $ex.sim
+    & $sec --no-color --no-default-roots --quiet --emit @rootArgs -o ($exDir -replace '\\', '/') $ex.sim
     if ($LASTEXITCODE -eq 0) {
         Write-Host ("ok   " + $ex.sim + " --emit") -ForegroundColor Green
         $script:pass++
@@ -498,6 +499,50 @@ foreach ($ex in $examples) {
         $script:fail++
     }
 }
+
+# -----------------------------------------------------------------------------
+#  Root discovery (SPEC 2.1).
+# -----------------------------------------------------------------------------
+#  The only cases run WITHOUT --no-default-roots. A throwaway project under
+#  build\roots holds ContBq.sim two directories below an se.roots that names
+#  tests/emit/lib; `se.*` must then come from the toolchain's stdlib, which for
+#  build\sec.exe is this checkout's stdlib/.
+$rtBase = Join-Path $root 'build\roots'
+if (Test-Path $rtBase) { Remove-Item -Recurse -Force $rtBase }
+$rtSimDir = Join-Path $rtBase 'proj\a\b'
+New-Item -ItemType Directory -Force $rtSimDir | Out-Null
+Copy-Item (Join-Path $root 'tests\emit\ContBq.sim') $rtSimDir
+$rtSim   = (Join-Path $rtSimDir 'ContBq.sim') -replace '\\', '/'
+$rtOut   = (Join-Path $rtBase 'out') -replace '\\', '/'
+$rtRoots = Join-Path $rtBase 'proj\se.roots'
+
+# One claim: sec's exit code, and a fragment its output must contain. Driver
+# errors go to stderr, so each record is taken as its plain text.
+function Check-Roots($label, $roots, $wantCode, $wantText, [string[]]$extra) {
+    $ErrorActionPreference = 'Continue'
+    [IO.File]::WriteAllText($rtRoots, $roots)
+    $text = (& $sec --no-color --quiet --emit @extra -o $rtOut $rtSim 2>&1 |
+             ForEach-Object { "$_" }) -join "`n"
+    $code = $LASTEXITCODE
+    if ($code -eq $wantCode -and $text.Contains($wantText)) {
+        Write-Host "ok   roots: $label" -ForegroundColor Green
+        $script:pass++
+    } else {
+        Write-Host "FAIL roots: $label : expected exit $wantCode and ``$wantText``, got exit $code" `
+            -ForegroundColor Red
+        Write-Host $text
+        $script:fail++
+    }
+}
+
+$rtLib = "# the emit tests' packages`n../../../tests/emit/lib   # relative to this file`n"
+Check-Roots 'se.roots two levels up, stdlib from the toolchain' $rtLib 0 '' @()
+Check-Roots '--show-roots names each source' $rtLib 0 'toolchain' @('--show-roots')
+Check-Roots '--show-roots names the roots file' $rtLib 0 'se.roots ' @('--show-roots')
+Check-Roots '-I stdlib beside the toolchain copy is one root, not SE0305' $rtLib 0 '' @('-I', 'stdlib')
+Check-Roots 'a missing directory in se.roots is a driver error' "../../../tests/emit/lib`nnope`n" 2 `
+    'se.roots:2: no such directory `nope`' @()
+Check-Roots '--no-default-roots reads neither' $rtLib 1 'SE0304' @('--no-default-roots')
 
 # -----------------------------------------------------------------------------
 #  Documentation (SPEC 3.2 and 6.14).
@@ -757,7 +802,7 @@ Set-Content (Join-Path $smokePkg 'Smoke.se')  $smokeSe  -Encoding utf8
 Set-Content (Join-Path $smokePkg 'Smoke.sim') $smokeSim -Encoding utf8
 
 $smokeOut = Join-Path $smokeRoot 'emit'
-$smokeErr = (& $sec --no-color --quiet --max-errors=0 --emit `
+$smokeErr = (& $sec --no-color --no-default-roots --quiet --max-errors=0 --emit `
                     -I stdlib -I ($smokeRoot -replace '\\', '/') `
                     -o ($smokeOut -replace '\\', '/') `
                     ((Join-Path $smokePkg 'Smoke.sim') -replace '\\', '/') 2>&1 | Out-String)
@@ -854,7 +899,7 @@ if (-not $cl) {
         if (Test-Path $cfOut) { Remove-Item -Recurse -Force $cfOut }
         New-Item -ItemType Directory -Force $cfOut | Out-Null
         $cfArg = $cfOut.Replace('\', '/')
-        & $sec --no-color --quiet --emit -I 'tests/cppfail/lib' -o $cfArg ("tests/cppfail/" + $cf.name + ".sim")
+        & $sec --no-color --no-default-roots --quiet --emit -I 'tests/cppfail/lib' -o $cfArg ("tests/cppfail/" + $cf.name + ".sim")
         if ($LASTEXITCODE -ne 0) {
             Write-Host ("FAIL tests/cppfail/" + $cf.name +
                         ".sim : should emit cleanly, sec refused it") -ForegroundColor Red

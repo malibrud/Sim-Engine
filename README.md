@@ -235,15 +235,33 @@ powershell -File tests\run.ps1
 ```powershell
 .\build\sec.exe examples\drivetrain\Wheel.se               # parse and report diagnostics
 .\build\sec.exe --dump-ast examples\drivetrain\Wheel.se    # print the AST
-.\build\sec.exe --test -I stdlib -o build\test stdlib\se\kin\EulerToQuat.se   # write node tests
+.\build\sec.exe --test -o build\test stdlib\se\kin\EulerToQuat.se   # write node tests
+.\build\sec.exe --show-roots                                 # where packages are looked up
 .\build\sec.exe --help
 ```
 
 `-I` adds a **root** (§2.1): a directory, like a C++ include directory, in
 which the package path is the directory path. So `-I examples` makes
-`drivetrain.Corner` mean `examples/drivetrain/Corner.se`, and `-I stdlib` makes
-the standard library visible. There is no environment variable and no search
-default beyond `.`, so a build is reproducible from its command line.
+`drivetrain.Corner` mean `examples/drivetrain/Corner.se`.
+
+Two more roots come without `-I`:
+
+- **The standard library**, found beside `sec` itself at `<dir of sec>/../stdlib`:
+  `build\sec.exe` finds this checkout's `stdlib\`, and an installed
+  `bin\sec.exe` finds its sibling `stdlib\`.
+- **An `se.roots` file**, the nearest one at or above the input file. It lists
+  your project's roots, one per line, relative to the file, with `#` starting a
+  comment:
+
+  ```
+  # se.roots, checked in at the top of the project
+  model
+  ```
+
+There is no environment variable: the roots file is checked in and the stdlib
+ships with `sec`, so a checkout plus a pinned `sec` builds the same model on any
+machine or CI runner. `--show-roots` prints the list and where each entry came
+from; `--no-default-roots` leaves only `-I` (and `.` if there is none).
 
 ---
 
@@ -358,7 +376,8 @@ a full one: nothing is tracked between runs.
 
 ## The standard library
 
-`stdlib/` is an ordinary root whose package is `se`. Add `-I stdlib` to use it.
+`stdlib/` is an ordinary root whose package is `se`. `sec` finds it beside
+itself, so no `-I` is needed to use it.
 
 | Package | Contents |
 |---|---|

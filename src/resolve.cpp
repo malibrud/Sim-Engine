@@ -123,9 +123,7 @@ bool Leaf::has_discrete() const {
 // ─── Resolver ────────────────────────────────────────────────────────────────
 
 Resolver::Resolver(Diagnostics& diag, std::vector<std::string> roots)
-    : diag_(diag), roots_(std::move(roots)) {
-    if (roots_.empty()) roots_.push_back(".");
-}
+    : diag_(diag), roots_(std::move(roots)) {}
 
 const NodeInfo* Resolver::resolve_root(const std::string& fq, const Source& src, Loc loc) {
     const std::size_t dot = fq.rfind('.');

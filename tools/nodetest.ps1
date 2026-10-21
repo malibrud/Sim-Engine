@@ -11,7 +11,8 @@
 #      powershell -File tools\nodetest.ps1 -I mylib mylib\pkg\Node.se
 #
 #  -I names the root(s) the files are resolved against, as for sec; the
-#  default is `stdlib`. Output goes under build\test (or -Out), one directory
+#  default is `stdlib`. They are the only roots: sec is run with
+#  --no-default-roots, so no se.roots or toolchain stdlib joins them. Output goes under build\test (or -Out), one directory
 #  per file. A file is tested if it contains a `tests {` section.
 #
 #  Exit status: 0 when every program built and passed, 1 otherwise, 2 when
@@ -95,7 +96,7 @@ try {
         $dir = Join-Path $Out $tag
         if (Test-Path $dir) { Remove-Item -Recurse -Force $dir }
 
-        & $sec --quiet --test @rootArgs -o $dir.Replace('\', '/') $rel
+        & $sec --quiet --no-default-roots --test @rootArgs -o $dir.Replace('\', '/') $rel
         if ($LASTEXITCODE -ne 0) {
             Write-Host "FAIL $rel : sec --test refused it" -ForegroundColor Red
             $failed++

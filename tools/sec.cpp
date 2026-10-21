@@ -22,7 +22,10 @@
 //      --dump-ast         print the parsed AST
 //      --dump-tokens      print the token stream (does not parse)
 //      -I <dir>           add a root directory (§2.1); repeatable
-//      -o <dir>           output directory for --emit (default `.`), created
+//      --no-default-roots do not read se.roots or add the toolchain stdlib
+//      --show-roots       print each root and where it came from; with no
+//                         input files, print them and stop
+//      -o <dir>          output directory for --emit (default `.`), created
 //                         if it does not exist
 //      --stem=<name>      output base name for --emit (default: the sim name)
 //      --no-main          do not write main.cpp (embed in your own host)
@@ -42,15 +45,23 @@
 //  A root is a directory declared from outside the language, exactly like a
 //  C++ include directory, and the package path is the directory path inside
 //  it: `-I examples` makes `drivetrain.Corner` mean
-//  `examples/drivetrain/Corner.se`. There is deliberately no environment
-//  variable and no search-path default beyond `.`, so builds are reproducible.
+//  `examples/drivetrain/Corner.se`. After the -I roots come the lines of the
+//  nearest `se.roots` at or above the first input's directory, then the
+//  toolchain's stdlib at `<dir of sec>/../stdlib`, so `build/sec.exe` finds
+//  the repo's `stdlib/` and an installed `bin/sec` its sibling. With no -I and
+//  no se.roots, `.` is a root. There is deliberately no environment variable:
+//  both sources are checked in or shipped, so builds are reproducible.
 //
 //  Exit status (§16.2): 0 clean, 1 at least one error, 2 driver failure.
 // ─────────────────────────────────────────────────────────────────────────────
 
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -73,8 +84,13 @@
 #else
 #include <unistd.h>
 #endif
+#ifdef __APPLE__
+#include <mach-o/dyld.h>
+#endif
 
 namespace {
+
+namespace fs = std::filesystem;
 
 enum class Kind { Model, Sim, Settings };
 enum class Mode { Parse, Emit, Test, Doc, DumpAst, DumpTokens };
@@ -92,6 +108,8 @@ void usage(std::ostream& o) {
          "  --dump-ast         print the parsed AST\n"
          "  --dump-tokens      print the token stream (does not parse)\n"
          "  -I <dir>           add a root directory; repeatable\n"
+         "  --no-default-roots do not read se.roots or add the toolchain stdlib\n"
+         "  --show-roots       print each root and its source (no files: then stop)\n"
          "  -o <dir>           output directory for --emit (default `.`),\n"
          "                     created if it does not exist\n"
          "  --stem=<name>      output base name for --emit (default: the sim name)\n"
@@ -192,6 +210,126 @@ void dump_tokens(const se::Source& src, se::Diagnostics& diag) {
     }
 }
 
+// ─── Roots (§2.1) ────────────────────────────────────────────────────────────
+
+struct Root {
+    std::string dir;
+    std::string from;   // for --show-roots: "-I", "se.roots <file>", ...
+};
+
+// The directory holding this executable, from the OS rather than argv[0],
+// which is whatever the shell was given and may be a bare name found on PATH.
+fs::path exe_dir(const char* argv0) {
+    std::error_code ec;
+#if defined(_WIN32)
+    std::wstring buf(MAX_PATH, L'\0');
+    for (;;) {
+        const DWORD n = GetModuleFileNameW(nullptr, &buf[0], static_cast<DWORD>(buf.size()));
+        if (n == 0) break;
+        if (n < buf.size()) {
+            buf.resize(n);
+            return fs::path(buf).parent_path();
+        }
+        buf.resize(buf.size() * 2);   // truncated: the path is longer than MAX_PATH
+    }
+#elif defined(__APPLE__)
+    std::uint32_t size = 0;
+    _NSGetExecutablePath(nullptr, &size);
+    std::string buf(size, '\0');
+    if (_NSGetExecutablePath(&buf[0], &size) == 0) {
+        const fs::path p = fs::weakly_canonical(fs::path(buf.c_str()), ec);
+        if (!ec) return p.parent_path();
+    }
+#else
+    const fs::path p = fs::read_symlink("/proc/self/exe", ec);
+    if (!ec) return p.parent_path();
+#endif
+    const fs::path q = fs::absolute(argv0, ec);
+    return ec ? fs::path() : q.parent_path();
+}
+
+// The nearest `se.roots` at or above `start`, or empty, found the way an
+// editor finds `.clang-format`.
+fs::path find_roots_file(const std::string& start) {
+    std::error_code ec;
+    fs::path dir = fs::absolute(start, ec).lexically_normal();
+    if (ec) return {};
+    for (;;) {
+        const fs::path f = dir / "se.roots";
+        if (fs::is_regular_file(f, ec)) return f;
+        const fs::path up = dir.parent_path();
+        if (up.empty() || up == dir) return {};
+        dir = up;
+    }
+}
+
+// Appends the roots listed in `file`: one path per line, relative to the
+// file, `#` to the end of the line a comment. A listed directory that does
+// not exist is a driver error, since the file is the model's own checked-in
+// claim about where its packages are.
+bool read_roots_file(const fs::path& file, std::vector<Root>& out) {
+    std::ifstream in(file);
+    if (!in) {
+        std::cerr << "sec: " << file.generic_string() << ": cannot read\n";
+        return false;
+    }
+    const std::string from = "se.roots " + file.generic_string();
+    std::string line;
+    for (int n = 1; std::getline(in, line); ++n) {
+        const std::size_t hash = line.find('#');
+        if (hash != std::string::npos) line.erase(hash);
+        const std::size_t b = line.find_first_not_of(" \t\r");
+        if (b == std::string::npos) continue;
+        line = line.substr(b, line.find_last_not_of(" \t\r") - b + 1);
+        if (line.rfind("override ", 0) == 0) {
+            std::cerr << "sec: " << file.generic_string() << ":" << n
+                      << ": `override` is not implemented yet (§2.1)\n";
+            return false;
+        }
+        const fs::path dir = (file.parent_path() / line).lexically_normal();
+        std::error_code ec;
+        if (!fs::is_directory(dir, ec)) {
+            std::cerr << "sec: " << file.generic_string() << ":" << n
+                      << ": no such directory `" << line << "`\n";
+            return false;
+        }
+        out.push_back({dir.generic_string(), from});
+    }
+    return true;
+}
+
+// -I first, then se.roots, then `.` if neither gave a root, then the
+// toolchain stdlib. A directory reached twice keeps its first place, so
+// `-I stdlib` beside the toolchain's own copy is not an SE0305 collision.
+bool assemble_roots(const std::vector<std::string>& cli, bool defaults,
+                    const std::string& first_input, const char* argv0,
+                    std::vector<Root>& out) {
+    for (const std::string& r : cli) out.push_back({r, "-I"});
+    if (defaults) {
+        const fs::path file = find_roots_file(dir_of(first_input));
+        if (!file.empty() && !read_roots_file(file, out)) return false;
+    }
+    if (out.empty()) out.push_back({".", "default"});
+    if (defaults) {
+        const fs::path bin = exe_dir(argv0);
+        std::error_code ec;
+        if (!bin.empty()) {
+            const fs::path lib = (bin.parent_path() / "stdlib").lexically_normal();
+            if (fs::is_directory(lib / "se", ec)) out.push_back({lib.generic_string(), "toolchain"});
+        }
+    }
+    std::set<std::string> seen;
+    std::vector<Root> kept;
+    for (Root& r : out) {
+        std::error_code ec;
+        std::string key = fs::weakly_canonical(r.dir, ec).generic_string();
+        if (ec) key = r.dir;
+        if (seen.insert(key).second) kept.push_back(std::move(r));
+    }
+    out = std::move(kept);
+    return true;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -202,6 +340,8 @@ int main(int argc, char** argv) {
     int max_errors = 20;
     std::vector<std::string> files;
     std::vector<std::string> roots;
+    bool default_roots = true;
+    bool show_roots = false;
     se::EmitOptions emit_opt;
     se::DocOptions doc_opt;
 
@@ -218,6 +358,10 @@ int main(int argc, char** argv) {
             roots.push_back(argv[i]);
         } else if (a.rfind("-I", 0) == 0 && a.size() > 2) {
             roots.push_back(a.substr(2));
+        } else if (a == "--no-default-roots") {
+            default_roots = false;
+        } else if (a == "--show-roots") {
+            show_roots = true;
         } else if (a == "-o") {
             if (++i >= argc) {
                 std::cerr << "sec: -o needs a directory\n";
@@ -296,6 +440,20 @@ int main(int argc, char** argv) {
         } else {
             files.push_back(a);
         }
+    }
+
+    // Only the modes that resolve need roots, so a broken se.roots does not
+    // stop a plain parse.
+    if (show_roots || mode == Mode::Emit || mode == Mode::Test) {
+        std::vector<Root> found;
+        if (!assemble_roots(roots, default_roots, files.empty() ? "" : files.front(),
+                            argv[0], found))
+            return 2;
+        if (show_roots)
+            for (const Root& r : found) std::printf("root  %-40s  %s\n", r.dir.c_str(), r.from.c_str());
+        roots.clear();
+        for (const Root& r : found) roots.push_back(r.dir);
+        if (show_roots && files.empty()) return 0;
     }
 
     if (files.empty()) {
