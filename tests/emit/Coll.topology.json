@@ -4,13 +4,13 @@
 "step": "0.001",
 "solver": "rk4",
 "clusters": [
- {"id": "g1", "kind": "composite", "name": "a", "path": "a", "parent": null, "collapsed": true},
- {"id": "g2", "kind": "composite", "name": "q", "path": "a.q", "parent": "g1", "collapsed": true},
- {"id": "g3", "kind": "composite", "name": "b", "path": "b", "parent": null},
- {"id": "g4", "kind": "composite", "name": "q", "path": "b.q", "parent": "g3", "collapsed": true},
+ {"id": "g1", "kind": "composite", "name": "a", "path": "a", "parent": null, "collapsed": true, "ins": [{"name": "u", "type": "m/s^2"}], "outs": [{"name": "y", "type": "m/s^2"}]},
+ {"id": "g2", "kind": "composite", "name": "q", "path": "a.q", "parent": "g1", "collapsed": true, "ins": [{"name": "u", "type": "m/s^2"}], "outs": [{"name": "y", "type": "m/s^2"}]},
+ {"id": "g3", "kind": "composite", "name": "b", "path": "b", "parent": null, "ins": [{"name": "u", "type": "m/s^2"}], "outs": [{"name": "y", "type": "m/s^2"}]},
+ {"id": "g4", "kind": "composite", "name": "q", "path": "b.q", "parent": "g3", "collapsed": true, "ins": [{"name": "u", "type": "m/s^2"}], "outs": [{"name": "y", "type": "m/s^2"}]},
  {"id": "g5", "kind": "group", "name": "Tail", "path": "", "parent": null, "file": "tests/emit/lib/coll/Coll.se", "line": 28, "doc": null, "collapsed": true},
- {"id": "g6", "kind": "composite", "name": "c", "path": "c", "parent": "g5"},
- {"id": "g7", "kind": "composite", "name": "d", "path": "d", "parent": null, "collapsed": true}
+ {"id": "g6", "kind": "composite", "name": "c", "path": "c", "parent": "g5", "ins": [{"name": "u", "type": "m/s^2"}], "outs": [{"name": "y", "type": "m/s^2"}]},
+ {"id": "g7", "kind": "composite", "name": "d", "path": "d", "parent": null, "collapsed": true, "ins": [{"name": "u", "type": "m/s^2"}], "outs": [{"name": "y", "type": "m/s^2"}]}
 ],
 "nodes": [
  {"id": "a_s", "kind": "leaf", "name": "s", "path": "a.s", "type": "se.math.Sum", "cluster": "g1", "order": 0, "rate": null, "solver": false, "file": "stdlib/se/math/Sum.se", "line": 11, "ins": [{"name": "a", "type": "m/s^2"}, {"name": "b", "type": "m/s^2"}], "outs": [{"name": "y", "type": "m/s^2"}], "states": []},
@@ -29,19 +29,19 @@
  {"id": "const.5", "kind": "const", "name": "0.0"}
 ],
 "edges": [
- {"from": "in.u", "fromPort": "out", "to": "a_s", "toPort": "a", "type": "m/s^2", "feedthrough": true},
+ {"from": "in.u", "fromPort": "out", "to": "a_s", "toPort": "a", "type": "m/s^2", "feedthrough": true, "via": ["a.u"]},
  {"from": "const.0", "fromPort": "out", "to": "a_s", "toPort": "b", "type": "m/s^2", "feedthrough": true},
- {"from": "a_s", "fromPort": "y", "to": "a_q_z", "toPort": "a", "type": "m/s^2", "feedthrough": true},
+ {"from": "a_s", "fromPort": "y", "to": "a_q_z", "toPort": "a", "type": "m/s^2", "feedthrough": true, "via": ["a.q.u"]},
  {"from": "const.1", "fromPort": "out", "to": "a_q_z", "toPort": "b", "type": "m/s^2", "feedthrough": true},
- {"from": "a_q_z", "fromPort": "y", "to": "b_s", "toPort": "a", "type": "m/s^2", "feedthrough": true},
+ {"from": "a_q_z", "fromPort": "y", "to": "b_s", "toPort": "a", "type": "m/s^2", "feedthrough": true, "via": ["a.q.y", "a.y", "b.u"]},
  {"from": "const.2", "fromPort": "out", "to": "b_s", "toPort": "b", "type": "m/s^2", "feedthrough": true},
- {"from": "b_s", "fromPort": "y", "to": "b_q_z", "toPort": "a", "type": "m/s^2", "feedthrough": true},
+ {"from": "b_s", "fromPort": "y", "to": "b_q_z", "toPort": "a", "type": "m/s^2", "feedthrough": true, "via": ["b.q.u"]},
  {"from": "const.3", "fromPort": "out", "to": "b_q_z", "toPort": "b", "type": "m/s^2", "feedthrough": true},
- {"from": "b_q_z", "fromPort": "y", "to": "c_z", "toPort": "a", "type": "m/s^2", "feedthrough": true},
+ {"from": "b_q_z", "fromPort": "y", "to": "c_z", "toPort": "a", "type": "m/s^2", "feedthrough": true, "via": ["b.q.y", "b.y", "c.u"]},
  {"from": "const.4", "fromPort": "out", "to": "c_z", "toPort": "b", "type": "m/s^2", "feedthrough": true},
- {"from": "c_z", "fromPort": "y", "to": "d_z", "toPort": "a", "type": "m/s^2", "feedthrough": true},
+ {"from": "c_z", "fromPort": "y", "to": "d_z", "toPort": "a", "type": "m/s^2", "feedthrough": true, "via": ["c.y", "d.u"]},
  {"from": "const.5", "fromPort": "out", "to": "d_z", "toPort": "b", "type": "m/s^2", "feedthrough": true},
- {"from": "d_z", "fromPort": "y", "to": "out.0", "toPort": "in", "type": "m/s^2", "feedthrough": true}
+ {"from": "d_z", "fromPort": "y", "to": "out.0", "toPort": "in", "type": "m/s^2", "feedthrough": true, "via": ["d.y"]}
 ],
 "settings": []
 }

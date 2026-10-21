@@ -1470,6 +1470,21 @@ void Elaborator::instantiate(const NodeInfo* def, const std::string& path,
             child_bindings[inst.name] = unit_args_of(def, it->second, inst, def_src);
         }
 
+        // The child composites' declared ports, for the topology page.
+        for (const ast::Instance& inst : st.instances) {
+            auto it = def->children.find(inst.name);
+            if (it == def->children.end() || !it->second->composite) continue;
+            auto bit = child_bindings.find(inst.name);
+            auto bound = [&](Field f) {
+                if (bit != child_bindings.end()) f.type = bind_type(f.type, bit->second);
+                return f;
+            };
+            Model::CompositePorts cp;
+            for (const Field& f : it->second->inputs) cp.ins.push_back(bound(f));
+            for (const Field& f : it->second->outputs) cp.outs.push_back(bound(f));
+            m.composite_ports[sub(path, inst.name)] = std::move(cp);
+        }
+
         collect_wires(def, path, m, child_bindings);
         for (const ast::Instance& inst : def->def->structure.instances) {
             auto child_it = def->children.find(inst.name);
@@ -2073,6 +2088,10 @@ bool Elaborator::trace_source(const std::string& key, InputSource& in,
     } else {
         return false;
     }
+
+    // Every hop but the first lands on a composite port: a child's input or
+    // the composite's own output. Listed source end first.
+    for (std::size_t j = chain.size(); j-- > 1;) in.via.push_back(chain[j - 1]->source);
 
     double s = 1.0, o = 0.0;
     for (std::size_t j = chain.size(); j-- > 0;) {

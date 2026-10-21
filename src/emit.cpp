@@ -261,6 +261,7 @@ struct Topo {
         std::string port;
         std::string path;                  // "whl.ws"
         std::string type;                  // "?" when the port is not found
+        std::vector<std::string> via;      // composite ports on the way out
     };
     // One connected input port.
     struct Edge {
@@ -274,6 +275,9 @@ struct Topo {
         std::string type;                  // as a reader wants it, with any
                                            // folded conversion: "rad to deg"
         bool feedthrough = false;          // `output()` reads it (§8.3)
+        // The composite ports the wire passes through, source end first, so
+        // the page can draw a collapsed composite by its own ports.
+        std::vector<std::string> via;
     };
 
     std::vector<Cluster> clusters;
@@ -2805,6 +2809,12 @@ Topo Emitter::topology() const {
             o.path = leaf.path.empty() ? port : leaf.path + "." + port;
             for (const Field& f : leaf.ports_out)
                 if (f.name == port) o.type = topo_type(f.type);
+            for (const RootOutput& r : m_.root_outputs)
+                if (r.src.kind == InputSource::Kind::Leaf && r.src.producer == it->second &&
+                    r.src.port == port) {
+                    o.via = r.src.via;
+                    break;
+                }
         }
         t.outs.push_back(o);
     }
@@ -2856,6 +2866,7 @@ Topo Emitter::topology() const {
                     if (f.name == src.port && !f.type.is_record)
                         e.type = f.type.unit.str() + " to " + e.type;
             }
+            e.via = src.via;
             t.edges.push_back(e);
         }
     }
@@ -3069,6 +3080,14 @@ std::string jbool(bool b) { return b ? "true" : "false"; }
 // A string or `null` when empty.
 std::string jopt(const std::string& s) { return s.empty() ? "null" : jstr(s); }
 
+// `, "via": [...]`, or nothing for a wire that crosses no composite boundary.
+std::string jvia(const std::vector<std::string>& via) {
+    if (via.empty()) return std::string();
+    std::string r = ", \"via\": [";
+    for (std::size_t i = 0; i < via.size(); ++i) r += (i ? ", " : "") + jstr(via[i]);
+    return r + "]";
+}
+
 // A port list: [{"name":..,"type":..}, ...]
 std::string jports(const std::vector<Field>& ports) {
     std::string r = "[";
@@ -3109,6 +3128,12 @@ std::string Emitter::topology_json(const Topo& topo) const {
         // §6.15 — written only when set, so a model with no `@diagram` emits
         // the JSON it always did.
         if (c.collapsed) t << ", \"collapsed\": true";
+        // A composite's own ports, which the page draws when it is collapsed.
+        if (!c.is_group) {
+            auto p = m_.composite_ports.find(c.path);
+            if (p != m_.composite_ports.end())
+                t << ", \"ins\": " << jports(p->second.ins) << ", \"outs\": " << jports(p->second.outs);
+        }
         t << "}";
     }
     t << (topo.clusters.size() > 1 ? "\n],\n" : "],\n");
@@ -3177,7 +3202,7 @@ std::string Emitter::topology_json(const Topo& topo) const {
         rows.push_back("{\"from\": " + jstr(from) + ", \"fromPort\": " + jstr(port) +
                        ", \"to\": " + jstr(m_.leaves[e.dst].ident) + ", \"toPort\": " +
                        jstr(e.dst_port) + ", \"type\": " + jstr(e.type) +
-                       ", \"feedthrough\": " + jbool(e.feedthrough) + "}");
+                       ", \"feedthrough\": " + jbool(e.feedthrough) + jvia(e.via) + "}");
     }
     for (std::size_t k = 0; k < topo.outs.size(); ++k) {
         const Topo::Output& o = topo.outs[k];
@@ -3185,7 +3210,7 @@ std::string Emitter::topology_json(const Topo& topo) const {
         rows.push_back("{\"from\": " + jstr(o.ident) + ", \"fromPort\": " + jstr(o.port) +
                        ", \"to\": " + jstr("out." + std::to_string(k)) +
                        ", \"toPort\": \"in\", \"type\": " + jstr(o.type) +
-                       ", \"feedthrough\": true}");
+                       ", \"feedthrough\": true" + jvia(o.via) + "}");
     }
     t << "\"edges\": [";
     for (std::size_t k = 0; k < rows.size(); ++k) t << (k ? ",\n " : "\n ") << rows[k];

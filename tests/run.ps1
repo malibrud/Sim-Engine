@@ -408,6 +408,15 @@ function Check-TopologyHtml($label, $outDir, $golden) {
             if ($c.kind -ne 'composite' -and $c.kind -ne 'group') { $problems += "cluster $($c.id) has kind '$($c.kind)'" }
             if ($c.parent -and -not $clusters[$c.parent]) { $problems += "cluster $($c.id)'s parent $($c.parent) is not a cluster" }
         }
+        # A wire's route is how the page draws it into a collapsed composite,
+        # so every step must be a port some composite box declares.
+        $cports = @{}
+        foreach ($c in $t.clusters) {
+            foreach ($p in @($c.ins) + @($c.outs)) { if ($p) { $cports["$($c.path).$($p.name)"] = $true } }
+        }
+        foreach ($e in $t.edges) {
+            foreach ($k in @($e.via)) { if ($k -and -not $cports[$k]) { $problems += "wire into $($e.to) passes $k, which no composite declares" } }
+        }
         foreach ($n in $t.nodes) {
             if ($n.kind -eq 'leaf' -and $n.cluster -and -not $clusters[$n.cluster]) { $problems += "leaf $($n.id)'s cluster $($n.cluster) is not a cluster" }
         }

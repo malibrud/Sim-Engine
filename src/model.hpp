@@ -327,6 +327,10 @@ struct InputSource {
     // Record ports only; empty for a scalar. Same flattening order the emitter
     // walks when it writes the brace initialiser.
     std::vector<FieldConv> field_convs;
+    // The composite ports the wire passes through on its way here, source end
+    // first: "pt.trans.w_e", "pt.trans.left.w_e". Flattening needs none of
+    // them; the topology page draws a collapsed composite by them.
+    std::vector<std::string> via;
     bool converts() const {
         if (scale != 1.0 || offset != 0.0) return true;
         for (const FieldConv& f : field_convs)
@@ -486,6 +490,15 @@ struct Model {
     // collapsed: the instance's own `@diagram` if it has one, else its
     // definition's. Never the root, which has no box to collapse.
     std::set<std::string> collapsed;
+    // Every composite instance's declared ports, unit arguments bound, by the
+    // instance's path. The root is not here: its ports are the boundary.
+    // Diagram-only, like `groups`: the page draws a collapsed composite with
+    // these rather than with the ports of the leaves inside it.
+    struct CompositePorts {
+        std::vector<Field> ins;
+        std::vector<Field> outs;
+    };
+    std::map<std::string, CompositePorts> composite_ports;
 
     const Program* program = nullptr;
 };

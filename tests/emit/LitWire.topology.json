@@ -4,7 +4,7 @@
 "step": "0.001",
 "solver": "rk4",
 "clusters": [
- {"id": "g1", "kind": "composite", "name": "inner", "path": "inner", "parent": null}
+ {"id": "g1", "kind": "composite", "name": "inner", "path": "inner", "parent": null, "ins": [{"name": "u", "type": "mm/s^2"}], "outs": [{"name": "y", "type": "m/s^2"}]}
 ],
 "nodes": [
  {"id": "s1", "kind": "leaf", "name": "s1", "path": "s1", "type": "se.math.Sum", "cluster": null, "order": 0, "rate": null, "solver": false, "file": "stdlib/se/math/Sum.se", "line": 11, "ins": [{"name": "a", "type": "m/s^2"}, {"name": "b", "type": "m/s^2"}], "outs": [{"name": "y", "type": "m/s^2"}], "states": []},
@@ -36,8 +36,8 @@
  {"from": "s4", "fromPort": "y", "to": "s5", "toPort": "a", "type": "m/s^2", "feedthrough": true},
  {"from": "const.5", "fromPort": "out", "to": "s5", "toPort": "b", "type": "m/s^2", "feedthrough": true},
  {"from": "s5", "fromPort": "y", "to": "s6", "toPort": "a", "type": "m/s^2", "feedthrough": true},
- {"from": "inner_z", "fromPort": "y", "to": "s6", "toPort": "b", "type": "m/s^2", "feedthrough": true},
- {"from": "const.6", "fromPort": "out", "to": "inner_z", "toPort": "a", "type": "m/s^2", "feedthrough": true},
+ {"from": "inner_z", "fromPort": "y", "to": "s6", "toPort": "b", "type": "m/s^2", "feedthrough": true, "via": ["inner.y"]},
+ {"from": "const.6", "fromPort": "out", "to": "inner_z", "toPort": "a", "type": "m/s^2", "feedthrough": true, "via": ["inner.u"]},
  {"from": "const.7", "fromPort": "out", "to": "inner_z", "toPort": "b", "type": "m/s^2", "feedthrough": true},
  {"from": "s6", "fromPort": "y", "to": "out.0", "toPort": "in", "type": "m/s^2", "feedthrough": true}
 ],

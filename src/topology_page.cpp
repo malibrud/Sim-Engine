@@ -220,33 +220,53 @@ function buildView() {
   for (const c of T.clusters) {
     if (!collapsed.has(c.id) || hiddenBy(c.parent) !== null) continue;
     const leaves = T.nodes.filter(n => n.kind === "leaf" && hiddenBy(n.cluster) === c.id).length;
+    // A collapsed composite shows its own declared ports, as its definition
+    // writes them; a group has none, and gets ports as wires reach it.
     nodes.set("G:" + c.id, { id: "G:" + c.id, kind: "collapsed", cid: c.id, ckind: c.kind, name: c.name,
-      path: c.path, cluster: c.parent, leaves, ins: [], outs: [] });
+      path: c.path, cluster: c.parent, leaves,
+      ins: (c.ins || []).map(p => p.name), outs: (c.outs || []).map(p => p.name) });
   }
-  // A leaf inside a collapsed cluster is drawn as that cluster, its ports
-  // prefixed by the leaf's path below the composite that owns the cluster.
+  // A leaf inside a collapsed cluster is drawn as that cluster. A wire that
+  // crosses a collapsed composite lands on the composite's own port, found on
+  // the wire's route (`via`); otherwise -- a group, or no route -- on the
+  // leaf's port, prefixed by the leaf's path below the composite that owns
+  // the cluster.
   const rep = new Map();
   for (const n of T.nodes) {
     const h = n.kind === "leaf" ? hiddenBy(n.cluster) : null;
-    if (h) rep.set(n.id, { id: "G:" + h, prefix: rel(clusterById.get(h).path, n.path) + "." });
-    else { rep.set(n.id, { id: n.id, prefix: "" }); nodes.set(n.id, { ...n, ins: n.ins.map(p => p.name), outs: n.outs.map(p => p.name) }); }
+    if (h) rep.set(n.id, { id: "G:" + h, hid: h, prefix: rel(clusterById.get(h).path, n.path) + "." });
+    else { rep.set(n.id, { id: n.id, hid: null, prefix: "" }); nodes.set(n.id, { ...n, ins: n.ins.map(p => p.name), outs: n.outs.map(p => p.name) }); }
   }
-  const edges = [], seen = new Set();
+  const crossing = (cid, via, side) => {
+    const c = clusterById.get(cid);
+    if (c.kind !== "composite" || !c[side] || !via) return null;
+    for (const k of via) {
+      if (!k.startsWith(c.path + ".")) continue;
+      const p = k.slice(c.path.length + 1);
+      if (c[side].some(d => d.name === p)) return p;
+    }
+    return null;
+  };
+  const edges = [], seen = new Map();
   for (const e of T.edges) {
     const f = rep.get(e.from), t = rep.get(e.to);
-    if (f.prefix && t.prefix && f.id === t.id) continue;          // inside one collapsed cluster
-    const fromPort = f.prefix + e.fromPort, toPort = t.prefix + e.toPort;
+    if (f.hid && t.hid && f.id === t.id) continue;                // inside one collapsed cluster
+    const fromPort = f.hid ? crossing(f.hid, e.via, "outs") ?? f.prefix + e.fromPort : e.fromPort;
+    const toPort = t.hid ? crossing(t.hid, e.via, "ins") ?? t.prefix + e.toPort : e.toPort;
 )SETP",
     R"SETP(    const fn = nodes.get(f.id), tn = nodes.get(t.id);
-    if (f.prefix && !fn.outs.includes(fromPort)) fn.outs.push(fromPort);
-    if (t.prefix && !tn.ins.includes(toPort)) tn.ins.push(toPort);
+    if (f.hid && !fn.outs.includes(fromPort)) fn.outs.push(fromPort);
+    if (t.hid && !tn.ins.includes(toPort)) tn.ins.push(toPort);
     if (!e.feedthrough && !showDelayed) continue;
+    // Wires that fan out inside a collapsed box are one wire to its port,
+    // feedthrough if any of them is.
     const key = [f.id, fromPort, t.id, toPort].join("|");
-    if (seen.has(key)) continue;
-    seen.add(key);
+    if (seen.has(key)) { if (e.feedthrough) seen.get(key).feedthrough = true; continue; }
     // `wire` is the model's own edge, for the details panel: a collapsed
-    // cluster's prefixed port says where a wire goes, not what it connects.
-    edges.push({ from: f.id, fromPort, to: t.id, toPort, type: e.type, feedthrough: e.feedthrough, key, wire: e });
+    // cluster's port says where a wire goes, not what it connects.
+    const edge = { from: f.id, fromPort, to: t.id, toPort, type: e.type, feedthrough: e.feedthrough, key, wire: e };
+    seen.set(key, edge);
+    edges.push(edge);
   }
   return { nodes: [...nodes.values()], clusters, edges };
 }
