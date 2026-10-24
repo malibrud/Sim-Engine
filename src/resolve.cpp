@@ -15,8 +15,10 @@ namespace {
 // A member name the generated code already uses for an object in scope of
 // every body (§6.11, Appendix B).
 bool is_reserved_member(const std::string& n) {
+    // `adjust` and `transition` are reserved words and so never reach here;
+    // `prev` is not (§6.4c), and is in scope of every adjust() body.
     static const char* const kReserved[] = {"param", "in",  "out", "state", "der",
-                                            "next",  "var", "log", "sim"};
+                                            "next",  "prev", "var", "log", "sim"};
     for (const char* r : kReserved)
         if (n == r) return true;
     return false;
@@ -96,27 +98,15 @@ const NodeInfo::SettingInfo* NodeInfo::setting(const std::string& n) const {
     return nullptr;
 }
 
-bool NodeInfo::has_continuous() const {
+bool NodeInfo::has_kind(ast::StateKind k) const {
     for (const StateInfo& s : states)
-        if (s.continuous) return true;
+        if (s.kind == k) return true;
     return false;
 }
 
-bool NodeInfo::has_discrete() const {
-    for (const StateInfo& s : states)
-        if (!s.continuous) return true;
-    return false;
-}
-
-bool Leaf::has_continuous() const {
+bool Leaf::has_kind(ast::StateKind k) const {
     for (const StateSlot& s : states)
-        if (s.continuous) return true;
-    return false;
-}
-
-bool Leaf::has_discrete() const {
-    for (const StateSlot& s : states)
-        if (!s.continuous) return true;
+        if (s.kind == k) return true;
     return false;
 }
 
@@ -749,7 +739,7 @@ NodeInfo* Resolver::resolve_node(FileInfo& file, const ast::NodeDef& def,
     for (const ast::StateDecl& s : def.states) {
         NodeInfo::StateInfo st;
         st.name = s.name;
-        st.continuous = s.is_continuous;
+        st.kind = s.kind;
         st.initial = s.initial.get();
         st.extent = s.extent.get();
         st.extent_loc = s.extent_loc;
@@ -767,7 +757,16 @@ NodeInfo* Resolver::resolve_node(FileInfo& file, const ast::NodeDef& def,
         // slots in `x`, and a discrete one is a run in `dis_arr`, which exists
         // precisely because a run-time-sized member cannot live in `dis`
         // (§15.5). `int`/`bool` states remain available, unextended.
-        if (st.extent && (st.type.is_record || st.type.scalar != "double")) {
+        //
+        // §6.4c — a finite state is never an array: there is no finite array
+        // block, and a state machine's state is one name. The same code covers
+        // it, since the rule it breaks is the same one.
+        if (st.extent && st.kind == ast::StateKind::Finite) {
+            diag_.error("SE0433", *file.src, s.extent_loc,
+                        "a `finite` state cannot be array-shaped", "an extent",
+                        {note("a state machine's state is one value (§6.4c)"),
+                         help("declare one `finite` state per machine")});
+        } else if (st.extent && (st.type.is_record || st.type.scalar != "double")) {
             diag_.error("SE0433", *file.src, s.extent_loc,
                         "an array-shaped state must be `double`",
                         "declared `" + std::string(st.type.is_record ? "record"
@@ -777,7 +776,20 @@ NodeInfo* Resolver::resolve_node(FileInfo& file, const ast::NodeDef& def,
                               "arrays (§15.5)"),
                          help("drop the extent, or make the element type `double`")});
         }
-        if (st.continuous && (st.type.is_record || st.type.scalar != "double")) {
+        // §6.4 — the counterpart from the other side: a state machine's state
+        // has finitely many values.
+        if (st.kind == ast::StateKind::Finite && !st.type.is_record && !st.type.enm &&
+            st.type.scalar != "int" && st.type.scalar != "bool") {
+            diag_.error("SE0434", *file.src, s.loc,
+                        "a `finite` state must be `bool`, `int` or an enum",
+                        "declared `" + st.type.scalar + "`",
+                        {note("a finite state is the state of a state machine, which has "
+                              "finitely many values (§6.4)"),
+                         help("make it `discrete` if it is a sampled value, or "
+                              "`continuous` if it is integrated")});
+        }
+        if (st.kind == ast::StateKind::Continuous &&
+            (st.type.is_record || st.type.scalar != "double")) {
             diag_.error("SE0431", *file.src, s.loc,
                         "a `continuous` state must be `double`",
                         "declared `" + std::string(st.type.is_record ? "record"
@@ -913,6 +925,7 @@ void Resolver::check_methods(const NodeInfo& info) {
     const ast::Method* der_m = info.method(ast::Method::Which::Derivative);
     const ast::Method* next_m = info.method(ast::Method::Which::Next);
     const ast::Method* adj_m = info.method(ast::Method::Which::Adjust);
+    const ast::Method* tr_m = info.method(ast::Method::Which::Transition);
 
     // §6.12 — typo safety, per kind, in both directions.
     if (!info.composite) {
@@ -934,6 +947,12 @@ void Resolver::check_methods(const NodeInfo& info) {
                         "no `next()`",
                         {note("a discrete state is written through `next.` in "
                               "`next()` (§6.4)")});
+        if (info.has_finite() && !tr_m)
+            diag_.error("SE0347", src, def.loc,
+                        "node `" + def.name + "` has a `finite` state but no `transition()`",
+                        "no `transition()`",
+                        {note("a finite state is written through `transition.` in "
+                              "`transition()` (§6.4c)")});
     }
     if (der_m && !info.has_continuous())
         diag_.error("SE0343", src, der_m->loc,
@@ -953,6 +972,13 @@ void Resolver::check_methods(const NodeInfo& info) {
                     {note("`next()` may write only `next.`, and `Store` is empty here"),
                      help("per-step work that is not a state transition belongs in "
                           "`on_step()` (§8.1)")});
+    if (tr_m && !info.has_finite())
+        diag_.error("SE0348", src, tr_m->loc,
+                    "`transition()` in a node with no `finite` states", "nothing to write",
+                    {note("`transition()` may write only `transition.`, and `Fin` is empty "
+                          "here"),
+                     help("a sampled-data state is `discrete` and written by `next()` "
+                          "(§6.4)")});
     // §6.12 — the converse for `adjust()`, and the ONLY rule it has. A continuous
     // state does not require an adjustment and most do not want one, so there is
     // no forward rule to pair this with; §6.4b's jump map is opt-in.

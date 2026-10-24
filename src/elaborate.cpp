@@ -1689,7 +1689,7 @@ void Elaborator::instantiate(const NodeInfo* def, const std::string& path,
     for (const auto& st : def->states) {
         StateSlot slot;
         slot.name = st.name;
-        slot.continuous = st.continuous;
+        slot.kind = st.kind;
         slot.unit = bound(st.type.unit);
         slot.der_unit = bound(st.der_unit);
         slot.scalar = st.type.scalar;
@@ -1745,7 +1745,7 @@ void Elaborator::instantiate(const NodeInfo* def, const std::string& path,
                 slot.element_ic.push_back(ic);
                 Model::ElementRef ref;
                 ref.path = o.path;
-                ref.continuous = slot.continuous;
+                ref.continuous = slot.kind == ast::StateKind::Continuous;
                 ref.index = index;
                 m.element_refs.push_back(std::move(ref));
                 element_sites_.push_back({m.element_refs.size() - 1, m.leaves.size(),
@@ -2661,7 +2661,7 @@ void Elaborator::resolve_record(const ast::RecordBlock& block, const Source& src
                 failed_ = true;
                 continue;
             }
-            if (st->continuous) {
+            if (st->kind == ast::StateKind::Continuous) {
                 if (!m.dynamic_states) {
                     s.expr = "x[" + std::to_string(ss ? ss->slot : 0) + "]";
                 } else {
@@ -2671,13 +2671,18 @@ void Elaborator::resolve_record(const ast::RecordBlock& block, const Source& src
             } else if (ss && ss->extent.present) {
                 s.expr = "dis_arr[se_da_off_[" + std::to_string(ss->off) + "] + " +
                          std::to_string(elem_index) + "]";
+            } else if (st->kind == ast::StateKind::Finite) {
+                // §6.4c — the finite block, read as committed. A row is
+                // written before the jump (§9.6 step 5), so it shows the value
+                // the tick began with.
+                s.expr = "fin." + base + "." + rest[0];
             } else {
                 s.expr = "dis." + base + "." + rest[0];
             }
             if (has_index && ss) {
                 Model::ElementRef ref;
                 ref.path = path;
-                ref.continuous = ss->continuous;
+                ref.continuous = ss->kind == ast::StateKind::Continuous;
                 ref.index = elem_index;
                 m.element_refs.push_back(std::move(ref));
                 element_sites_.push_back({m.element_refs.size() - 1, leaf_index,
@@ -2910,7 +2915,7 @@ bool Elaborator::run(const ast::SimFile& sim, const Source& sim_src,
         std::size_t slot = 0;
         for (Leaf& leaf : m.leaves)
             for (StateSlot& st : leaf.states)
-                if (st.continuous) st.slot = slot++;
+                if (st.kind == ast::StateKind::Continuous) st.slot = slot++;
         m.n_states = slot;
     } else {
         // Positions are a configuration result now, so what is assigned here is
@@ -2921,7 +2926,7 @@ bool Elaborator::run(const ast::SimFile& sim, const Source& sim_src,
         std::size_t ci = 0, di = 0;
         for (Leaf& leaf : m.leaves)
             for (StateSlot& st : leaf.states) {
-                if (st.continuous) st.off = ci++;
+                if (st.kind == ast::StateKind::Continuous) st.off = ci++;
                 else if (st.extent.present) st.off = di++;
             }
         m.n_cont_slots = ci;

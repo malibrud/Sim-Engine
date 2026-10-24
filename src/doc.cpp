@@ -643,7 +643,7 @@ void write_node(std::ostream& o, const FileDocs& fd, const ast::NodeDef& n, cons
         o << "### States\n\n| Name | Kind | Type | Initial | Description |\n|---|---|---|---|---|\n";
         for (const ast::StateDecl& s : n.states) {
             const auto tv = type_and_value(slice_to(t, s.loc.offset, ';'));
-            o << "| " << code(s.name) << " | " << (s.is_continuous ? "continuous" : "discrete")
+            o << "| " << code(s.name) << " | " << ast::state_kind_name(s.kind)
               << " | " << code(tv.first) << " | " << code(tv.second) << " | " << frag(&s) << " |\n";
         }
         o << "\n";

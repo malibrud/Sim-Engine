@@ -1,0 +1,6 @@
+// §6.4 / §6.4c — finite-state misuse. See lib/fsmbad/FsmBad.se.
+sim FsmBad {
+    root: fsmbad.FsmBad {};
+    step:     1 (ms);
+    duration: 1 (ms);
+}

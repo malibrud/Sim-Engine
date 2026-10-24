@@ -181,7 +181,7 @@ struct NodeInfo {
 
     struct StateInfo {
         std::string name;
-        bool continuous = false;
+        ast::StateKind kind = ast::StateKind::Discrete;
         Type type;
         Unit der_unit;                 // §4.3 — derived, never declared
         const ast::Expr* initial = nullptr;
@@ -201,8 +201,10 @@ struct NodeInfo {
     const Field* output(const std::string& n) const;
     const StateInfo* state(const std::string& n) const;
     const SettingInfo* setting(const std::string& n) const;
-    bool has_continuous() const;
-    bool has_discrete() const;
+    bool has_kind(ast::StateKind k) const;
+    bool has_continuous() const { return has_kind(ast::StateKind::Continuous); }
+    bool has_discrete() const { return has_kind(ast::StateKind::Discrete); }
+    bool has_finite() const { return has_kind(ast::StateKind::Finite); }
 };
 
 struct Program {
@@ -301,7 +303,7 @@ struct Extent {
 
 struct StateSlot {
     std::string name;
-    bool continuous = false;
+    ast::StateKind kind = ast::StateKind::Discrete;
     Unit unit;
     Unit der_unit;
     std::string scalar;
@@ -403,8 +405,10 @@ struct Leaf {
     long decimation = 1;               // §9.2 — 1 means base rate
     Loc loc;                           // the instance statement
 
-    bool has_continuous() const;
-    bool has_discrete() const;
+    bool has_kind(ast::StateKind k) const;
+    bool has_continuous() const { return has_kind(ast::StateKind::Continuous); }
+    bool has_discrete() const { return has_kind(ast::StateKind::Discrete); }
+    bool has_finite() const { return has_kind(ast::StateKind::Finite); }
 };
 
 // A root port the host drives or reads (§15.6 [boundary.in] / [boundary.out]).

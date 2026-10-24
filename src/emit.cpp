@@ -135,6 +135,12 @@ std::string cpp_type(const Type& t) {
     return t.is_record ? t.record->cpp_name : t.scalar;
 }
 
+// §6.4 — the three state kinds, spelled once. A state is in `x`, in `dis`, or
+// in `fin`, and every block walk below asks exactly one of these.
+template <class S> bool is_cont(const S& s) { return s.kind == ast::StateKind::Continuous; }
+template <class S> bool is_disc(const S& s) { return s.kind == ast::StateKind::Discrete; }
+template <class S> bool is_fin(const S& s) { return s.kind == ast::StateKind::Finite; }
+
 // A `#line` path: forward slashes everywhere, so the emitted directive is the
 // same on every platform and the recorded test output is stable.
 std::string line_path(const std::string& p) {
@@ -384,6 +390,7 @@ private:
     void sim_output_pass();
     void sim_derivatives();
     void sim_next();
+    void sim_transition();
     void sim_adjust();
     void sim_on_step();
     void sim_integrate();
@@ -408,6 +415,7 @@ private:
     using SlotRow = std::array<std::string, 4>;
     std::vector<SlotRow> signal_rows() const;
     std::vector<SlotRow> discrete_rows() const;
+    std::vector<SlotRow> finite_rows() const;
     std::vector<SlotRow> array_state_rows(bool continuous) const;
 
     const Model& m_;
@@ -621,6 +629,22 @@ void Emitter::leaf_class(const NodeInfo& node) {
     if (!ns.empty()) o_ << "namespace " << ns << " {\n";
     o_ << "struct " << base << " {\n";
 
+    // §2.3 / §5.2a — a file-private enum is visible to the rest of its file,
+    // and a body cannot use one without naming it (`Ctl::AUTO`). It lowers into
+    // the file's private namespace, which the file's public node does not sit
+    // in, so each node of the file gets a member alias by the bare name. A
+    // record needs none: a body reaches one's fields, never its name.
+    {
+        bool any = false;
+        for (const EnumInfo* e : m_.program->enum_order) {
+            if (e->file != node.file || e->def->name == node.file->public_name) continue;
+            o_ << "    using " << e->def->name << " = " << e->cpp_name
+               << ";   // file-private, §2.3\n";
+            any = true;
+        }
+        if (any) o_ << "\n";
+    }
+
     // ── the view structs ─────────────────────────────────────────────────────
     auto field_row = [](const std::string& name, const Type& t, const char* init) {
         Row r;
@@ -651,8 +675,9 @@ void Emitter::leaf_class(const NodeInfo& node) {
     }
     emit_struct(o_, "Var  ", rows);
 
-    // Both kinds of state are views: continuous into `Sim::x`, discrete into
-    // `Sim::dis`. Held BY VALUE, so constness propagates from the method.
+    // Every kind of state is a view: continuous into `Sim::x`, discrete into
+    // `Sim::dis`, finite into `Sim::fin`. Held BY VALUE, so constness
+    // propagates from the method.
     rows.clear();
     for (const auto& s : node.states) {
         Row r = field_row(s.name, s.type, "");
@@ -660,7 +685,7 @@ void Emitter::leaf_class(const NodeInfo& node) {
         // plus a length, because the length is a configuration result and a
         // `std::array` member is not available even in principle.
         r.type = s.extent ? "state_arr"
-                          : (s.continuous ? "state_ref" : "value_ref<" + s.type.scalar + ">");
+                          : (is_cont(s) ? "state_ref" : "value_ref<" + s.type.scalar + ">");
         rows.push_back(r);
     }
     emit_struct(o_, "State", rows);
@@ -668,7 +693,7 @@ void Emitter::leaf_class(const NodeInfo& node) {
     if (node.has_continuous()) {
         rows.clear();
         for (const auto& s : node.states) {
-            if (!s.continuous) continue;
+            if (!is_cont(s)) continue;
             rows.push_back({s.extent ? "state_arr" : "state_ref", s.name + ";",
                             unit_comment(s.der_unit)});
         }
@@ -684,7 +709,7 @@ void Emitter::leaf_class(const NodeInfo& node) {
         if (node.method(ast::Method::Which::Adjust)) {
             rows.clear();
             for (const auto& s : node.states) {
-                if (!s.continuous) continue;
+                if (!is_cont(s)) continue;
                 rows.push_back({s.extent ? "state_arr" : "state_ref", s.name + ";",
                                 unit_comment(s.type.unit)});
             }
@@ -698,7 +723,7 @@ void Emitter::leaf_class(const NodeInfo& node) {
         // `dis = nxt` a simultaneous update across the entire model (§6.4).
         rows.clear();
         for (const auto& s : node.states) {
-            if (s.continuous) continue;
+            if (!is_disc(s)) continue;
             // §6.4a — an array-shaped discrete state cannot be a member
             // here: a run-time-sized one would destroy the `offsetof` property
             // `dis` exists for. It is a view into the fourth block instead, and
@@ -711,6 +736,16 @@ void Emitter::leaf_class(const NodeInfo& node) {
             rows.push_back(field_row(s.name, s.type, "{}"));
         }
         emit_struct(o_, "Store", rows);
+    }
+    if (node.has_finite()) {
+        // §6.4c — this node's slice of the finite block, and the type of
+        // `transition()`'s out-parameter and of `adjust()`'s `prev`. One shape
+        // for all three is what lets the commit be a swap: after it, the buffer
+        // holds exactly what `prev` has to show.
+        rows.clear();
+        for (const auto& s : node.states)
+            if (is_fin(s)) rows.push_back(field_row(s.name, s.type, "{}"));
+        emit_struct(o_, "Fin  ", rows);
     }
 
     rows.clear();
@@ -731,6 +766,7 @@ void Emitter::leaf_class(const NodeInfo& node) {
             std::string("In_") + (meth.which == W::Output       ? "output"
                                   : meth.which == W::Derivative ? "derivative"
                                   : meth.which == W::Next       ? "next"
+                                  : meth.which == W::Transition ? "transition"
                                   : meth.which == W::Adjust     ? "adjust"
                                                                 : "step");
         rows.clear();
@@ -819,11 +855,19 @@ void Emitter::leaf_class(const NodeInfo& node) {
                 // The accessor token has to be spelled `next` (§6.10).
                 o_ << "    void next(const In_next& in, Store& next) const {\n";
                 break;
+            case W::Transition:
+                // §6.4c — `next`'s shape for the third kind, shadowing included.
+                o_ << "    void transition(const In_transition& in, Fin& transition) const {\n";
+                break;
             case W::Adjust:
                 // The out-parameter shadows this member function's name, as
                 // `next`'s does and for the same reason: the accessor token has
                 // to be spelled `adjust` (§6.10) and §11 copies bodies verbatim.
-                o_ << "    void adjust(const In_adjust& in, Adj& adjust) const {\n";
+                //
+                // §6.4c — `prev` is the finite block as the tick found it, read-
+                // only: a `const Fin&` into the buffer the commit swapped out.
+                o_ << "    void adjust(const In_adjust& in, Adj& adjust"
+                   << (node.has_finite() ? ", const Fin& prev" : "") << ") const {\n";
                 break;
             case W::OnStep:
                 o_ << "    void on_step(const In_step& in"
@@ -958,6 +1002,11 @@ bool Emitter::needs_tick_gate(const Leaf& leaf) const { return dynamic_rate(leaf
 // underneath a held output. Everything else — continuous and purely algebraic
 // nodes — is re-run, which is exactly what lets a CONTINUOUS source see the
 // minor-step time and stop RK4 degrading to first order across a forcing path.
+//
+// A `finite` state does not hold its node (§9.3): it is committed before the
+// advance, so the stages see one value across the step, the one the step was
+// decided under. That is what lets a gear sit beside a torque computed from a
+// continuous speed. `has_discrete()` asks for the discrete kind alone.
 bool Emitter::minor_step_output(const Leaf& leaf) const {
     return !dynamic_rate(leaf) && !leaf.has_discrete();
 }
@@ -1038,6 +1087,9 @@ void Emitter::sim_members() {
     bool any_discrete = false;
     for (const Leaf& leaf : m_.leaves) any_discrete = any_discrete || leaf.has_discrete();
     if (any_discrete) o_ << "    //  dis  every discrete state\n";
+    bool any_finite = false;
+    for (const Leaf& leaf : m_.leaves) any_finite = any_finite || leaf.has_finite();
+    if (any_finite) o_ << "    //  fin  every finite state\n";
     o_ << "    //  Together they are a complete checkpoint. The *_map() tables below\n";
     o_ << "    //  give path, offset and unit, so an inspector, a shared-memory host or\n";
     o_ << "    //  a replay tool needs no generated accessor code at all.\n\n";
@@ -1046,7 +1098,7 @@ void Emitter::sim_members() {
         o_ << "    static constexpr std::size_t n_states = " << m_.n_states << ";\n";
         for (const Leaf& leaf : m_.leaves)
             for (const StateSlot& s : leaf.states)
-                if (s.continuous)
+                if (is_cont(s))
                     o_ << "    //  x[" << s.slot << "] / xd[" << s.slot << "]   "
                        << col(leaf.path + "." + s.name, 24) << s.unit.str() << "\n";
         o_ << "    std::array<double, n_states> x{};\n";
@@ -1064,7 +1116,7 @@ void Emitter::sim_members() {
         o_ << "    //  point of the first one.\n";
         for (const Leaf& leaf : m_.leaves)
             for (const StateSlot& st : leaf.states) {
-                if (!st.continuous) continue;
+                if (!is_cont(st)) continue;
                 const std::string p =
                     leaf.path.empty() ? st.name : leaf.path + "." + st.name;
                 o_ << "    //  x[se_x_off_[" << st.off << "]]"
@@ -1112,6 +1164,23 @@ void Emitter::sim_members() {
         o_ << "    Discrete nxt{};   // x+ being written; tick() ends with dis = nxt\n\n";
     }
 
+    if (any_finite) {
+        // §6.4c / §15.5 — the finite block and its buffer. The commit is a
+        // swap in the middle of the tick, not a copy at the bottom: after it
+        // `fnx` holds the block as the tick found it, which is `prev`.
+        o_ << "    struct Finite {\n";
+        std::size_t w = 0;
+        for (const Leaf& leaf : m_.leaves)
+            if (leaf.has_finite()) w = std::max(w, leaf.node->cpp_name.size() + 5);
+        for (const Leaf& leaf : m_.leaves)
+            if (leaf.has_finite())
+                o_ << "        " << pad(leaf.node->cpp_name + "::Fin", w) << " " << leaf.ident
+                   << ";\n";
+        o_ << "    };\n";
+        o_ << "    Finite fin{};   // every finite state, as committed\n";
+        o_ << "    Finite fnx{};   // transition()'s buffer; after the swap, `prev`\n\n";
+    }
+
     if (m_.n_disc_arr_slots) {
         // §15.5a — the fourth block, and it exists for exactly one reason:
         // a run-time-sized member in `Discrete` would destroy the `offsetof`
@@ -1121,7 +1190,7 @@ void Emitter::sim_members() {
         o_ << "    //  these get the same address-size-table treatment as `x`.\n";
         for (const Leaf& leaf : m_.leaves)
             for (const StateSlot& st : leaf.states) {
-                if (st.continuous || !st.extent.present) continue;
+                if (!is_disc(st) || !st.extent.present) continue;
                 const std::string p =
                     leaf.path.empty() ? st.name : leaf.path + "." + st.name;
                 o_ << "    //  dis_arr[se_da_off_[" << st.off << "]]..   "
@@ -1138,6 +1207,8 @@ void Emitter::sim_members() {
     o_ << "    static const se_rt::Slot* signal_map(std::size_t& count);\n";
     if (!discrete_rows().empty())
         o_ << "    static const se_rt::Slot* discrete_map(std::size_t& count);\n";
+    if (!finite_rows().empty())
+        o_ << "    static const se_rt::Slot* finite_map(std::size_t& count);\n";
     if (m_.dynamic_states) {
         // §15.6 — not static, and it cannot be: `sec` cannot print
         // `x[0] bw.w1[0]` for a state whose extent is not known until
@@ -1313,6 +1384,7 @@ void Emitter::sim_members() {
     o_ << "    void output_pass(std::uint64_t k);\n";
     o_ << "    void output_pass_minor();\n";
     o_ << "    void next_tick(std::uint64_t k);\n";
+    o_ << "    void transition_tick(std::uint64_t k);\n";
     o_ << "    void adjust_tick(std::uint64_t k);\n";
     o_ << "    void on_step_tick(std::uint64_t k);\n";
     o_ << "    void integrate(double t, double h);\n";
@@ -1426,7 +1498,7 @@ void Emitter::sim_configure() {
     o_ << "    std::size_t se_n = 0;\n";
     for (const Leaf& leaf : m_.leaves)
         for (const StateSlot& st : leaf.states) {
-            if (!st.continuous) continue;
+            if (!is_cont(st)) continue;
             const std::string path = leaf.path.empty() ? st.name : leaf.path + "." + st.name;
             const std::string len = "se_x_len_[" + std::to_string(st.off) + "]";
             const std::string off = "se_x_off_[" + std::to_string(st.off) + "]";
@@ -1451,7 +1523,7 @@ void Emitter::sim_configure() {
         o_ << "\n    se_n = 0;\n";
         for (const Leaf& leaf : m_.leaves)
             for (const StateSlot& st : leaf.states) {
-                if (st.continuous || !st.extent.present) continue;
+                if (!is_disc(st) || !st.extent.present) continue;
                 const std::string path =
                     leaf.path.empty() ? st.name : leaf.path + "." + st.name;
                 const std::string len = "se_da_len_[" + std::to_string(st.off) + "]";
@@ -1530,7 +1602,7 @@ void Emitter::sim_configure_slots() {
     auto push_paths = [&](bool continuous) {
         for (const Leaf& leaf : m_.leaves)
             for (const StateSlot& st : leaf.states) {
-                if (st.continuous != continuous) continue;
+                if (is_cont(st) != continuous) continue;
                 if (!continuous && !st.extent.present) continue;
                 const std::string path =
                     leaf.path.empty() ? st.name : leaf.path + "." + st.name;
@@ -1555,7 +1627,7 @@ void Emitter::sim_configure_slots() {
            << ");\n";
         for (const Leaf& leaf : m_.leaves)
             for (const StateSlot& st : leaf.states) {
-                if (st.continuous != continuous) continue;
+                if (is_cont(st) != continuous) continue;
                 if (!continuous && !st.extent.present) continue;
                 const std::string off = (continuous ? "se_x_off_[" : "se_da_off_[") +
                                         std::to_string(st.off) + "]";
@@ -1605,7 +1677,7 @@ void Emitter::sim_binders() {
     o_ << "    for (std::size_t i = 0; i < n; ++i) { x[i] = 0.0; xd[i] = 0.0; }\n";
     for (const Leaf& leaf : m_.leaves)
         for (const StateSlot& st : leaf.states) {
-            if (!st.continuous) continue;
+            if (!is_cont(st)) continue;
             const std::string off = "se_x_off_[" + std::to_string(st.off) + "]";
             const std::string len = "se_x_len_[" + std::to_string(st.off) + "]";
             if (st.extent.present) {
@@ -1640,7 +1712,7 @@ void Emitter::sim_binders() {
     o_ << "    for (std::size_t i = 0; i < n; ++i) { dis_arr[i] = 0.0; nxt_arr[i] = 0.0; }\n";
     for (const Leaf& leaf : m_.leaves)
         for (const StateSlot& st : leaf.states) {
-            if (st.continuous || !st.extent.present) continue;
+            if (!is_disc(st) || !st.extent.present) continue;
             const std::string off = "se_da_off_[" + std::to_string(st.off) + "]";
             const std::string len = "se_da_len_[" + std::to_string(st.off) + "]";
             o_ << "    dis." << leaf.ident << "." << st.name << ".bind(dis_arr + " << off
@@ -1663,17 +1735,19 @@ void Emitter::sim_elaborate() {
     o_ << "// buys over a var. A continuous write lands in x through the proxy.\n";
     o_ << "void Sim::Impl::apply_initial_conditions() {\n";
     std::size_t w = 0;
-    bool any_discrete = false;
+    bool any_discrete = false, any_finite = false;
     for (const Leaf& leaf : m_.leaves) {
         any_discrete = any_discrete || leaf.has_discrete();
+        any_finite = any_finite || leaf.has_finite();
         for (const StateSlot& s : leaf.states)
-            w = std::max(w, leaf.ident.size() + s.name.size() + (s.continuous ? 7u : 5u) +
+            w = std::max(w, leaf.ident.size() + s.name.size() + (is_cont(s) ? 7u : 5u) +
                                 (s.extent.present ? 7u : 0u));
     }
     for (const Leaf& leaf : m_.leaves)
         for (const StateSlot& s : leaf.states) {
-            const std::string base = s.continuous ? leaf.ident + ".state." + s.name
-                                                  : "dis." + leaf.ident + "." + s.name;
+            const std::string base = is_cont(s) ? leaf.ident + ".state." + s.name
+                                     : is_fin(s) ? "fin." + leaf.ident + "." + s.name
+                                                 : "dis." + leaf.ident + "." + s.name;
             // §6.4a — the declared default initialises EVERY element. There
             // is no per-element default syntax: non-uniform initialisation is
             // init()'s job, which is where a computed IC already belonged.
@@ -1701,12 +1775,14 @@ void Emitter::sim_elaborate() {
                 const std::string path =
                     (leaf.path.empty() ? s.name : leaf.path + "." + s.name) + "[" +
                     std::to_string(ic.index) + "]";
-                const std::string block = s.continuous ? "x[se_x_off_[" : "dis_arr[se_da_off_[";
+                const std::string block = is_cont(s) ? "x[se_x_off_[" : "dis_arr[se_da_off_[";
                 o_ << "    " << block << s.off << "] + " << ic.index << "] = "
                    << literal(ic.value, s.scalar, s.enm) << ";   // " << path << "\n";
             }
     if (any_discrete)
         o_ << "    nxt = dis;   // so the first `dis = nxt` is a no-op\n";
+    if (any_finite)
+        o_ << "    fnx = fin;   // so `prev` reads the IC until a transition moves it\n";
     o_ << "}\n";
 }
 
@@ -1719,7 +1795,13 @@ void Emitter::sim_init() {
     o_ << "void Sim::Impl::bind() {\n";
     for (const Leaf& leaf : m_.leaves) {
         for (const StateSlot& s : leaf.states) {
-            if (s.continuous) {
+            if (is_fin(s)) {
+                // §6.4c — the committed side, as a discrete state's proxy binds
+                // into `dis` and not `nxt`. The swap exchanges values, not
+                // addresses, so this binding survives every commit.
+                o_ << "    " << leaf.ident << ".state." << s.name << ".bind(fin."
+                   << leaf.ident << "." << s.name << ");\n";
+            } else if (is_cont(s)) {
                 if (m_.dynamic_states) continue;
                 o_ << "    " << leaf.ident << ".state." << s.name << ".bind(x[" << s.slot
                    << "]);\n";
@@ -1826,6 +1908,41 @@ void Emitter::sim_next() {
     o_ << "}\n";
 }
 
+// q+ = δ(t,q,x,u), §6.4c. Buffered like next(), and committed in the middle of
+// the tick rather than at its end: seed, write, swap, all above adjust(), so
+// the jump map that follows sees the new value and `prev` the old one.
+//
+// The seed is what keeps a node that did not sample this tick, or a state its
+// transition() did not write, at its value: the swap then exchanges a slice
+// with an identical copy of itself.
+void Emitter::sim_transition() {
+    o_ << "\n// Every transition() reads `fin` and writes `fnx`, seeded from it so an\n";
+    o_ << "// unwritten state keeps its value; the swap commits them together (§6.4c).\n";
+    o_ << "// After it `fnx` is the block as the tick found it, which adjust() reads\n";
+    o_ << "// as `prev`.\n";
+    o_ << "void Sim::Impl::transition_tick(std::uint64_t k) {\n    (void)k;\n";
+    bool any = false;
+    for (const Leaf& leaf : m_.leaves) any = any || leaf.has_finite();
+    if (!any) {
+        o_ << "    // no finite states in this model\n}\n";
+        return;
+    }
+    o_ << "    fnx = fin;\n";
+    for (const Leaf& leaf : m_.leaves) {
+        const ast::Method* t = leaf.node->method(ast::Method::Which::Transition);
+        if (!t || !leaf.has_finite()) continue;
+        const std::string args = in_braces(leaf, t) + ", fnx." + leaf.ident;
+        if (dynamic_rate(leaf))
+            o_ << "    if (k % " << decim_of(leaf) << " == 0) " << leaf.ident
+               << ".transition(" << args << ");"
+               << "   // " << leaf.decimation << ":1 by default\n";
+        else
+            o_ << "    " << leaf.ident << ".transition(" << args << ");\n";
+    }
+    o_ << "    std::swap(fin, fnx);\n";
+    o_ << "}\n";
+}
+
 // x+ = j(t,x,u): the jump map, §6.4b. Once per accepted base step at each
 // node's sample instants, and BELOW the recording and the exit (§9.6 step 7),
 // which is what keeps a recorded row one consistent sample of the entry state
@@ -1842,7 +1959,8 @@ void Emitter::sim_adjust() {
     for (const Leaf& leaf : m_.leaves) {
         if (!adjusts(leaf)) continue;
         const ast::Method* a = leaf.node->method(ast::Method::Which::Adjust);
-        const std::string args = in_braces(leaf, a) + ", " + leaf.ident + "_adj";
+        const std::string args = in_braces(leaf, a) + ", " + leaf.ident + "_adj" +
+                                 (leaf.has_finite() ? ", fnx." + leaf.ident : std::string());
         if (dynamic_rate(leaf))
             o_ << "    if (k % " << decim_of(leaf) << " == 0) " << leaf.ident
                << ".adjust(" << args << ");"
@@ -1991,6 +2109,8 @@ void Emitter::sim_run() {
     for (const Leaf& leaf : m_.leaves) any_discrete = any_discrete || leaf.has_discrete();
     bool any_adjust = false;
     for (const Leaf& leaf : m_.leaves) any_adjust = any_adjust || adjusts(leaf);
+    bool any_finite = false;
+    for (const Leaf& leaf : m_.leaves) any_finite = any_finite || leaf.has_finite();
 
     // ── init ─────────────────────────────────────────────────────────────────
     o_ << "\nvoid Sim::Impl::init() {\n";
@@ -2058,6 +2178,9 @@ void Emitter::sim_run() {
     o_ << "        se_done_ = true;\n        return;\n    }\n";
     // §9.6 step 7 — below the exit, so a halted run keeps the x its last row
     // reported; above the advance, so the solver starts from the adjusted state.
+    // §9.6 step 7 — the jump: transition(), its commit, then adjust(), which
+    // therefore sees a finite state's new value.
+    if (any_finite) o_ << "    transition_tick(se_tick_);\n";
     if (any_adjust) o_ << "    adjust_tick(se_tick_);\n";
     if (any_discrete)
         o_ << "    dis = nxt;   // simultaneous update, whole model (§6.4)\n";
@@ -2237,6 +2360,7 @@ void Emitter::sim_class() {
     sim_output_pass();
     sim_derivatives();
     sim_next();
+    sim_transition();
     sim_adjust();
     sim_on_step();
     sim_integrate();
@@ -2303,7 +2427,7 @@ std::vector<Emitter::SlotRow> Emitter::discrete_rows() const {
     std::vector<SlotRow> rows;
     for (const Leaf& leaf : m_.leaves)
         for (const StateSlot& s : leaf.states) {
-            if (s.continuous) continue;
+            if (!is_disc(s)) continue;
             // §15.5a — an array-shaped discrete state is not in `dis` at
             // all. It lives in the flat fourth block, whose rows are built at
             // configuration because their count is not known before then.
@@ -2311,6 +2435,18 @@ std::vector<Emitter::SlotRow> Emitter::discrete_rows() const {
             rows.push_back({leaf.path.empty() ? s.name : leaf.path + "." + s.name,
                             leaf.ident + "." + s.name, s.scalar, s.unit.str()});
         }
+    return rows;
+}
+
+// §6.4c — the finite block's rows: a generated struct for `dis`'s reasons,
+// and never array-shaped, so every row is a plain offsetof one.
+std::vector<Emitter::SlotRow> Emitter::finite_rows() const {
+    std::vector<SlotRow> rows;
+    for (const Leaf& leaf : m_.leaves)
+        for (const StateSlot& s : leaf.states)
+            if (is_fin(s))
+                rows.push_back({leaf.path.empty() ? s.name : leaf.path + "." + s.name,
+                                leaf.ident + "." + s.name, s.scalar, s.unit.str()});
     return rows;
 }
 
@@ -2322,7 +2458,7 @@ std::vector<Emitter::SlotRow> Emitter::array_state_rows(bool continuous) const {
     std::vector<SlotRow> rows;
     for (const Leaf& leaf : m_.leaves)
         for (const StateSlot& s : leaf.states) {
-            if (s.continuous != continuous || !s.extent.present) continue;
+            if (is_cont(s) != continuous || !s.extent.present) continue;
             rows.push_back({leaf.path.empty() ? s.name : leaf.path + "." + s.name,
                             s.extent.text, "double", s.unit.str()});
         }
@@ -2353,6 +2489,8 @@ void Emitter::sim_maps() {
     emit_table("signal_map", "Signals", signal_rows());
     const std::vector<SlotRow> dis = discrete_rows();
     if (!dis.empty()) emit_table("discrete_map", "Discrete", dis);
+    const std::vector<SlotRow> fin = finite_rows();
+    if (!fin.empty()) emit_table("finite_map", "Finite", fin);
 
     // §15.6 — the dynamic blocks. These are not offsetof tables and cannot
     // be: the rows do not exist until configure() has run, so what is emitted
@@ -2616,7 +2754,7 @@ std::string Emitter::impl_cpp(bool separate_runtime) {
            << "//  END OF THE ENGINE RUNTIME — the model begins here.\n"
            << "// " << std::string(76, '=') << "\n\n";
     o_ << "#include <array>\n#include <cstddef>\n#include <cstdint>\n#include <cstring>\n";
-    o_ << "#include <memory>\n#include <string>\n";
+    o_ << "#include <memory>\n#include <string>\n#include <utility>\n";
     // §6.5 / §15.5a — the two places the lowering owns storage: an array
     // var, and the solver scratch plus slot rows of a dynamic model. Both are
     // sized once at configuration and neither is a published block.
@@ -3273,12 +3411,12 @@ std::string Emitter::topology_json(const Topo& topo) const {
         for (std::size_t k = 0; k < leaf.states.size(); ++k) {
             const StateSlot& s = leaf.states[k];
             r += (k ? ", " : "") + std::string("{\"name\": ") + jstr(s.name) +
-                 ", \"kind\": " + jstr(s.continuous ? "continuous" : "discrete") +
+                 ", \"kind\": " + jstr(ast::state_kind_name(s.kind)) +
                  ", \"unit\": " + jstr(s.unit.str()) +
                  ", \"initial\": " + jstr(shown(s.initial, s.scalar, s.enm)) +
                  ", \"extent\": " + jopt(s.extent.present ? s.extent.text : std::string()) +
                  ", \"slot\": " +
-                 (s.continuous && !m_.dynamic_states ? std::to_string(s.slot) : std::string("null")) +
+                 (is_cont(s) && !m_.dynamic_states ? std::to_string(s.slot) : std::string("null")) +
                  "}";
         }
         rows.push_back(r + "]}");
@@ -3385,7 +3523,7 @@ std::string Emitter::manifest() {
              "#  Sim::Impl::state_map() once configure() has run (§15.6).\n";
     for (const Leaf& leaf : m_.leaves)
         for (const StateSlot& s : leaf.states) {
-            if (!s.continuous) continue;
+            if (!is_cont(s)) continue;
             const std::string path = leaf.path.empty() ? s.name : leaf.path + "." + s.name;
             if (!m_.dynamic_states) {
                 t << col("x[" + std::to_string(s.slot) + "]", 10) << col(path, 24)
@@ -3420,6 +3558,15 @@ std::string Emitter::manifest() {
     for (const SlotRow& r : dis)
         t << col("", 10) << col(r[0], 24) << col(r[3], 12) << shown_type(r[2]) << "\n";
     if (dis.empty()) t << "          (none)\n";
+
+    // §6.4c — present only in a model that has the block, so a model with no
+    // finite state keeps the manifest it always had.
+    const std::vector<SlotRow> fin = finite_rows();
+    if (!fin.empty()) {
+        t << "\n[state.finite]            # Sim::Impl::fin; offsets from Sim::Impl::finite_map()\n";
+        for (const SlotRow& r : fin)
+            t << col("", 10) << col(r[0], 24) << col(r[3], 12) << shown_type(r[2]) << "\n";
+    }
 
     // §15.5a — the fourth block. An array-shaped discrete state cannot live
     // in `dis` without destroying its offsetof property, so it gets a flat

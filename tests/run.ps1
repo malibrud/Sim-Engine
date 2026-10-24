@@ -933,15 +933,17 @@ if (-not $cl) {
     #
     # tests/nodetest holds the runner's own cases: `Every` reaches every
     # column namespace, `EnumCells` writes enumerators in cells (SPEC 7.2a),
-    # and `Fails` MUST fail -- a runner that printed "ok" for everything would
-    # pass every other case here. The script is invoked in process: its `exit`
-    # returns here with $LASTEXITCODE set.
+    # `Machine` checks `transition.` and runs it ahead of `adjust.` with the
+    # given state as `prev` (SPEC 6.4c), and `Fails` MUST fail -- a runner that
+    # printed "ok" for everything would pass every other case here. The script
+    # is invoked in process: its `exit` returns here with $LASTEXITCODE set.
     $nodetest = Join-Path $root 'tools/nodetest.ps1'
     & $nodetest -I @('stdlib', 'tests/nodetest/lib') -Out 'build/test' `
-        'stdlib' 'tests/nodetest/lib/nt/Every.se' 'tests/nodetest/lib/nt/EnumCells.se'
+        'stdlib' 'tests/nodetest/lib/nt/Every.se' 'tests/nodetest/lib/nt/EnumCells.se' `
+        'tests/nodetest/lib/nt/Machine.se'
     if ($LASTEXITCODE -eq 0) {
-        Write-Host "ok   tools/nodetest.ps1 : every tested stdlib node, nt.Every and nt.EnumCells" `
-            -ForegroundColor Green
+        Write-Host ("ok   tools/nodetest.ps1 : every tested stdlib node, nt.Every, " +
+                    "nt.EnumCells and nt.Machine") -ForegroundColor Green
         $script:pass++
     } else {
         Write-Host ("FAIL tools/nodetest.ps1 : node tests, exit " + $LASTEXITCODE) `
@@ -1599,6 +1601,77 @@ if (-not $cl) {
     # same sequence, `up` must be 1 exactly while CONNECTED, and an enum column
     # must be headed by its enum where a unit would go. Exact integers: an
     # enum column is never a rounding question.
+    # SPECIFICATION 6.4c / 9.6 -- finite states. See tests/emit/lib/fsm/Finite.se
+    # for the four leaves; each column has a closed form at a 10 ms step:
+    #   w_clutch, locked   50 t until the lock, whose row still reads unlocked
+    #                      within 3 of 100; every row after it reads locked at
+    #                      EXACTLY 100, which only adjust()'s snap can produce
+    #   integ.y            t^2/2 to t = 0.5, t^2 - 0.125 after -- exact under rk4
+    #                      only if the gearbox is re-evaluated at the stages,
+    #                      which is the claim that a finite state does not hold
+    #   pi.u               3 to t = 1, 3 + 2 (t - 1) after: bumpless, and preset
+    #                      once through `prev.`, not on every AUTO tick
+    #   range, gear        range 0 to t = 0.5 and 1 after; gear 1 at t = 0, 3
+    #                      to t = 0.51, 0 after -- one tick behind the range,
+    #                      because transition() reads the tick-entry value
+    if ($emitDirs.ContainsKey('Finite')) {
+        $fnDir = $emitDirs['Finite']
+        Push-Location $fnDir
+        & '.\build\release\bin\Finite.exe' 2>&1 | Out-Null
+        $ran = ($LASTEXITCODE -eq 0)
+        Pop-Location
+        $csv = Join-Path $fnDir 'finite.csv'
+        $why = 'did not run'
+        $worst = 0.0
+        if ($ran -and (Test-Path $csv)) {
+            $why = ''
+            $rows = @(Get-Content $csv | Select-Object -Skip 1 | Where-Object { $_ })
+            $lock = -1
+            for ($k = 0; $k -lt $rows.Count -and -not $why; $k++) {
+                $c = $rows[$k] -split ','
+                $t = [double]$c[0]
+                $w = [double]$c[1]
+                $locked = [int]$c[2]
+                if ($lock -lt 0 -and $locked -eq 1) {
+                    $lock = $k
+                    $before = [double](($rows[$k - 1] -split ',')[1])
+                    if ([Math]::Abs($before - 100.0) -ge 3.0) {
+                        $why = "the row before the lock reads $before, not within 3 of 100"
+                    }
+                }
+                if ($lock -ge 0) {
+                    if ($locked -ne 1 -or $w -ne 100.0) { $why = "row $k after the lock reads $w, $locked" }
+                } else {
+                    $worst = [Math]::Max($worst, [Math]::Abs($w - 50.0 * $t))
+                }
+                $wy = $t * $t / 2.0
+                if ($t -gt 0.5 + 1e-9) { $wy = $t * $t - 0.125 }
+                $wu = 3.0
+                if ($t -gt 1.0 + 1e-9) { $wu = 3.0 + 2.0 * ($t - 1.0) }
+                $worst = [Math]::Max($worst, [Math]::Abs([double]$c[3] - $wy))
+                $worst = [Math]::Max($worst, [Math]::Abs([double]$c[4] - $wu))
+                $wr = 0
+                if ($t -gt 0.5 + 1e-9) { $wr = 1 }
+                $wg = 3
+                if ($k -eq 0) { $wg = 1 } elseif ($t -gt 0.51 + 1e-9) { $wg = 0 }
+                if ([int]$c[5] -ne $wr -or [int]$c[6] -ne $wg) {
+                    $why = "row $k range/gear read " + $c[5] + "/" + $c[6] + ", want $wr/$wg"
+                }
+            }
+            if (-not $why -and $lock -lt 0) { $why = 'the clutch never locked' }
+            if (-not $why -and $worst -ge 1e-9) { $why = 'max error ' + $worst }
+        }
+        if (-not $why) {
+            Write-Host ("ok   build/emit/Finite : the jump snaps in its tick, a finite state " +
+                        "does not hold its node, `prev` presets once, transitions are " +
+                        "buffered, max error " + $worst.ToString('E2')) -ForegroundColor Green
+            $script:pass++
+        } else {
+            Write-Host ("FAIL build/emit/Finite : " + $why) -ForegroundColor Red
+            $script:fail++
+        }
+    }
+
     if ($emitDirs.ContainsKey('Enums')) {
         $enDir = $emitDirs['Enums']
         Push-Location $enDir

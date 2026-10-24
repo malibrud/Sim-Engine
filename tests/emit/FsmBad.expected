@@ -1,0 +1,39 @@
+﻿error[SE0434]: a `finite` state must be `bool`, `int` or an enum
+  --> tests/emit/lib/fsmbad/FsmBad.se:16:21
+   |
+16 |     states { finite x: double(-) = 0.0; }    // SE0434 — not finitely valued
+   |                     ^ declared `double`
+   = note: a finite state is the state of a state machine, which has finitely many values (§6.4)
+   = help: make it `discrete` if it is a sampled value, or `continuous` if it is integrated
+
+error[SE0433]: a `finite` state cannot be array-shaped
+  --> tests/emit/lib/fsmbad/FsmBad.se:21:23
+   |
+21 |     states { finite x [3]: int(-) = 0; }     // SE0433 — a finite state is scalar
+   |                       ^^^ an extent
+   = note: a state machine's state is one value (§6.4c)
+   = help: declare one `finite` state per machine
+
+error[SE0347]: node `NoTransition` has a `finite` state but no `transition()`
+  --> tests/emit/lib/fsmbad/FsmBad.se:25:6
+   |
+25 | node NoTransition {                          // SE0347 — nothing writes `q`
+   |      ^^^^^^^^^^^^ no `transition()`
+   = note: a finite state is written through `transition.` in `transition()` (§6.4c)
+
+error[SE0348]: `transition()` in a node with no `finite` states
+  --> tests/emit/lib/fsmbad/FsmBad.se:32:5
+   |
+32 |     transition() {}                          // SE0348 — nothing to write
+   |     ^^^^^^^^^^ nothing to write
+   = note: `transition()` may write only `transition.`, and `Fin` is empty here
+   = help: a sampled-data state is `discrete` and written by `next()` (§6.4)
+
+error[SE0331]: member `prev` shadows a generated accessor
+  --> tests/emit/lib/fsmbad/FsmBad.se:36:12
+   |
+36 |     vars { prev: double(-); }                // SE0331 — `prev` is in scope of adjust()
+   |            ^^^^ var named `prev`
+   = note: the generated code puts an object called `prev` in scope of every body, because the compiler never parses C++ and so cannot rename yours (I1, §15.1)
+
+5 errors emitted

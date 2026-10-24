@@ -233,7 +233,11 @@ void dump(std::ostream& o, const ast::ModelFile& f) {
         if (n.sec_states.present) {
             o << indent(2) << "states\n";
             for (const ast::StateDecl& s : n.states) {
-                o << indent(3) << (s.is_continuous ? "continuous " : "discrete   ") << s.name;
+                {
+                    std::string k = ast::state_kind_name(s.kind);
+                    k.resize(11, ' ');
+                    o << indent(3) << k << s.name;
+                }
                 dump_type(o, s.type);
                 dump_expr_field(o, "extent", s.extent.get());
                 dump_expr_field(o, "ic", s.initial.get());

@@ -69,8 +69,8 @@ node Device {
                 break;
             case LinkState::FAULT:      next.link = LinkState::FAULT;      break;
         }
-        // A private enum is an ordinary C++ enum class in the body.
-        (void)(param.retry == Rig_priv::Retry::ALWAYS);
+        // A file-private enum is named bare in the body, as anywhere in its file.
+        (void)(param.retry == Retry::ALWAYS);
     }
 }
 

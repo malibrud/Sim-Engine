@@ -1,0 +1,21 @@
+// §6.4c / §9.6 — finite states. See lib/fsm/Finite.se for what each column
+// has to read and why.
+sim Finite {
+    root: fsm.Finite {};
+
+    step:     10 (ms);
+    solver:   rk4;
+    duration: 3 (s);
+
+    record: {
+        file: "finite.csv";
+        signals {
+            cl.state.w_clutch;
+            cl.state.locked;
+            integ.out.y;
+            pi.u;
+            tx.state.range;
+            tx.state.gear;
+        }
+    }
+}

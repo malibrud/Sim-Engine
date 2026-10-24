@@ -3,14 +3,14 @@
    |
 14 |         set "a checked column given", out.y = in.x { 1, 2, "SE0361"; }
    |                                       ^^^^^ a checked column, not a given one
-   = note: given: param. in. state. step -- checked: out. der. next. adjust. var. (§6.13)
+   = note: given: param. in. state. step -- checked: out. der. next. transition. adjust. var. (§6.13)
 
 error[SE0361]: `in.x` is on the wrong side of the operator
   --> tests/nodetest/lib/nt/Cols.se:14:47
    |
 14 |         set "a checked column given", out.y = in.x { 1, 2, "SE0361"; }
    |                                               ^^^^ a given column, not a checked one
-   = note: given: param. in. state. step -- checked: out. der. next. adjust. var. (§6.13)
+   = note: given: param. in. state. step -- checked: out. der. next. transition. adjust. var. (§6.13)
 
 error[SE0360]: `in.z` names no member of `Cols`
   --> tests/nodetest/lib/nt/Cols.se:15:29

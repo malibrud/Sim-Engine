@@ -19,7 +19,7 @@ warning[SE0221]: `on_setp` is not a lifecycle method; it will be copied verbatim
    |
 27 |     on_setp(u) { }
    |     ^^^^^^^ did you mean `on_step`?
-   = note: the lifecycle methods are init, output, derivative, next, adjust, on_step, final (§8.1)
+   = note: the lifecycle methods are init, output, derivative, next, transition, adjust, on_step, final (§8.1)
 
 error[SE0241]: `init` takes no parameters
   --> tests/err/methods.se:35:10
@@ -48,6 +48,6 @@ warning[SE0221]: `adjus` is not a lifecycle method; it will be copied verbatim a
    |
 48 |     adjus(u) { }
    |     ^^^^^ did you mean `adjust`?
-   = note: the lifecycle methods are init, output, derivative, next, adjust, on_step, final (§8.1)
+   = note: the lifecycle methods are init, output, derivative, next, transition, adjust, on_step, final (§8.1)
 
 5 errors, 2 warnings emitted

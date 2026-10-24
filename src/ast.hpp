@@ -126,8 +126,18 @@ struct SettingDecl {          // §6.2
     Loc loc;
 };
 
+// §6.4 — how a state changes: it flows, it is sampled, or it jumps between
+// steps as a state machine's state (§6.4c). Three kinds, and no default.
+enum class StateKind { Continuous, Discrete, Finite };
+
+inline const char* state_kind_name(StateKind k) {
+    return k == StateKind::Continuous ? "continuous"
+           : k == StateKind::Discrete ? "discrete"
+                                      : "finite";
+}
+
 struct StateDecl {            // §6.4
-    bool is_continuous = false;
+    StateKind kind = StateKind::Discrete;
     std::string name;
     TypeRef type;
     ExprPtr initial;          // the declared IC
@@ -153,7 +163,7 @@ struct BuildStmt {            // §12.1
 };
 
 struct Method {               // §8.1
-    enum class Which { Init, Output, Derivative, Next, Adjust, OnStep, Final };
+    enum class Which { Init, Output, Derivative, Next, Transition, Adjust, OnStep, Final };
     Which which = Which::Init;
     std::vector<std::string> params;   // the feedthrough set for output()
     std::vector<Loc> param_locs;
@@ -166,6 +176,7 @@ struct Method {               // §8.1
             case Which::Output:     return "output";
             case Which::Derivative: return "derivative";
             case Which::Next:       return "next";
+            case Which::Transition: return "transition";
             case Which::Adjust:     return "adjust";
             case Which::OnStep:     return "on_step";
             case Which::Final:      return "final";

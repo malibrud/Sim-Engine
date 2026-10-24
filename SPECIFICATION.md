@@ -775,7 +775,9 @@ values are what §6.4's `finite` states range over.
   a scalar.
 - **In C++ it is a scoped enumeration**, `enum class LinkState : int`, in the
   package's namespace, and a body names its values the C++ way:
-  `state.link == LinkState::CONNECTED`. Where the DSL names one itself — a
+  `state.link == LinkState::CONNECTED`. A file-private enum is named bare in
+  every body of its file, as §2.3 says the rest of the file sees it; another
+  package's enum is qualified as any C++ name is. Where the DSL names one itself — a
   default, a binding, an override, a test cell — the name is bare and its type
   comes from the site (§7.2a).
 

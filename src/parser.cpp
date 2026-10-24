@@ -51,8 +51,8 @@ const std::vector<const char*>& section_names() {
 
 const std::vector<const char*>& lifecycle_names() {
     static const std::vector<const char*> v = {"init",   "output",  "derivative",
-                                              "next",   "adjust",  "on_step",
-                                              "final"};
+                                              "next",   "transition", "adjust",
+                                              "on_step", "final"};
     return v;
 }
 
@@ -189,6 +189,7 @@ void Parser::recover_in_node_body() {
                 case Tok::KwOutput:
                 case Tok::KwDerivative:
                 case Tok::KwNext:
+                case Tok::KwTransition:
                 case Tok::KwAdjust:
                 case Tok::KwOnStep:
                 case Tok::KwFinal:
@@ -1091,6 +1092,7 @@ bool Parser::parse_node_item(ast::NodeDef& node) {
         case Tok::KwOutput:
         case Tok::KwDerivative:
         case Tok::KwNext:
+        case Tok::KwTransition:
         case Tok::KwAdjust:
         case Tok::KwOnStep:
         case Tok::KwFinal:
@@ -1157,7 +1159,7 @@ bool Parser::parse_node_item(ast::NodeDef& node) {
                          "verbatim as a helper function",
                          "did you mean `" + did + "`?",
                          {note("the lifecycle methods are init, output, derivative, next, "
-                               "adjust, on_step, final (\xc2\xa7""8.1)")});
+                               "transition, adjust, on_step, final (\xc2\xa7""8.1)")});
             }
             return parse_helper(node);
         }
@@ -1282,14 +1284,14 @@ bool Parser::parse_test_column(ast::TestColumn& out) {
         advance();
         return true;
     }
-    static const std::vector<const char*> namespaces = {"param", "in",   "state",  "out",
-                                                        "der",   "next", "adjust", "var"};
+    static const std::vector<const char*> namespaces = {
+        "param", "in", "state", "out", "der", "next", "transition", "adjust", "var"};
     if (!tok_.is_word() || !contains(namespaces, tok_.text)) {
         err("SE0201", tok_.loc,
             std::string("expected a column, found ") + describe(tok_.kind),
             "expected `step` or an accessor",
-            {note("a column is `step` or one of param. in. state. out. der. next. adjust. "
-                  "var. (\xc2\xa7""6.13)")});
+            {note("a column is `step` or one of param. in. state. out. der. next. "
+                  "transition. adjust. var. (\xc2\xa7""6.13)")});
         return false;
     }
     out.ns = tok_.text;
@@ -1618,13 +1620,10 @@ bool Parser::parse_state_list(std::vector<ast::StateDecl>& out) {
         bool ok = true;
         bool have_kind = false;
 
-        if (at(Tok::KwContinuous)) {
-            s.is_continuous = true;
-            s.kind_loc = tok_.loc;
-            have_kind = true;
-            advance();
-        } else if (at(Tok::KwDiscrete)) {
-            s.is_continuous = false;
+        if (at(Tok::KwContinuous) || at(Tok::KwDiscrete) || at(Tok::KwFinite)) {
+            s.kind = at(Tok::KwContinuous) ? ast::StateKind::Continuous
+                     : at(Tok::KwDiscrete) ? ast::StateKind::Discrete
+                                           : ast::StateKind::Finite;
             s.kind_loc = tok_.loc;
             have_kind = true;
             advance();
@@ -1639,12 +1638,14 @@ bool Parser::parse_state_list(std::vector<ast::StateDecl>& out) {
             if (!have_kind) {
                 // §6.4: omitting the kind is an error, never a default.
                 err("SE0230", tok_.loc,
-                    "state `" + tok_.text + "` must be declared `continuous` or `discrete`",
-                    "expected `continuous` or `discrete` before the state name",
-                    {note("there is deliberately no default state kind — the two differ in "
-                          "write accessor (`der.` vs `next.`), in schedule, and in whether "
-                          "they enter the solver's state vector (\xc2\xa7""6.4)"),
-                     help("prefix the declaration with `continuous` or `discrete`")});
+                    "state `" + tok_.text +
+                        "` must be declared `continuous`, `discrete` or `finite`",
+                    "expected `continuous`, `discrete` or `finite` before the state name",
+                    {note("there is deliberately no default state kind — the three differ in "
+                          "write accessor (`der.`, `next.`, `transition.`), in schedule, and "
+                          "in whether they enter the solver's state vector (\xc2\xa7""6.4)"),
+                     help("prefix the declaration with `continuous`, `discrete` or "
+                          "`finite`")});
                 ok = false;
             }
             s.name = tok_.text;
@@ -2354,6 +2355,7 @@ bool Parser::parse_method(ast::NodeDef& node) {
         case Tok::KwOutput:     m.which = ast::Method::Which::Output;     break;
         case Tok::KwDerivative: m.which = ast::Method::Which::Derivative; break;
         case Tok::KwNext:       m.which = ast::Method::Which::Next;       break;
+        case Tok::KwTransition: m.which = ast::Method::Which::Transition; break;
         case Tok::KwAdjust:     m.which = ast::Method::Which::Adjust;     break;
         case Tok::KwOnStep:     m.which = ast::Method::Which::OnStep;     break;
         default:                m.which = ast::Method::Which::Final;      break;

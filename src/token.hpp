@@ -27,8 +27,8 @@ enum class Tok {
     KwPackage, KwUse, KwType, KwEnum, KwNode, KwSelf,
     KwSettings, KwInputs, KwOutputs, KwStates, KwVars, KwNative, KwUnits,
     KwStructure, KwDeclarations, KwBuild,
-    KwContinuous, KwDiscrete,
-    KwInit, KwOutput, KwDerivative, KwNext, KwAdjust, KwOnStep, KwFinal,
+    KwContinuous, KwDiscrete, KwFinite,
+    KwInit, KwOutput, KwDerivative, KwNext, KwTransition, KwAdjust, KwOnStep, KwFinal,
     KwSim,
 
     // Punctuation — §3.7.

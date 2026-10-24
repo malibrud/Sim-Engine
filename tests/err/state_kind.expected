@@ -1,9 +1,9 @@
-﻿error[SE0230]: state `omega` must be declared `continuous` or `discrete`
+﻿error[SE0230]: state `omega` must be declared `continuous`, `discrete` or `finite`
  --> tests/err/state_kind.se:7:9
   |
 7 |         omega:         double(rad/s) = 0.0;
-  |         ^^^^^ expected `continuous` or `discrete` before the state name
-  = note: there is deliberately no default state kind — the two differ in write accessor (`der.` vs `next.`), in schedule, and in whether they enter the solver's state vector (§6.4)
-  = help: prefix the declaration with `continuous` or `discrete`
+  |         ^^^^^ expected `continuous`, `discrete` or `finite` before the state name
+  = note: there is deliberately no default state kind — the three differ in write accessor (`der.`, `next.`, `transition.`), in schedule, and in whether they enter the solver's state vector (§6.4)
+  = help: prefix the declaration with `continuous`, `discrete` or `finite`
 
 1 error emitted
