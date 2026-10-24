@@ -1,0 +1,91 @@
+// §5.2a / §7.2a — enumerated types end to end: a public enum and a private
+// one, as settings, as a flow-down copy, as a discrete state with an IC
+// override, as a port and a root output, as a record field, and recorded.
+//
+// The device climbs IDLE -> CONNECTING -> CONNECTED and, `fail_after` ticks in,
+// drops to whatever `on_fault` says. `enums.settings` starts it at CONNECTING
+// (an IC override, by enumerator) and leaves `on_fault` at the Rig's default,
+// which flows down as a whole-enum copy. So the recorded link column reads
+//
+//   k:     0  1  2  3  4  5 ...
+//   link:  1  2  2  2 15 15 ...     (CONNECTING, CONNECTED x3, FAULT)
+//
+// and the watcher, which reads it through a feedthrough port, reports the same
+// value as an int and as a field of a record, plus `up` while CONNECTED. Every
+// value is a different number, so a column reading the wrong source, or an
+// enumerator numbered wrongly, is a wrong number and not a plausible one.
+package enums;
+
+// A private enum: it lowers into the file's private namespace, and is reached
+// from a setting the sim file never names.
+enum Retry { NEVER, ONCE = 1, ALWAYS = 9 }
+
+type Status {
+    link: LinkState;
+    code: int(-);
+}
+
+node Rig {
+    settings {
+        on_fault: LinkState = FAULT;
+    }
+    outputs {
+        link: LinkState;
+    }
+
+    structure {
+        // `on_fault` is copied whole (§7.2a); `retry` is bound by a bare
+        // enumerator at the instance.
+        node dev : Device { on_fault = param.on_fault; retry = ALWAYS; };
+        node w   : Watcher {};
+
+        dev --> w;
+        dev --> self.link;
+    }
+}
+
+node Device {
+    settings {
+        fail_after: int(-)    = 3;
+        on_fault:   LinkState = IDLE;
+        retry:      Retry     = NEVER;
+    }
+    outputs { link: LinkState; }
+    states {
+        discrete link:  LinkState = IDLE;
+        discrete ticks: int(-)    = 0;
+    }
+
+    output() { out.link = state.link; }
+
+    next() {
+        next.ticks = state.ticks + 1;
+        switch (state.link) {
+            case LinkState::IDLE:       next.link = LinkState::CONNECTING; break;
+            case LinkState::CONNECTING: next.link = LinkState::CONNECTED;  break;
+            case LinkState::CONNECTED:
+                next.link = state.ticks >= param.fail_after ? param.on_fault
+                                                            : LinkState::CONNECTED;
+                break;
+            case LinkState::FAULT:      next.link = LinkState::FAULT;      break;
+        }
+        // A private enum is an ordinary C++ enum class in the body.
+        (void)(param.retry == Rig_priv::Retry::ALWAYS);
+    }
+}
+
+node Watcher {
+    inputs  { link: LinkState; }
+    outputs {
+        up:   bool;
+        code: int(-);
+        st:   Status;
+    }
+
+    output(link) {
+        out.up = in.link == LinkState::CONNECTED;
+        out.code = static_cast<int>(in.link);
+        out.st.link = in.link;
+        out.st.code = out.code;
+    }
+}

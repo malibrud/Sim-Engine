@@ -90,15 +90,34 @@ std::string dbl(double v) {
     return s;
 }
 
-std::string literal(double v, const std::string& scalar) {
-    if (scalar == "bool") return v != 0.0 ? "true" : "false";
-    if (scalar == "int") {
-        char buf[32];
-        std::snprintf(buf, sizeof buf, "%lld", static_cast<long long>(std::llround(v)));
-        return buf;
+std::string int_text(double v) {
+    char buf[32];
+    std::snprintf(buf, sizeof buf, "%lld", static_cast<long long>(std::llround(v)));
+    return buf;
+}
+
+// §5.2a — an enum's value is written by name wherever it has one. Without one
+// (a zero that is no enumerator) the cast is the only spelling C++ accepts.
+std::string literal(double v, const std::string& scalar, const EnumInfo* enm = nullptr) {
+    if (enm) {
+        if (const EnumInfo::Value* e = enm->find(std::lround(v)))
+            return enm->cpp_name + "::" + e->name;
+        return "static_cast<" + enm->cpp_name + ">(" + int_text(v) + ")";
     }
+    if (scalar == "bool") return v != 0.0 ? "true" : "false";
+    if (scalar == "int") return int_text(v);
     if (scalar == "float") return dbl(v) + "f";
     return dbl(v);
+}
+
+// The same value as a person reads it — the manifest, the topology page: an
+// enum by its bare enumerator, the way a §14 source writes it (§7.2a).
+std::string shown(double v, const std::string& scalar, const EnumInfo* enm) {
+    if (enm) {
+        if (const EnumInfo::Value* e = enm->find(std::lround(v))) return e->name;
+        return int_text(v);
+    }
+    return literal(v, scalar);
 }
 
 // A derived setting's expression, path-addressed rather than C++-addressed:
@@ -324,7 +343,9 @@ public:
 private:
     // The public header's pieces (§15.7).
     std::set<const RecordInfo*> public_records() const;
+    std::set<const EnumInfo*> public_enums() const;
     void record_def(Out& o, const RecordInfo* r) const;
+    void enum_def(Out& o, const EnumInfo* e) const;
     void public_class();
     std::vector<std::size_t> root_settings() const;
     std::string root_setting_default(const std::string& decl, const Type& t) const;
@@ -518,7 +539,49 @@ std::set<const RecordInfo*> Emitter::public_records() const {
     return pub;
 }
 
+// §5.2a — a scoped enumeration, guarded and namespaced exactly as a record is,
+// for the same reason: two models naming one enum must share a translation
+// unit without colliding. The values are always written out, so the C++ and
+// the manifest's `[types]` row cannot disagree about what a recorded 15 means.
+void Emitter::enum_def(Out& o, const EnumInfo* e) const {
+    std::string guard = "SE_TYPE_";
+    for (char c : e->fq) guard += (c == '.' || c == '#') ? '_' : c;
+    const std::size_t colon = e->cpp_name.rfind("::");
+    const std::string ns = colon == std::string::npos ? "" : e->cpp_name.substr(0, colon);
+    const std::string base =
+        colon == std::string::npos ? e->cpp_name : e->cpp_name.substr(colon + 2);
+    o << "#ifndef " << guard << "\n#define " << guard << "\n";
+    if (!ns.empty()) o << "namespace " << ns << " {\n";
+    std::size_t wn = 0;
+    for (const EnumInfo::Value& v : e->values) wn = std::max(wn, v.name.size());
+    o << "enum class " << base << " : int {   // " << e->fq << "\n";
+    for (const EnumInfo::Value& v : e->values)
+        o << "    " << pad(v.name, wn) << " = " << v.value << ",\n";
+    o << "};\n";
+    if (!ns.empty()) o << "}  // namespace " << ns << "\n";
+    o << "#endif\n\n";
+}
+
+// The enums the public interface names, directly or through a public record's
+// fields. They precede the records, which may contain them.
+std::set<const EnumInfo*> Emitter::public_enums() const {
+    std::set<const EnumInfo*> pub;
+    std::function<void(const Type&)> add = [&](const Type& t) {
+        if (t.enm) pub.insert(t.enm);
+        if (!t.is_record || !t.record) return;
+        for (const Field& f : t.record->fields) add(field_type(t, f));
+    };
+    for (const BoundaryIn& b : m_.boundary_in) add(b.type);
+    for (const RootOutput& r : m_.root_outputs) add(r.type);
+    for (std::size_t i : root_settings()) add(m_.settings[i].decl_type);
+    return pub;
+}
+
 void Emitter::records() {
+    // Enums first: they refer to nothing, and a record may hold one.
+    const std::set<const EnumInfo*> pub_e = public_enums();
+    for (const EnumInfo* e : m_.program->enum_order)
+        if (!pub_e.count(e)) enum_def(o_, e);
     // Loading is need-driven, so `record_order` holds exactly the records this
     // model reaches. It is post-order over the field graph, which means a
     // contained record always precedes its container and the emitted sequence
@@ -1309,8 +1372,11 @@ void Emitter::sim_resolve_settings() {
         // performs exactly the truncation elaboration already applied, so it
         // changes no value -- it only stops the C++ compiler guessing that it
         // might.
+        //
+        // An enum needs neither (§7.2a): its expression is an enumerator or a
+        // copy of a setting of the same enum, already of the member's type.
         const std::string rhs =
-            s.scalar == "double"
+            s.scalar == "double" || s.enm
                 ? render_expr(s.expr)
                 : "static_cast<" + s.scalar + ">(" + render_expr(s.expr) + ")";
         o_ << "    if (!se_pin_[" << i << "]) " << pad(lhs, w) << " = "
@@ -1612,13 +1678,13 @@ void Emitter::sim_elaborate() {
             // is no per-element default syntax: non-uniform initialisation is
             // init()'s job, which is where a computed IC already belonged.
             if (s.extent.present) {
-                o_ << "    " << pad(base + ".fill(" + literal(s.initial, s.scalar) + ");",
+                o_ << "    " << pad(base + ".fill(" + literal(s.initial, s.scalar, s.enm) + ");",
                                     w + 13)
                    << " // " << s.unit.str() << "\n";
                 continue;
             }
             o_ << "    " << pad(base, w) << " = "
-               << pad(literal(s.initial, s.scalar) + ";", 10) << " // " << s.unit.str()
+               << pad(literal(s.initial, s.scalar, s.enm) + ";", 10) << " // " << s.unit.str()
                << "\n";
         }
     // §13.4 — element ICs from a settings source, after the uniform default
@@ -1637,7 +1703,7 @@ void Emitter::sim_elaborate() {
                     std::to_string(ic.index) + "]";
                 const std::string block = s.continuous ? "x[se_x_off_[" : "dis_arr[se_da_off_[";
                 o_ << "    " << block << s.off << "] + " << ic.index << "] = "
-                   << literal(ic.value, s.scalar) << ";   // " << path << "\n";
+                   << literal(ic.value, s.scalar, s.enm) << ";   // " << path << "\n";
             }
     if (any_discrete)
         o_ << "    nxt = dis;   // so the first `dis = nxt` is a no-op\n";
@@ -1901,8 +1967,9 @@ void Emitter::sim_record() {
     o_ << "    se_rec_.header({";
     for (std::size_t i = 0; i < m_.record.signals.size(); ++i) {
         if (i) o_ << ",";
+        const RecordedSignal& s = m_.record.signals[i];
         o_ << "\n                "
-           << quote(m_.record.signals[i].path + " [" + m_.record.signals[i].unit.str() + "]");
+           << quote(s.path + " [" + (s.enm ? s.enm->fq : s.unit.str()) + "]");
     }
     o_ << "});\n}\n";
 
@@ -2336,7 +2403,7 @@ std::string Emitter::root_setting_default(const std::string& decl, const Type& t
     if (!t.is_record) {
         for (std::size_t i : root_settings())
             if (m_.settings[i].name == decl)
-                return literal(m_.settings[i].value, m_.settings[i].scalar);
+                return literal(m_.settings[i].value, m_.settings[i].scalar, m_.settings[i].enm);
         return "{}";
     }
     std::string r = "{";
@@ -2373,7 +2440,7 @@ void Emitter::public_class() {
                << pad(r.init + ";", wi + 1) << "   " << r.comment << "\n";
         o_ << "    };\n";
     };
-    auto zero = [](const Type& t) { return t.is_record ? std::string("{}") : literal(0.0, t.scalar); };
+    auto zero = [](const Type& t) { return t.is_record ? std::string("{}") : literal(0.0, t.scalar, t.enm); };
 
     std::vector<Member> settings;
     {
@@ -2501,6 +2568,12 @@ std::string Emitter::public_hpp() {
     o_ << "#pragma once\n\n";
     o_ << "#include <cstdint>\n#include <memory>\n\n";
 
+    const std::set<const EnumInfo*> pub_e = public_enums();
+    if (!pub_e.empty()) {
+        o_ << "// ---- the enums the interface uses " << std::string(40, '-') << "\n";
+        for (const EnumInfo* e : m_.program->enum_order)
+            if (pub_e.count(e)) enum_def(o_, e);
+    }
     const std::set<const RecordInfo*> pub = public_records();
     if (!pub.empty()) {
         o_ << "// ---- the record types the interface uses " << std::string(34, '-') << "\n";
@@ -2613,7 +2686,8 @@ std::string Emitter::main_cpp() {
         }
     if (example)
         t << " For example:\n    //        sim.settings()." << example->name << " = "
-          << literal(example->value, example->scalar) << ";   // " << example->unit.str()
+          << literal(example->value, example->scalar, example->enm) << ";   // "
+          << example->unit.str()
           << "\n\n";
     else
         t << "\n\n";
@@ -2634,7 +2708,7 @@ std::string Emitter::main_cpp() {
         t << "                         \"so they stay at zero: " << names << "\\n\");\n";
         t << "    while (!sim.done()) {\n";
         auto zero = [](const Type& ty) {
-            return (ty.is_record ? std::string("{}") : literal(0.0, ty.scalar)) + ";";
+            return (ty.is_record ? std::string("{}") : literal(0.0, ty.scalar, ty.enm)) + ";";
         };
         std::size_t w = 0, wz = 0;
         for (const BoundaryIn& b : m_.boundary_in) {
@@ -3201,7 +3275,7 @@ std::string Emitter::topology_json(const Topo& topo) const {
             r += (k ? ", " : "") + std::string("{\"name\": ") + jstr(s.name) +
                  ", \"kind\": " + jstr(s.continuous ? "continuous" : "discrete") +
                  ", \"unit\": " + jstr(s.unit.str()) +
-                 ", \"initial\": " + jstr(literal(s.initial, s.scalar)) +
+                 ", \"initial\": " + jstr(shown(s.initial, s.scalar, s.enm)) +
                  ", \"extent\": " + jopt(s.extent.present ? s.extent.text : std::string()) +
                  ", \"slot\": " +
                  (s.continuous && !m_.dynamic_states ? std::to_string(s.slot) : std::string("null")) +
@@ -3277,7 +3351,7 @@ std::string Emitter::topology_json(const Topo& topo) const {
         const SettingSlot& s = m_.settings[k];
         t << (k ? ",\n " : "\n ") << "{\"path\": " << jstr(s.path) << ", \"owner\": " << jstr(s.owner)
           << ", \"name\": " << jstr(s.name) << ", \"unit\": " << jstr(s.unit.str())
-          << ", \"value\": " << jstr(literal(s.value, s.scalar))
+          << ", \"value\": " << jstr(shown(s.value, s.scalar, s.enm))
           << ", \"from\": " << (s.constant ? std::string("null") : jstr(derived_from(s.expr)))
           << ", \"structural\": " << jbool(s.structural) << ", \"rate\": " << jbool(s.rate) << "}";
     }
@@ -3333,10 +3407,18 @@ std::string Emitter::manifest() {
     // names, units and types the slots, and the generated header builds the
     // offsets with offsetof(). Both come from the same row list, so they cannot
     // disagree.
+    //
+    // A slot row carries the C++ type, which `sizeof` needs; the manifest names
+    // an enum the way the DSL does, so its `[types]` row is findable (§15.6).
+    auto shown_type = [&](const std::string& cpp) {
+        for (const EnumInfo* e : m_.program->enum_order)
+            if (e->cpp_name == cpp) return e->fq;
+        return cpp;
+    };
     t << "\n[state.discrete]          # Sim::Impl::dis; offsets from Sim::Impl::discrete_map()\n";
     const std::vector<SlotRow> dis = discrete_rows();
     for (const SlotRow& r : dis)
-        t << col("", 10) << col(r[0], 24) << col(r[3], 12) << r[2] << "\n";
+        t << col("", 10) << col(r[0], 24) << col(r[3], 12) << shown_type(r[2]) << "\n";
     if (dis.empty()) t << "          (none)\n";
 
     // §15.5a — the fourth block. An array-shaped discrete state cannot live
@@ -3352,17 +3434,20 @@ std::string Emitter::manifest() {
 
     t << "\n[signals]                 # Sim::Impl::sig; offsets from Sim::Impl::signal_map()\n";
     for (const SlotRow& r : signal_rows())
-        t << col("", 10) << col(r[0], 24) << col(r[3], 12) << r[2] << "\n";
+        t << col("", 10) << col(r[0], 24) << col(r[3], 12) << shown_type(r[2]) << "\n";
 
     t << "\n[boundary.in]             # root inputs the host must drive, through Sim::inputs()\n";
     for (const BoundaryIn& b : m_.boundary_in)
         t << col("", 10) << col(b.path, 24)
-          << (b.type.is_record ? b.type.record->fq : b.type.unit.str()) << "\n";
+          << (b.type.is_record ? b.type.record->fq
+                               : b.type.enm ? b.type.enm->fq : b.type.unit.str())
+          << "\n";
     if (m_.boundary_in.empty()) t << "          (none)\n";
 
     t << "\n[boundary.out]            # root outputs the host may read\n";
     for (const BoundaryOut& b : m_.boundary_out)
-        t << col("", 10) << col(b.path, 24) << b.type.unit.str() << "\n";
+        t << col("", 10) << col(b.path, 24) << (b.type.enm ? b.type.enm->fq : b.type.unit.str())
+          << "\n";
     if (m_.boundary_out.empty()) t << "          (none)\n";
 
     // §15.6 — the configuration schema (§14.1): every path a settings source may
@@ -3373,7 +3458,7 @@ std::string Emitter::manifest() {
     t << "\n[settings]                # configurable; value is the elaborated default\n";
     for (const SettingSlot& s : m_.settings) {
         t << col("", 10) << col(s.path, 24) << col(s.unit.str(), 12) << "= "
-          << literal(s.value, s.scalar);
+          << shown(s.value, s.scalar, s.enm);
         if (!s.constant) t << "   <- " << derived_from(s.expr);
         t << "\n";
     }
@@ -3404,14 +3489,23 @@ std::string Emitter::manifest() {
         }
         for (const Field& f : r->fields)
             t << col(r->fq + "." + f.name, 34)
-              << (f.type.is_record ? f.type.record->fq : f.type.unit.str()) << "\n";
+              << (f.type.is_record ? f.type.record->fq
+                                   : f.type.enm ? f.type.enm->fq : f.type.unit.str())
+              << "\n";
+    }
+    // §15.6 — an enum's row is its decoding table, every value written out.
+    for (const EnumInfo* e : m_.program->enum_order) {
+        std::string vs;
+        for (std::size_t i = 0; i < e->values.size(); ++i)
+            vs += (i ? ", " : "") + e->values[i].name + " = " + std::to_string(e->values[i].value);
+        t << col(e->fq, 34) << "enum { " << vs << " }\n";
     }
 
     if (m_.record.present) {
         t << "\n[recorded]                # columns of " << m_.record.file << "\n";
         t << col("", 10) << col("time", 24) << "s\n";
         for (const RecordedSignal& s : m_.record.signals)
-            t << col("", 10) << col(s.path, 24) << s.unit.str() << "\n";
+            t << col("", 10) << col(s.path, 24) << (s.enm ? s.enm->fq : s.unit.str()) << "\n";
     }
     return t.str();
 }

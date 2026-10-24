@@ -80,7 +80,7 @@ private:
 
     // ─── Annotations (§6.15) ─────────────────────────────────────────────────
     // Where an annotation sits; the key table says which keys each site takes.
-    enum class AnnotSite { Definition, Type, Group, Instance };
+    enum class AnnotSite { Definition, Type, Enum, Group, Instance };
     bool parse_annotations(std::vector<ast::Annotation>& out);
     void apply_annotations(const std::vector<ast::Annotation>& in, AnnotSite site,
                            ast::DiagramHints& out);
@@ -88,6 +88,7 @@ private:
 
     // ─── Model file ──────────────────────────────────────────────────────────
     bool parse_type_def(ast::TypeDef& out);
+    bool parse_enum_def(ast::EnumDef& out);
     bool parse_node_def(ast::NodeDef& out);
     bool parse_node_item(ast::NodeDef& node);
     bool parse_field_list(std::vector<ast::FieldDecl>& out, const char* what,

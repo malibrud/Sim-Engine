@@ -1,0 +1,37 @@
+// SPECIFICATION 5.2a / 6.13 -- enum cells in a node test. An enumerator is a
+// bare name in a cell exactly as in a default (7.2a), on the given side (an
+// input, a setting pin, a state) and on the expected side (an output, `next.`).
+// AMBER's explicit 4 makes GREEN 5, so a cell decoded by position rather than
+// by value fails.
+package nt;
+
+enum Light { RED, AMBER = 4, GREEN }
+
+node EnumCells {
+    settings { go: Light = GREEN; }
+    inputs   { l: Light; }
+    outputs  { stop: bool; code: int(-); same: Light; }
+    states   { discrete last: Light = RED; }
+
+    output(l) {
+        out.stop = in.l != param.go;
+        out.code = static_cast<int>(in.l);
+        out.same = in.l;
+    }
+    next(l) { next.last = in.l; }
+
+    tests {
+        step: 1 (ms);
+
+        set "a light passes through as its value", in.l = out.stop, out.code, out.same {
+            GREEN, 0, 5, GREEN, "green goes";
+            RED,   1, 0, RED,   "red stops";
+        }
+        set "a setting column pins an enum", param.go, in.l = out.stop {
+            RED, RED, 0, "red is go for this row";
+        }
+        set "next() stores the light", state.last, in.l = next.last {
+            RED, AMBER, AMBER, "amber is remembered";
+        }
+    }
+}

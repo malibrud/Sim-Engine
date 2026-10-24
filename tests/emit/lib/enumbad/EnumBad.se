@@ -1,0 +1,59 @@
+// §5.2a / §7.2a — every way an enum can be misused that `sec` must refuse.
+// Each line marked below is wrong in exactly one way.
+package enumbad;
+
+enum Mode { OFF, ON }
+enum Twice { A, B, A }          // SE0317 — A declared twice
+enum Clash { X = 1, Y = 0, Z }  // SE0318 — Z counts on to 1, which X has
+enum Empty { }                  // SE0319
+
+type Pair { a: double(-); b: double(-); }
+
+node EnumBad {
+    settings {
+        t:  Twice = B;
+        c:  Clash = X;
+        ok: Mode  = ON;
+        m:  Mode  = ONN;            // SE0403 — no such enumerator
+        n:  Mode  = 1;              // SE0404 — a number where an enumerator belongs
+        k:  int(-) = param.ok;      // SE0404 — an enumerator where a number belongs
+        s:  double(-) = param.ok * 2; // SE0404 — arithmetic on an enumerator
+        u:  Mode(-) = OFF;          // SE0313 — an enum takes no unit argument
+    }
+    outputs { y: double(-); }
+
+    structure {
+        node src  : Src {};
+        node dst  : Dst {};
+        node sink : Sink {};
+        node rec  : RecState {};
+        src --> dst;               // SE0410 — Mode into int
+        1.0 --> sink;              // SE0410 — a literal is no enumerator
+        dst --> self.y;
+    }
+}
+
+node Src {
+    outputs { m: Mode; }
+    output() { out.m = Mode::ON; }
+}
+
+node Dst {
+    inputs  { m: int(-); }
+    outputs { y: double(-); }
+    output(m) { out.y = in.m; }
+}
+
+node Sink {
+    inputs { m: Mode; }
+    vars   { e: Empty; }
+    on_step(m) { (void)in.m; }
+}
+
+node RecState {
+    states {
+        discrete p: Pair = 0.0;      // SE0232 — a state may not be a record
+        discrete q: int(-) = 0;
+    }
+    next() { next.q = state.q; }
+}

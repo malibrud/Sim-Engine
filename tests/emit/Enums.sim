@@ -1,0 +1,22 @@
+// §5.2a / §7.2a / §13.5 — enumerated types. See lib/enums/Rig.se for what the
+// recorded columns have to read and why.
+sim Enums {
+    root: enums.Rig {};
+
+    step:     1 (ms);
+    solver:   rk4;
+    duration: 6 (ms);
+    settings: "enums.settings";
+
+    record: {
+        file: "enums.csv";
+        signals {
+            dev.state.link;
+            dev.out.link;
+            w.code;
+            w.up;
+            w.st.link;
+            link;
+        }
+    }
+}

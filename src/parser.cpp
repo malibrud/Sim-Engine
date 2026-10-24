@@ -207,7 +207,7 @@ void Parser::recover_to_definition() {
     int depth = 0;
     while (!at_end()) {
         if (depth == 0 && (tok_.kind == Tok::KwNode || tok_.kind == Tok::KwType ||
-                           tok_.kind == Tok::At))
+                           tok_.kind == Tok::KwEnum || tok_.kind == Tok::At))
             return;
         if (tok_.kind == Tok::LBrace) ++depth;
         else if (tok_.kind == Tok::RBrace && depth > 0) --depth;
@@ -840,8 +840,9 @@ std::unique_ptr<ast::ModelFile> Parser::parse_model_file() {
                 recover_to_definition();
                 continue;
             }
-            if (!at(Tok::KwType) && !at(Tok::KwNode)) {
-                stray_annotations(annots, "expected a `node` or `type` definition to follow");
+            if (!at(Tok::KwType) && !at(Tok::KwEnum) && !at(Tok::KwNode)) {
+                stray_annotations(annots,
+                                  "expected a `node`, `type` or `enum` definition to follow");
                 continue;
             }
         }
@@ -854,6 +855,16 @@ std::unique_ptr<ast::ModelFile> Parser::parse_model_file() {
             if (parse_type_def(t)) {
                 t.start_line = first_line ? first_line : t.loc.line;
                 file->types.push_back(std::move(t));
+            } else {
+                recover_to_definition();
+            }
+        } else if (at(Tok::KwEnum)) {
+            ast::EnumDef e;
+            ast::DiagramHints none;
+            apply_annotations(annots, AnnotSite::Enum, none);
+            if (parse_enum_def(e)) {
+                e.start_line = first_line ? first_line : e.loc.line;
+                file->enums.push_back(std::move(e));
             } else {
                 recover_to_definition();
             }
@@ -887,15 +898,15 @@ std::unique_ptr<ast::ModelFile> Parser::parse_model_file() {
             accept(Tok::Semi);
         } else {
             std::vector<Attachment> att;
-            att.push_back(note("a `.se` file contains `node` and `type` declarations "
-                               "(\xc2\xa7""2.3)"));
+            att.push_back(note("a `.se` file contains `node`, `type` and `enum` "
+                               "declarations (\xc2\xa7""2.3)"));
             if (at(Tok::KwSim))
                 att.push_back(help("a `sim` declaration belongs in its own `.sim` file "
                                    "(\xc2\xa7""13)"));
             err("SE0204", tok_.loc,
-                std::string("expected a definition (`node` or `type`), found ") +
+                std::string("expected a definition (`node`, `type` or `enum`), found ") +
                     describe(tok_.kind),
-                "expected `node` or `type`", std::move(att));
+                "expected `node`, `type` or `enum`", std::move(att));
             recover_to_definition();
         }
 
@@ -920,6 +931,60 @@ bool Parser::parse_type_def(ast::TypeDef& out) {
     // (§5.2), so it shares the field loop rather than duplicating its recovery.
     return parse_field_list(out.fields, "record field", true, false, &out.sec_units,
                             &out.unit_params);
+}
+
+// §5.2a — `enum Name { A, B = 15, C }`. The values are settled here, so every
+// later stage reads a finished list; the duplicate and empty checks belong to
+// resolution (SE0317-19), which reports them against the whole declaration.
+bool Parser::parse_enum_def(ast::EnumDef& out) {
+    out.loc = tok_.loc;
+    advance();  // enum
+    if (!at(Tok::Ident)) {
+        err("SE0201", tok_.loc, std::string("expected an enum name, found ") + describe(tok_.kind),
+            "expected an enum name");
+        return false;
+    }
+    out.name = tok_.text;
+    out.loc = tok_.loc;
+    advance();
+    if (!expect(Tok::LBrace, "SE0201", "to open the enumerator list")) return false;
+
+    long next = 0;
+    while (!at(Tok::RBrace) && !at_end() && !give_up()) {
+        if (!at(Tok::Ident)) {
+            err("SE0201", tok_.loc,
+                std::string("expected an enumerator name, found ") + describe(tok_.kind),
+                "expected an enumerator name",
+                {note("an enum body is a comma-separated list of names, each optionally "
+                      "`= n` (\xc2\xa7""5.2a)")});
+            return false;
+        }
+        ast::Enumerator en;
+        en.name = tok_.text;
+        en.loc = tok_.loc;
+        advance();
+        if (accept(Tok::Equal)) {
+            const bool negate = accept(Tok::Minus);
+            if (!at(Tok::Number) ||
+                tok_.text.find_first_not_of("0123456789") != std::string::npos) {
+                err("SE0201", tok_.loc,
+                    "expected an integer value, found " +
+                        (at(Tok::Number) ? "`" + tok_.text + "`" : describe(tok_.kind)),
+                    "expected an integer",
+                    {note("an enumerator's value is an integer literal, optionally "
+                          "negative (\xc2\xa7""5.2a)")});
+                return false;
+            }
+            const long v = std::strtol(tok_.text.c_str(), nullptr, 10);
+            next = negate ? -v : v;
+            en.explicit_value = true;
+            advance();
+        }
+        en.value = next++;
+        out.enumerators.push_back(std::move(en));
+        if (!accept(Tok::Comma)) break;
+    }
+    return expect(Tok::RBrace, "SE0201", "to close the enumerator list");
 }
 
 bool Parser::mark_section(ast::SectionMark& m, const char* name, Loc loc) {
@@ -1590,11 +1655,8 @@ bool Parser::parse_state_list(std::vector<ast::StateDecl>& out) {
             } else if (!parse_type_ref(s.type, "state")) {
                 ok = false;
             } else {
-                if (!s.type.is_scalar) {
-                    err("SE0232", s.type.loc, "a state may not be a record type", "",
-                        {note("the solver ABI is a flat `double` vector (\xc2\xa7""5.2)")});
-                    ok = false;
-                }
+                // A named type here may be a record (SE0232) or an enum (legal,
+                // §5.2a), and only resolution can tell which.
                 if (at(Tok::Equal)) {
                     advance();
                     s.initial = parse_expr();
@@ -1840,6 +1902,7 @@ void Parser::apply_annotations(const std::vector<ast::Annotation>& in, AnnotSite
                                ast::DiagramHints& out) {
     const char* site_name = site == AnnotSite::Definition ? "a node definition"
                             : site == AnnotSite::Type     ? "a `type`"
+                            : site == AnnotSite::Enum     ? "an `enum`"
                             : site == AnnotSite::Group    ? "a group"
                                                           : "an instance";
     const ast::Annotation* first = nullptr;
@@ -1898,6 +1961,8 @@ void Parser::apply_annotations(const std::vector<ast::Annotation>& in, AnnotSite
                 std::vector<Attachment> att;
                 if (site == AnnotSite::Type)
                     att.push_back(note("a record type is never drawn on the topology diagram"));
+                else if (site == AnnotSite::Enum)
+                    att.push_back(note("an enum is never drawn on the topology diagram"));
                 else if (arg.key == "expanded")
                     att.push_back(note("everything is drawn expanded unless it says "
                                        "`collapsed`; `expanded` is for an instance, to "

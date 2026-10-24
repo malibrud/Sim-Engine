@@ -1,0 +1,56 @@
+﻿# ----------------------------------------------------------------------------
+#  GENERATED — DO NOT EDIT.
+#  Unit manifest for: Enums.hpp
+#  sim: Enums   root: enums.Rig   base step: 0.001 s
+#
+#  Units are checked by the DSL compiler at every declarative site and then
+#  ERASED — the generated C++ is plain `double` throughout. This file is where
+#  the erased information goes. It is a real generator output, not
+#  documentation: it is the contract for anyone writing an external solver,
+#  feeding the root boundary, or overriding a setting from outside the model.
+#
+#  Every value named here is IN THE UNIT SHOWN. `-` means dimensionless.
+# ----------------------------------------------------------------------------
+
+[state.continuous]        # slot | model path | unit  -- the solver's ABI
+          (none)
+
+[state.discrete]          # Sim::Impl::dis; offsets from Sim::Impl::discrete_map()
+          dev.link                -           enums.LinkState
+          dev.ticks               -           int
+
+[signals]                 # Sim::Impl::sig; offsets from Sim::Impl::signal_map()
+          dev.link                -           enums.LinkState
+          w.up                    -           bool
+          w.code                  -           int
+          w.st.link               -           enums.LinkState
+          w.st.code               -           int
+
+[boundary.in]             # root inputs the host must drive, through Sim::inputs()
+          (none)
+
+[boundary.out]            # root outputs the host may read
+          dev.link                enums.LinkState
+
+[settings]                # configurable; value is the elaborated default
+          on_fault                -           = FAULT
+          dev.fail_after          -           = 3
+          dev.on_fault            -           = FAULT   <- on_fault
+          dev.retry               -           = ALWAYS
+
+[decimation]              # derived from `rate` at configuration
+
+[types]
+enums.Rig#Status.link             enums.LinkState
+enums.Rig#Status.code             -
+enums.LinkState                   enum { IDLE = 0, CONNECTING = 1, CONNECTED = 2, FAULT = 15 }
+enums.Rig#Retry                   enum { NEVER = 0, ONCE = 1, ALWAYS = 9 }
+
+[recorded]                # columns of enums.csv
+          time                    s
+          dev.state.link          enums.LinkState
+          dev.out.link            enums.LinkState
+          w.code                  -
+          w.up                    -
+          w.st.link               enums.LinkState
+          link                    enums.LinkState

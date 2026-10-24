@@ -267,6 +267,7 @@ bool Resolver::bind_imports(FileInfo& file) {
     std::set<std::string> local;
     for (const ast::NodeDef& d : file.ast->nodes) local.insert(d.name);
     for (const ast::TypeDef& d : file.ast->types) local.insert(d.name);
+    for (const ast::EnumDef& d : file.ast->enums) local.insert(d.name);
 
     for (const ast::UseDecl& u : file.ast->uses) {
         if (u.path.segs.empty()) continue;
@@ -330,6 +331,13 @@ const ast::TypeDef* Resolver::private_type(const FileInfo& from, const std::stri
     return nullptr;
 }
 
+const ast::EnumDef* Resolver::private_enum(const FileInfo& from, const std::string& name) {
+    if (name == from.public_name) return nullptr;
+    for (const ast::EnumDef& d : from.ast->enums)
+        if (d.name == name) return &d;
+    return nullptr;
+}
+
 bool Resolver::split_reference(const FileInfo& from, const ast::Path& p,
                                std::string& pkg, std::string& name) {
     if (p.segs.empty()) return false;
@@ -387,30 +395,45 @@ const NodeInfo* Resolver::resolve_node_ref(const FileInfo& from, const ast::Path
     return nullptr;
 }
 
-const RecordInfo* Resolver::resolve_record_ref(const FileInfo& from, const ast::Path& p,
-                                               const Source& src, Loc loc) {
+bool Resolver::resolve_named_type_ref(const FileInfo& from, const ast::Path& p,
+                                      const Source& src, Loc loc, const RecordInfo*& rec,
+                                      const EnumInfo*& enm) {
+    rec = nullptr;
+    enm = nullptr;
     if (p.segs.size() == 1) {
+        const std::string priv_fq = from.package + "." + from.public_name + "#" + p.segs[0];
+        const std::string priv_cpp = cpp_namespace(from.package) + "::" + from.public_name +
+                                     "_priv::" + p.segs[0];
         if (const ast::TypeDef* priv = private_type(from, p.segs[0])) {
-            return resolve_record(const_cast<FileInfo&>(from), *priv,
-                                  from.package + "." + from.public_name + "#" + priv->name,
-                                  cpp_namespace(from.package) +
-                                      "::" + from.public_name + "_priv::" + priv->name);
+            rec = resolve_record(const_cast<FileInfo&>(from), *priv, priv_fq, priv_cpp);
+            return rec != nullptr;
+        }
+        if (const ast::EnumDef* priv = private_enum(from, p.segs[0])) {
+            enm = resolve_enum(const_cast<FileInfo&>(from), *priv, priv_fq, priv_cpp);
+            return enm != nullptr;
         }
     }
     std::string pkg, name;
-    if (!split_reference(from, p, pkg, name)) return nullptr;
+    if (!split_reference(from, p, pkg, name)) return false;
 
     FileInfo* file = load_file(pkg, name, src, loc);
-    if (!file) return nullptr;
+    if (!file) return false;
     for (const ast::TypeDef& def : file->ast->types) {
         if (def.name != name) continue;
-        return resolve_record(*file, def, pkg + "." + name,
-                              cpp_namespace(pkg) + "::" + name);
+        rec = resolve_record(*file, def, pkg + "." + name, cpp_namespace(pkg) + "::" + name);
+        return rec != nullptr;
+    }
+    for (const ast::EnumDef& def : file->ast->enums) {
+        if (def.name != name) continue;
+        enm = resolve_enum(*file, def, pkg + "." + name, cpp_namespace(pkg) + "::" + name);
+        return enm != nullptr;
     }
     diag_.error("SE0304", src, loc, "`" + p.str() + "` names no type",
                 "unresolved",
-                {note("this file declares no public `type " + name + "`", file->path)});
-    return nullptr;
+                {note("this file declares no public `type " + name + "` or `enum " + name +
+                          "`",
+                      file->path)});
+    return false;
 }
 
 // ─── Building the resolved forms ─────────────────────────────────────────────
@@ -466,8 +489,31 @@ bool Resolver::resolve_type(const FileInfo& file, const ast::TypeRef& ref, Type&
             out.unit_args.push_back(evaluated);
         }
     }
-    out.record = resolve_record_ref(file, ref.record, *file.src, ref.loc);
-    if (!out.record) return false;
+    const RecordInfo* rec = nullptr;
+    const EnumInfo* enm = nullptr;
+    // An unresolved name stays `is_record` with a null record, as it always did
+    // before enums existed; the stages after this one already tolerate that.
+    if (!resolve_named_type_ref(file, ref.record, *file.src, ref.loc, rec, enm)) return false;
+    if (enm) {
+        // §5.2a — an enum is a scalar with no dimension, so it takes `bool`'s
+        // arity: none. A record's arity error is the nearest code in kind.
+        out.is_record = false;
+        out.enm = enm;
+        out.scalar = enm->cpp_name;
+        out.unit_args.clear();
+        if (!ref.unit_args.empty()) {
+            diag_.error("SE0313", *file.src, ref.unit_args_loc,
+                        "`" + enm->fq + "` takes no unit argument, " +
+                            std::to_string(ref.unit_args.size()) + " given",
+                        std::to_string(ref.unit_args.size()) + " given",
+                        {note("an enum's values are names, and a name has no dimension "
+                              "(§5.2a)"),
+                         help("write `" + ref.record.str() + "` with no parentheses")});
+            return false;
+        }
+        return true;
+    }
+    out.record = rec;
 
     const std::size_t want = out.record->unit_params.size();
     const std::size_t got = out.unit_args.size();
@@ -550,6 +596,55 @@ RecordInfo* Resolver::resolve_record(FileInfo& file, const ast::TypeDef& def,
     info->resolving = false;
     info->resolved = true;
     program_.record_order.push_back(info);   // post-order: contained first
+    return info;
+}
+
+// §5.2a. The parser has already numbered the enumerators, C's way, so what is
+// left is the three things only a whole declaration can show.
+EnumInfo* Resolver::resolve_enum(FileInfo& file, const ast::EnumDef& def, const std::string& fq,
+                                 const std::string& cpp_name) {
+    auto memo = enum_by_def_.find(&def);
+    if (memo != enum_by_def_.end()) return memo->second;
+
+    auto owned = std::make_unique<EnumInfo>();
+    EnumInfo* info = owned.get();
+    info->fq = fq;
+    info->cpp_name = cpp_name;
+    info->def = &def;
+    info->file = &file;
+    program_.enums[fq] = std::move(owned);
+    program_.enum_order.push_back(info);
+    enum_by_def_[&def] = info;
+
+    if (def.enumerators.empty())
+        diag_.error("SE0319", *file.src, def.loc, "enum `" + def.name + "` has no enumerators",
+                    "empty",
+                    {note("a state or setting of this type could hold no value (§5.2a)")});
+    for (std::size_t i = 0; i < def.enumerators.size(); ++i) {
+        const ast::Enumerator& e = def.enumerators[i];
+        bool bad = false;
+        for (std::size_t j = 0; j < i && !bad; ++j) {
+            const ast::Enumerator& prior = def.enumerators[j];
+            if (prior.name == e.name) {
+                diag_.error("SE0317", *file.src, e.loc,
+                            "duplicate enumerator `" + e.name + "` in `" + def.name + "`",
+                            "declared twice",
+                            {note("first here", file.path + ":" + std::to_string(prior.loc.line))});
+                bad = true;
+            } else if (prior.value == e.value) {
+                diag_.error("SE0318", *file.src, e.loc,
+                            "`" + e.name + "` and `" + prior.name + "` share the value " +
+                                std::to_string(e.value),
+                            e.explicit_value ? "the same value" : "counted on to the same value",
+                            {note("a recorded column is decoded by value (§13.5), so two "
+                                  "names for one value would make it ambiguous"),
+                             note("`" + prior.name + "` is here",
+                                  file.path + ":" + std::to_string(prior.loc.line))});
+                bad = true;
+            }
+        }
+        if (!bad) info->values.push_back({e.name, e.value});
+    }
     return info;
 }
 
@@ -659,7 +754,14 @@ NodeInfo* Resolver::resolve_node(FileInfo& file, const ast::NodeDef& def,
         st.extent = s.extent.get();
         st.extent_loc = s.extent_loc;
         st.loc = s.loc;
-        resolve_type(file, s.type, st.type);
+        const bool typed = resolve_type(file, s.type, st.type);
+        // §5.2 — moved here from the parser once a named type could also be an
+        // enum (§5.2a), which a state may be; only resolution knows which.
+        if (typed && st.type.is_record) {
+            diag_.error("SE0232", *file.src, s.type.loc, "a state may not be a record type", "",
+                        {note("the solver ABI is a flat `double` vector (§5.2)")});
+            continue;
+        }
         // §6.4a — an array state is `double`, both kinds. That is what lets
         // the two share one flat-block lowering: a continuous array is a run of
         // slots in `x`, and a discrete one is a run in `dis_arr`, which exists

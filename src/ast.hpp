@@ -375,6 +375,22 @@ struct TypeDef {              // §5.2
     std::uint32_t start_line = 0;      // as `Group::start_line`
 };
 
+// §5.2a — `enum LinkState { IDLE, CONNECTING, FAULT = 15 }`. Values are
+// assigned here, C's way, so every later stage reads a finished list.
+struct Enumerator {
+    std::string name;
+    long value = 0;
+    bool explicit_value = false;
+    Loc loc;
+};
+
+struct EnumDef {
+    std::string name;
+    std::vector<Enumerator> enumerators;
+    Loc loc;
+    std::uint32_t start_line = 0;      // as `Group::start_line`
+};
+
 struct NodeDef {              // §6
     std::string name;
     Loc loc;
@@ -423,6 +439,7 @@ struct ModelFile {
     bool has_package = false;
     std::vector<UseDecl> uses;
     std::vector<TypeDef> types;
+    std::vector<EnumDef> enums;
     std::vector<NodeDef> nodes;
     // A package manifest (`package.se`, §2.6) carries only a file-level build block.
     std::vector<BuildStmt> build;

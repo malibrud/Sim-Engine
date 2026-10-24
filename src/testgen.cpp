@@ -82,7 +82,9 @@ std::string cpp_str(const std::string& s) {
     return o + "\"";
 }
 
-std::string cpp_scalar(const std::string& scalar, double v) {
+std::string cpp_scalar(const std::string& scalar, double v, const EnumInfo* enm = nullptr) {
+    // §5.2a — an enum cell is its enumerator's value, cast back to the enum.
+    if (enm) return "static_cast<" + enm->cpp_name + ">(" + std::to_string(std::lround(v)) + ")";
     if (scalar == "int") return "static_cast<int>(" + cpp_num(v) + ")";
     if (scalar == "bool") return v != 0.0 ? "true" : "false";
     if (scalar == "float") return "static_cast<float>(" + cpp_num(v) + ")";
@@ -281,6 +283,7 @@ bool TestGen::resolve_column(const ast::TestColumn& c, bool expected, Col& out) 
         }
         base.unit = c.ns == "der" ? st->der_unit : st->unit;
         base.scalar = st->scalar;
+        base.enm = st->enm;   // §5.2a — so a cell takes an enumerator
     }
     return walk(base, c, 1, out.type);
 }
@@ -450,7 +453,7 @@ bool TestGen::run(const std::string& fq, const Source& req_src, Loc req_loc) {
                     continue;
                 }
                 for (const Elaborator::CellLeaf& lf : leaves) {
-                    const std::string v = cpp_scalar(lf.scalar, lf.value);
+                    const std::string v = cpp_scalar(lf.scalar, lf.value, lf.enm);
                     if (c.ns == "param") {
                         std::size_t slot = m.settings.size();
                         for (std::size_t k = 0; k < m.settings.size(); ++k)

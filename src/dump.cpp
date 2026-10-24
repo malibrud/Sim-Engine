@@ -185,6 +185,12 @@ void dump(std::ostream& o, const ast::ModelFile& f) {
         }
     }
 
+    for (const ast::EnumDef& e : f.enums) {
+        o << indent(1) << "enum " << e.name << "  [line " << e.loc.line << "]\n";
+        for (const ast::Enumerator& en : e.enumerators)
+            o << indent(2) << en.name << " = " << en.value << "\n";
+    }
+
     for (const ast::NodeDef& n : f.nodes) {
         o << indent(1) << "node " << n.name << "  [line " << n.loc.line << "]  kind="
           << (n.is_composite() ? "composite" : (n.has_code() ? "leaf" : "stub"));

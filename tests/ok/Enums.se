@@ -1,0 +1,12 @@
+// §5.2a — enum declarations as the parser records them: C numbering, an
+// explicit value that restarts it, a negative value, a trailing comma, and an
+// annotation-free private enum beside the public one.
+package device;
+
+enum Enums {
+    IDLE, CONNECTING, CONNECTED,
+    FAULT = 15, RECOVERING,
+    LOW = -2, LOWER,
+}
+
+enum Retry { NEVER, ALWAYS = 9 }

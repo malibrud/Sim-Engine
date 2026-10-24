@@ -1,0 +1,8 @@
+﻿error[SE0201]: expected an integer value, found `1.5`
+ --> tests/err/enum_value.se:4:27
+  |
+4 | enum Gear { PARK, DRIVE = 1.5 }
+  |                           ^^^ expected an integer
+  = note: an enumerator's value is an integer literal, optionally negative (§5.2a)
+
+1 error emitted

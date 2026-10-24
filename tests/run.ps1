@@ -932,14 +932,15 @@ if (-not $cl) {
     # section itself, so adding tests to a block never means editing this.
     #
     # tests/nodetest holds the runner's own cases: `Every` reaches every
-    # column namespace, and `Fails` MUST fail -- a runner that printed "ok" for
-    # everything would pass every other case here. The script is invoked in
-    # process: its `exit` returns here with $LASTEXITCODE set.
+    # column namespace, `EnumCells` writes enumerators in cells (SPEC 7.2a),
+    # and `Fails` MUST fail -- a runner that printed "ok" for everything would
+    # pass every other case here. The script is invoked in process: its `exit`
+    # returns here with $LASTEXITCODE set.
     $nodetest = Join-Path $root 'tools/nodetest.ps1'
     & $nodetest -I @('stdlib', 'tests/nodetest/lib') -Out 'build/test' `
-        'stdlib' 'tests/nodetest/lib/nt/Every.se'
+        'stdlib' 'tests/nodetest/lib/nt/Every.se' 'tests/nodetest/lib/nt/EnumCells.se'
     if ($LASTEXITCODE -eq 0) {
-        Write-Host "ok   tools/nodetest.ps1 : every tested stdlib node, and nt.Every" `
+        Write-Host "ok   tools/nodetest.ps1 : every tested stdlib node, nt.Every and nt.EnumCells" `
             -ForegroundColor Green
         $script:pass++
     } else {
@@ -1585,6 +1586,53 @@ if (-not $cl) {
             $script:pass++
         } else {
             Write-Host ("FAIL build/emit/RecSet : max error " + $worst) -ForegroundColor Red
+            $script:fail++
+        }
+    }
+
+    # SPECIFICATION 5.2a / 13.5 -- enumerated types, recorded. See
+    # tests/emit/lib/enums/Rig.se. The IC override starts the device at
+    # CONNECTING (1); next() climbs to CONNECTED (2) and, three ticks in,
+    # drops to the Rig's `on_fault` (FAULT, 15) through a whole-enum flow-down
+    # copy. Every column that carries the link -- the state, the output, the
+    # watcher's int, its record field and the root output -- must read the
+    # same sequence, `up` must be 1 exactly while CONNECTED, and an enum column
+    # must be headed by its enum where a unit would go. Exact integers: an
+    # enum column is never a rounding question.
+    if ($emitDirs.ContainsKey('Enums')) {
+        $enDir = $emitDirs['Enums']
+        Push-Location $enDir
+        & '.\build\release\bin\Enums.exe' 2>&1 | Out-Null
+        $ran = ($LASTEXITCODE -eq 0)
+        Pop-Location
+        $csv = Join-Path $enDir 'enums.csv'
+        $why = 'did not run'
+        if ($ran -and (Test-Path $csv)) {
+            $why = ''
+            $lines = @(Get-Content $csv)
+            $wantHead = 'time (s),dev.state.link [enums.LinkState],dev.out.link [enums.LinkState],' +
+                        'w.code [-],w.up [-],w.st.link [enums.LinkState],link [enums.LinkState]'
+            if ($lines[0] -ne $wantHead) { $why = 'header is ' + $lines[0] }
+            $want = @(1, 2, 2, 2, 15, 15, 15)
+            if (-not $why -and $lines.Count -ne $want.Count + 1) {
+                $why = 'expected ' + $want.Count + ' rows, got ' + ($lines.Count - 1)
+            }
+            for ($k = 0; -not $why -and $k -lt $want.Count; $k++) {
+                $c = $lines[$k + 1] -split ','
+                $up = 0
+                if ($want[$k] -eq 2) { $up = 1 }
+                foreach ($j in @(1, 2, 3, 5, 6)) {
+                    if ([int]$c[$j] -ne $want[$k]) { $why = "row $k column $j reads " + $c[$j] }
+                }
+                if (-not $why -and [int]$c[4] -ne $up) { $why = "row $k up reads " + $c[4] }
+            }
+        }
+        if (-not $why) {
+            Write-Host ("ok   build/emit/Enums : an enum IC override, flow-down copy, port, " +
+                        "record field and root output all record as their values") -ForegroundColor Green
+            $script:pass++
+        } else {
+            Write-Host ("FAIL build/emit/Enums : " + $why) -ForegroundColor Red
             $script:fail++
         }
     }

@@ -56,17 +56,23 @@ private:
 
     const NodeInfo* resolve_node_ref(const FileInfo& from, const ast::Path& p,
                                      const Source& src, Loc loc);
-    const RecordInfo* resolve_record_ref(const FileInfo& from, const ast::Path& p,
-                                         const Source& src, Loc loc);
+    // §5.2a — a named type is a record or an enum, and only its declaration
+    // says which, so one lookup answers both. Exactly one of `rec`/`enm` is set
+    // on success.
+    bool resolve_named_type_ref(const FileInfo& from, const ast::Path& p, const Source& src,
+                                Loc loc, const RecordInfo*& rec, const EnumInfo*& enm);
     // A private declaration in `from`, or null.
     const ast::NodeDef* private_node(const FileInfo& from, const std::string& name);
     const ast::TypeDef* private_type(const FileInfo& from, const std::string& name);
+    const ast::EnumDef* private_enum(const FileInfo& from, const std::string& name);
 
     // ─── Building the resolved forms ─────────────────────────────────────────
     NodeInfo* resolve_node(FileInfo& file, const ast::NodeDef& def,
                            const std::string& fq, const std::string& cpp_name);
     RecordInfo* resolve_record(FileInfo& file, const ast::TypeDef& def,
                                const std::string& fq, const std::string& cpp_name);
+    EnumInfo* resolve_enum(FileInfo& file, const ast::EnumDef& def, const std::string& fq,
+                           const std::string& cpp_name);
     bool resolve_type(const FileInfo& file, const ast::TypeRef& ref, Type& out);
     // Validates `units { … }` and returns the names, in declaration order.
     std::vector<std::string> resolve_unit_params(const FileInfo& file,
@@ -94,6 +100,7 @@ private:
     // where it becomes real, at instantiation (stage 4).
     std::map<const ast::NodeDef*, NodeInfo*> node_by_def_;
     std::map<const ast::TypeDef*, RecordInfo*> record_by_def_;
+    std::map<const ast::EnumDef*, EnumInfo*> enum_by_def_;
 };
 
 }  // namespace se

@@ -150,9 +150,14 @@ ExprCode ec_param(std::string owner, std::string name) {
 // over two `int`s divides as integers, and `max(1, param.n)` asks `std::max`
 // for one `T` from a `double` and an `int`, which does not compile. Widening
 // at the reference makes the emitted expression mean what was evaluated.
-ExprCode ec_param_value(std::string owner, std::string name, const std::string& scalar) {
+//
+// §7.2a — an enum setting is the exception, and is read as itself: the only
+// thing §7 may do with one is copy it to a site of the same enum, which wants
+// the enum's own C++ type and not a number.
+ExprCode ec_param_value(std::string owner, std::string name, const std::string& scalar,
+                        const EnumInfo* enm = nullptr) {
     ExprCode c = ec_param(std::move(owner), std::move(name));
-    if (scalar == "double") return c;
+    if (scalar == "double" || enm) return c;
     ExprCode r = ec_lit("static_cast<double>(");
     r.insert(r.end(), c.begin(), c.end());
     r.push_back(ec_lit(")")[0]);
@@ -323,6 +328,7 @@ bool Elaborator::eval(const ast::Expr* e, const Source& src, const Env& env, Val
 
         case K::Unary: {
             if (!eval(e->lhs.get(), src, env, out)) return false;
+            if (!require_number(out, src, e->loc, "an operand of unary `-`")) return false;
             if (e->op == '-') {
                 out.v = -out.v;
                 ExprCode neg = ec_lit("-");
@@ -337,6 +343,10 @@ bool Elaborator::eval(const ast::Expr* e, const Source& src, const Env& env, Val
             Value a, b;
             if (!eval(e->lhs.get(), src, env, a)) return false;
             if (!eval(e->rhs.get(), src, env, b)) return false;
+            const std::string opnd = std::string("an operand of `") + e->op + "`";
+            if (!require_number(a, src, e->lhs->loc, opnd.c_str()) ||
+                !require_number(b, src, e->rhs->loc, opnd.c_str()))
+                return false;
 
             if (e->op == '^') {
                 if (!b.unit.dimensionless()) {
@@ -449,6 +459,8 @@ bool Elaborator::eval_call(const ast::Expr* e, const Source& src, const Env& env
     for (const ast::ExprPtr& arg : e->args) {
         Value v;
         if (!eval(arg.get(), src, env, v)) return false;
+        if (!require_number(v, src, arg->loc, ("an argument of `" + f + "`").c_str()))
+            return false;
         a.push_back(v);
     }
 
@@ -659,8 +671,68 @@ bool Elaborator::eval_call(const ast::Expr* e, const Source& src, const Env& env
     return false;
 }
 
+bool Elaborator::require_number(const Value& v, const Source& src, Loc loc, const char* where) {
+    if (!v.enm) return true;
+    diag_.error("SE0404", src, loc,
+                "an enumerator of `" + v.enm->fq + "` used as " + where, "not a number",
+                {note("an enum's values are names: \xc2\xa7""7 can copy one to a site of the "
+                      "same enum, and do nothing else with it (\xc2\xa7""7.2a)")});
+    return false;
+}
+
+// §7.2a — an enum site is the one place a bare name can be anything but a
+// §7.3 constant, so it is looked up among the enumerators before `eval`
+// ever sees it. That order is the rule, not an accident: an enumerator called
+// `e` is still the enumerator here, and `e` the constant everywhere else.
+bool Elaborator::eval_at(const ast::Expr* e, const Type& target, const Source& src,
+                         const Env& env, Value& out) {
+    if (!e || !target.enm) return eval(e, src, env, out);
+    const EnumInfo* enm = target.enm;
+    if (e->kind == ast::Expr::Kind::Name) {
+        const EnumInfo::Value* ev = enm->find(e->text);
+        if (!ev) {
+            diag_.error("SE0403", src, e->loc,
+                        "`" + e->text + "` is not an enumerator of `" + enm->fq + "`",
+                        "unknown enumerator",
+                        {note("`" + enm->fq + "` has " + enm->names())});
+            return false;
+        }
+        out = Value{static_cast<double>(ev->value), unit_one(), true};
+        out.code = ec_lit(enm->cpp_name + "::" + ev->name);
+        out.constant = true;
+        out.enm = enm;
+        return true;
+    }
+    // A `param.` copy is the only other spelling, and `coerce` checks that it
+    // names the same enum. Anything else is a number where a name belongs.
+    if (e->kind == ast::Expr::Kind::Param) return eval(e, src, env, out);
+    diag_.error("SE0404", src, e->loc,
+                "a number where an enumerator of `" + enm->fq + "` is expected",
+                "expected an enumerator",
+                {note("an enum site takes a bare enumerator, or a `param.` setting of the "
+                      "same enum (\xc2\xa7""7.2a)"),
+                 note("`" + enm->fq + "` has " + enm->names())});
+    return false;
+}
+
 bool Elaborator::coerce(const Value& v, const Type& target, const Source& src, Loc loc,
                         const char* what, double& out, ExprCode* out_code) {
+    // §7.2a — an enum has no unit to convert and no rounding to apply: the
+    // value is right exactly when it is an enumerator of the same enum.
+    if (target.enm || v.enm) {
+        if (v.enm != target.enm) {
+            const std::string got = v.enm ? "an enumerator of `" + v.enm->fq + "`" : "a number";
+            const std::string want = target.enm ? "an enumerator of `" + target.enm->fq + "`"
+                                                : "a number";
+            diag_.error("SE0404", src, loc, got + " for " + what, "expected " + want,
+                        {note("an enum converts to nothing, not even another enum or an "
+                              "`int` (\xc2\xa7""5.2a)")});
+            return false;
+        }
+        out = v.v;
+        if (out_code) *out_code = v.code;
+        return true;
+    }
     // §6.2c — a record target never reaches here: `destructure` splits it into
     // leaves first, and each leaf is a scalar. This stays as a backstop, so a
     // new caller that forgets to destructure fails loudly rather than emitting
@@ -729,6 +801,7 @@ bool Elaborator::extent_of(const ast::Expr* e, Loc loc, const Source& src, const
                            const std::string& what, Extent& out) {
     Value v;
     if (!eval(e, src, env, v)) return false;
+    if (!require_number(v, src, e->loc, "an extent")) return false;
 
     double n = v.v;
     if (!v.bare) {
@@ -971,15 +1044,16 @@ void Elaborator::apply_overrides(const NodeInfo* def, const std::string& path,
             OverrideEntry* o = find_override(sub(path, lf.key));
             if (!o) continue;
             Value v;
-            if (!eval(o->value, *o->src, Env{}, v)) continue;
+            if (!eval_at(o->value, lf.type, *o->src, Env{}, v)) continue;
             double d = 0.0;
             if (coerce(v, lf.type, *o->src, o->loc,
                        ("setting `" + o->path + "`").c_str(), d)) {
                 // §13.3 — an override detaches from the flow-down, so it emits
                 // as a literal and the binding that would otherwise drive this
                 // setting is simply not run. Evaluated in an empty environment,
-                // so there is nothing it could depend on anyway.
-                pinned[lf.key] = Pin{d, ec_num(d), true};
+                // so there is nothing it could depend on anyway. An enumerator's
+                // literal is its own spelling (§7.2a), not its number.
+                pinned[lf.key] = Pin{d, lf.type.enm ? v.code : ec_num(d), true};
             }
         }
     }
@@ -1148,8 +1222,9 @@ bool Elaborator::settings_of(const NodeInfo* def,
         // setting come out dimensionless, which surfaced as a bogus `SE0410`
         // pointing INTO the library rather than at the binding.
         Value v{it->second.value, lf.type.unit, false};
-        v.code = ec_param_value(settings_path_, lf.key, lf.type.scalar);
+        v.code = ec_param_value(settings_path_, lf.key, lf.type.scalar, lf.type.enm);
         v.constant = false;
+        v.enm = lf.type.enm;
         env[lf.key] = std::move(v);
     }
 
@@ -1214,7 +1289,7 @@ bool Elaborator::settings_of(const NodeInfo* def,
                 for (const ast::ExprPtr& arg : e->args) work.push_back(arg.get());
             }
             Value v;
-            if (ok && eval(s.expr, def_src, env, v)) {
+            if (ok && eval_at(s.expr, s.type, def_src, env, v)) {
                 // §6.2a — a setting may be declared in a unit parameter
                 // (`limit (U)`), so this must coerce against the instance's
                 // substituted unit rather than the definition's `(U)`. §6.2c
@@ -1225,8 +1300,10 @@ bool Elaborator::settings_of(const NodeInfo* def,
                            ("setting `" + s.key + "`").c_str(), d, &code)) {
                     resolved[s.key] = Pin{d, std::move(code), v.constant};
                     Value bound_v{d, s.type.unit, false};
-                    bound_v.code = ec_param_value(settings_path_, s.key, s.type.scalar);
+                    bound_v.code =
+                        ec_param_value(settings_path_, s.key, s.type.scalar, s.type.enm);
                     bound_v.constant = false;
+                    bound_v.enm = s.type.enm;
                     env[s.key] = std::move(bound_v);
                 } else {
                     ok = false;
@@ -1271,6 +1348,7 @@ bool Elaborator::settings_of(const NodeInfo* def,
         // means the field's own unit and not the record's arguments.
         sv.unit = lf.type.unit;
         sv.scalar = lf.type.scalar;
+        sv.enm = lf.type.enm;
         auto it = env.find(lf.key);
         sv.value = it == env.end() ? 0.0 : it->second.v;
 
@@ -1291,6 +1369,7 @@ bool Elaborator::settings_of(const NodeInfo* def,
             slot.decl_type = lf.type;
         slot.unit = sv.unit;
         slot.scalar = sv.scalar;
+        slot.enm = sv.enm;
         slot.value = sv.value;
         slot.rate = (lf.key == "rate");
         auto r = resolved.find(lf.key);
@@ -1421,8 +1500,9 @@ void Elaborator::instantiate(const NodeInfo* def, const std::string& path,
     Env env;
     for (const SettingValue& s : settings) {
         Value v{s.value, s.unit, false};
-        v.code = ec_param_value(path, s.name, s.scalar);
+        v.code = ec_param_value(path, s.name, s.scalar, s.enm);
         v.constant = false;
+        v.enm = s.enm;
         env[s.name] = std::move(v);
     }
 
@@ -1548,7 +1628,7 @@ void Elaborator::instantiate(const NodeInfo* def, const std::string& path,
                     // simply is not pinned, and the child's own default runs.
                     if (!lf.expr) continue;
                     Value v;
-                    if (!eval(lf.expr, def_src, env, v)) {
+                    if (!eval_at(lf.expr, lf.type, def_src, env, v)) {
                         failed_ = true;
                         continue;
                     }
@@ -1613,11 +1693,12 @@ void Elaborator::instantiate(const NodeInfo* def, const std::string& path,
         slot.unit = bound(st.type.unit);
         slot.der_unit = bound(st.der_unit);
         slot.scalar = st.type.scalar;
+        slot.enm = st.type.enm;
         if (st.extent) extent_of(st.extent, st.extent_loc, def_src, env, sub(path, st.name),
                                  slot.extent);
         if (st.initial) {
             Value v;
-            if (eval(st.initial, def_src, env, v))
+            if (eval_at(st.initial, st.type, def_src, env, v))
                 coerce(v, st.type, def_src, st.initial->loc,
                        ("state `" + st.name + "`").c_str(), slot.initial);
         }
@@ -1639,7 +1720,7 @@ void Elaborator::instantiate(const NodeInfo* def, const std::string& path,
                 failed_ = true;
             } else {
                 Value v;
-                if (eval(o->value, *o->src, Env{}, v))
+                if (eval_at(o->value, st.type, *o->src, Env{}, v))
                     coerce(v, st.type, *o->src, o->loc,
                            ("initial condition `" + o->path + "`").c_str(), slot.initial);
             }
@@ -1794,6 +1875,17 @@ bool Elaborator::port_conversion(const Field& from, const Field& to, const Sourc
             };
         walk(from.type, to.type, "");
         return ok;
+    }
+    // §5.2a — an enum goes only into the same enum. There is no unit to
+    // convert, and no int on either side of it.
+    if (from.type.enm != to.type.enm) {
+        auto name = [](const Type& t) {
+            return t.enm ? "`" + t.enm->fq + "`" : "`" + t.scalar + "(" + t.unit.str() + ")`";
+        };
+        diag_.error("SE0410", src, loc, "an enum can be wired only to the same enum",
+                    name(from.type) + " -> " + name(to.type),
+                    {note("an enum converts to nothing, not even an `int` (\xc2\xa7""5.2a)")});
+        return false;
     }
     if (!compatible(from.type.unit, to.type.unit)) {
         diag_.error("SE0410", src, loc, "incompatible units across a wire",
@@ -2017,8 +2109,11 @@ void Elaborator::collect_wires(const NodeInfo* def, const std::string& path, Mod
             // Not adopted when the destination is a record: a scalar literal
             // driving a record port is a real mistake, and leaving the type
             // alone lets `port_conversion` report it (`SE0410`).
+            //
+            // Nor when it is an enum (§5.2a): a literal endpoint is a number,
+            // never an enumerator, and the same check reports it.
             Field eff = sf;
-            if (w.source.is_literal && !w.source.unit && !df.type.is_record)
+            if (w.source.is_literal && !w.source.unit && !df.type.is_record && !df.type.enm)
                 eff.type = df.type;
 
             Hop hop;
@@ -2423,6 +2518,7 @@ void Elaborator::resolve_record(const ast::RecordBlock& block, const Source& src
             RecordedSignal s;
             s.path = path;
             s.unit = scalar.unit;
+            s.enm = scalar.enm;
             if (in.kind == InputSource::Kind::Param) {
                 // §6.9.2 — the chain ended on a setting, which is a live member
                 // (§6.2b): the column shows the value configuration settled on,
@@ -2589,6 +2685,7 @@ void Elaborator::resolve_record(const ast::RecordBlock& block, const Source& src
             }
             // §6.2a — the slot's unit is substituted; the node's is still `(U)`.
             s.unit = ss ? ss->unit : st->type.unit;
+            s.enm = st->type.enm;
         } else {
             if (has_index) {
                 // §6.4a — only a state is array-shaped in the recordable
@@ -2646,6 +2743,7 @@ void Elaborator::resolve_record(const ast::RecordBlock& block, const Source& src
                 continue;
             }
             s.unit = t.unit;
+            s.enm = t.enm;
         }
         m.record.signals.push_back(std::move(s));
     }
@@ -2691,7 +2789,7 @@ bool Elaborator::eval_cell(const ast::Expr* e, const Type& target, const std::st
             continue;
         }
         Value v;
-        if (!eval(lf.expr, src, Env{}, v)) {
+        if (!eval_at(lf.expr, lf.type, src, Env{}, v)) {
             ok = false;
             continue;
         }
@@ -2702,7 +2800,7 @@ bool Elaborator::eval_cell(const ast::Expr* e, const Type& target, const std::st
             ok = false;
             continue;
         }
-        out.push_back(CellLeaf{lf.key, lf.type.unit, lf.type.scalar, d});
+        out.push_back(CellLeaf{lf.key, lf.type.unit, lf.type.scalar, d, lf.type.enm});
     }
     return ok;
 }
@@ -2765,7 +2863,7 @@ bool Elaborator::run(const ast::SimFile& sim, const Source& sim_src,
         for (const Leafling& lf : bl) {
             if (!lf.expr) continue;
             Value v;
-            if (!eval(lf.expr, sim_src, Env{}, v)) continue;
+            if (!eval_at(lf.expr, lf.type, sim_src, Env{}, v)) continue;
             double d = 0.0;
             ExprCode code;
             if (coerce(v, lf.type, sim_src, lf.loc, ("setting `" + lf.key + "`").c_str(),

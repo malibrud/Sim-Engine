@@ -33,6 +33,7 @@ namespace se {
 // ═════════════════════════════════════════════════════════════════════════════
 
 struct RecordInfo;
+struct EnumInfo;
 struct NodeInfo;
 
 // A `.se` file that has been located, read, parsed and had its imports bound.
@@ -54,9 +55,16 @@ struct FileInfo {
 };
 
 // A resolved scalar-or-record type at a port, field, var or state.
+//
+// §5.2a — an enum is a scalar here, not a third shape: it occupies one member,
+// travels a wire by value and has no fields, so every path that treats a
+// scalar as one value is already right for it. `scalar` is its C++ name and
+// `unit` is dimensionless; `enm` is what tells it apart, and is checked only
+// where an enum genuinely differs — a §7 site, a wire, a printed literal.
 struct Type {
     bool is_record = false;
     const RecordInfo* record = nullptr;   // record
+    const EnumInfo* enm = nullptr;        // §5.2a — an enum, else null
     Unit unit;                            // scalar — evaluated
     std::string scalar = "double";        // scalar — the C++ spelling
     // §5.2 — a parametric record binds its units at the REFERENCE, so the
@@ -92,6 +100,37 @@ struct RecordInfo {
     std::vector<Field> fields;
     bool resolved = false;             // guards the §5.2 cycle check
     bool resolving = false;
+};
+
+// §5.2a. Nothing in an enum refers to anything else, so unlike a record it
+// needs no cycle guard and no emission order of its own.
+struct EnumInfo {
+    std::string fq;                    // "device.LinkState"
+    std::string cpp_name;              // "device::LinkState"
+    const ast::EnumDef* def = nullptr;
+    const FileInfo* file = nullptr;
+    struct Value {
+        std::string name;
+        long value = 0;
+    };
+    std::vector<Value> values;         // declaration order
+
+    const Value* find(const std::string& name) const {
+        for (const Value& v : values)
+            if (v.name == name) return &v;
+        return nullptr;
+    }
+    const Value* find(long value) const {
+        for (const Value& v : values)
+            if (v.value == value) return &v;
+        return nullptr;
+    }
+    // "IDLE, CONNECTING, CONNECTED, FAULT" — for a diagnostic's note.
+    std::string names() const {
+        std::string s;
+        for (std::size_t i = 0; i < values.size(); ++i) s += (i ? ", " : "") + values[i].name;
+        return s;
+    }
 };
 
 // §5.2/§6.2a — a parametric type binds its units at the site that references
@@ -169,6 +208,8 @@ struct NodeInfo {
 struct Program {
     std::vector<std::unique_ptr<FileInfo>> files;
     std::map<std::string, std::unique_ptr<RecordInfo>> records;   // by fq
+    std::map<std::string, std::unique_ptr<EnumInfo>> enums;       // by fq, §5.2a
+    std::vector<const EnumInfo*> enum_order;                      // first reference first
     std::map<std::string, std::unique_ptr<NodeInfo>> nodes;       // by fq
     // Records in a valid emission order: a record precedes every record that
     // contains it.
@@ -191,6 +232,7 @@ struct SettingValue {
     Unit unit;
     std::string scalar;
     double value = 0.0;
+    const EnumInfo* enm = nullptr;     // §5.2a — `value` is an enumerator's
 };
 
 // One piece of an emitted §7 expression (§15.5). A setting reference cannot be
@@ -237,7 +279,8 @@ struct SettingSlot {
     Type decl_type;          // unit-substituted, as declared
     std::string pin;         // the pinned-flag member guarding it
     Unit unit;
-    std::string scalar;      // "double" / "int"
+    std::string scalar;      // "double" / "int" / an enum's C++ name
+    const EnumInfo* enm = nullptr;   // §5.2a — an enum setting
     double value = 0.0;      // what elaboration computed — the dump's starting point
     ExprCode expr;           // emitted right-hand side, references unresolved
     bool constant = true;    // `expr` is a literal; nothing upstream can move it
@@ -262,6 +305,7 @@ struct StateSlot {
     Unit unit;
     Unit der_unit;
     std::string scalar;
+    const EnumInfo* enm = nullptr;     // §5.2a — an enum state
     double initial = 0.0;
     std::size_t slot = 0;              // index into Sim::x — continuous only
     // §6.4a — when the model has any array-shaped state, EVERY state's
@@ -402,6 +446,9 @@ struct RecordedSignal {
     // unused.
     ExprCode code;
     Unit unit;
+    // §13.5 — an enum column is its integer value, headed by the enum's name
+    // where a unit would go; the manifest's `[types]` row decodes it.
+    const EnumInfo* enm = nullptr;
 };
 
 struct LogConfig {

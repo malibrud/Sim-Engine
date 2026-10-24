@@ -48,6 +48,11 @@ struct Value {
     // code for a model that overrides nothing looks exactly as it did before
     // settings became runtime values.
     bool constant = true;
+
+    // §7.2a — the enum this value is an enumerator of, or null for a number.
+    // `v` then holds the enumerator's integer and `code` an expression of the
+    // enum's C++ type, which no arithmetic may touch (SE0404).
+    const EnumInfo* enm = nullptr;
 };
 
 // A setting whose value arrives from outside the node — a flow-down binding
@@ -99,6 +104,7 @@ public:
         Unit unit;
         std::string scalar;
         double value = 0.0;
+        const EnumInfo* enm = nullptr;   // §5.2a — `value` is this enum's
     };
     // Evaluates one cell against its column's type: a brace list destructures
     // against a record exactly as §6.2c destructures a binding, and every leaf
@@ -121,6 +127,12 @@ private:
     using Env = std::map<std::string, Value>;
     bool eval(const ast::Expr* e, const Source& src, const Env& env, Value& out);
     bool eval_call(const ast::Expr* e, const Source& src, const Env& env, Value& out);
+    // `eval` at a site of type `target`. The same thing for every target but an
+    // enum, where a bare name is looked up among the enumerators first (§7.2a).
+    bool eval_at(const ast::Expr* e, const Type& target, const Source& src, const Env& env,
+                 Value& out);
+    // SE0404 if `v` is an enumerator: it reached a place only a number may go.
+    bool require_number(const Value& v, const Source& src, Loc loc, const char* where);
     // Converts `v` to `target`, reporting SE0410 against `loc` if it cannot.
     // When `out_code` is given it receives the same conversion applied to the
     // expression rather than to the number (§15.5).

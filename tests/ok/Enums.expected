@@ -1,0 +1,14 @@
+﻿=== tests/ok/Enums.se ===
+model-file
+  package device
+  enum Enums  [line 6]
+    IDLE = 0
+    CONNECTING = 1
+    CONNECTED = 2
+    FAULT = 15
+    RECOVERING = 16
+    LOW = -2
+    LOWER = -1
+  enum Retry  [line 12]
+    NEVER = 0
+    ALWAYS = 9

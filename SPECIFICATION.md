@@ -3696,11 +3696,11 @@ record: {
 - A signal slower than the recording rate is **held (ZOH)** — which is its actual
   physical value, since that is precisely what downstream nodes see.
 - The header carries units: `plant.out.velocity [m/s]`.
-- **An enum is recorded as its value**, and the header names its type where a
-  unit would go: `dev.state.link [LinkState]`, then `0`, `1`, `15` in the rows.
-  The table stays numeric — every tool that reads the rest of it reads this
-  column too — and the manifest's `[types]` section (§15.6) maps each value back
-  to its name. A protocol code therefore appears in the file exactly as the
+- **An enum is recorded as its value**, and the header names its type, fully
+  qualified, where a unit would go: `dev.state.link [device.LinkState]`, then
+  `0`, `1`, `15` in the rows. The table stays numeric — every tool that reads
+  the rest of it reads this column too — and the manifest's `[types]` row of
+  the same name (§15.6) maps each value back to its name. A protocol code therefore appears in the file exactly as the
   device reports it. A `bool` records as 0 or 1.
 - **An element of an array state is recorded by index** — `bw.state.w1[3]` — and
   the column is named that way. As with an override (§13.4), an index past the

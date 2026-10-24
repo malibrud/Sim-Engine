@@ -1,0 +1,6 @@
+// §5.2a / §7.2a — enum misuse. See lib/enumbad/EnumBad.se.
+sim EnumBad {
+    root: enumbad.EnumBad {};
+    step:     1 (ms);
+    duration: 1 (ms);
+}
