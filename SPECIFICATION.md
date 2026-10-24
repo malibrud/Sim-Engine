@@ -41,7 +41,7 @@ meaning:
 
 | Kind | Extension | Contents |
 |---|---|---|
-| Model file | `.se` | Exactly one public `node` or `type` declaration, plus optional file-private helpers. |
+| Model file | `.se` | Exactly one public `node`, `type` or `enum` declaration, plus optional file-private helpers. |
 | Sim file | `.sim` | One `sim` declaration: the run/experiment configuration. |
 | Settings source | `.settings` | A flat list of path-addressed setting and initial-condition overrides. |
 
@@ -93,7 +93,8 @@ column in §16.4 gives the detecting stage.
 
 ### 1.4 Terminology
 
-- **Definition** — a `node` or `type` declaration. Lowers to a C++ class/struct.
+- **Definition** — a `node`, `type` or `enum` declaration. Lowers to a C++
+  class, struct or scoped enumeration.
 - **Instance** — a `node name : Definition { … };` statement inside a
   `structure` block. Lowers to an object (leaf) or to nothing (composite).
 - **Leaf** — a node with code. **Composite** — a node with children and wires.
@@ -204,7 +205,7 @@ members and are named by filesystem path only.
 ### 2.3 One public declaration per file
 
 A `.se` file contains exactly one **public** declaration, whose name must equal
-the file's base name. Any further `node` or `type` declarations in the same file
+the file's base name. Any further `node`, `type` or `enum` declarations in the same file
 are **file-private**: visible to the rest of that file, invisible to every other
 file, and not addressable by any package path.
 
@@ -252,7 +253,7 @@ imports it back. Resolution is whole-program (stage 3), not single-pass.
 ### 2.6 Package manifest files
 
 A file named `package.se` in a package directory is a **package manifest**. It
-declares no node or type; it may contain only a `package` declaration, `use`
+declares no node, type or enum; it may contain only a `package` declaration, `use`
 declarations, and a `build` block (§12). Its purpose is to let a package act as
 a **dependency bundle** — a named collection of build primitives that any model
 can pull in by depending on the package.
@@ -732,6 +733,51 @@ type WheelState {
   expression language is scalar. That ground still holds and §7 is unchanged —
   §6.2c does not make §7 record-valued, it splits a record setting into the
   scalar leaves it carries before §7 ever sees it.*
+
+### 5.2a Enumerated types
+
+An `enum` declaration defines a type whose values are a fixed list of names:
+
+```
+// LinkState.se
+package device;
+
+enum LinkState {
+    IDLE, CONNECTING, CONNECTED,
+    FAULT = 15                    // the remote device's own code
+}
+```
+
+It exists for the states a model keeps **about** something that is itself a
+state machine — a remote device, a protocol, a controller's AUTO/MANUAL — where
+an `int` with a comment beside each value is the incumbent, and where the
+values are what §6.4's `finite` states range over.
+
+- **It is its own declaration**, a sibling of `node` and `type`, and obeys §2.3
+  the same way: one public `enum` per file, named for the file, with file-private
+  ones beside it.
+- **Values follow C.** An enumerator without `= n` takes one more than the one
+  before it, and the first takes 0. `n` is an integer literal, optionally
+  negative. Two enumerators may not share a name (`SE0317`) or a value
+  (`SE0318`): a recorded column (§13.5) is decoded by value, and two names for
+  one value would make the decoding ambiguous. An enum with no enumerators is
+  `SE0319`.
+- **An enum takes no unit argument**, for `bool`'s reason (§5.1): a name has no
+  dimension. `link: LinkState;` is the declaration, and `LinkState(-)` is the
+  arity error from the other side.
+- **It goes wherever a scalar goes** — a setting, a port, a var, a record field, a
+  `discrete` or a `finite` state (§6.4) — except a `continuous` state, which
+  stays `double` (`SE0431`), and an array, whose element stays `double`
+  (`SE0433`).
+- **A wire carries an enum only into the same enum.** There is no unit, so there
+  is nothing to convert, and there is no conversion to or from `int`: a
+  `LinkState` into an `int` input is the same port-type mismatch as a record into
+  a scalar.
+- **In C++ it is a scoped enumeration**, `enum class LinkState : int`, in the
+  package's namespace, and a body names its values the C++ way:
+  `state.link == LinkState::CONNECTED`. Where the DSL names one itself — a
+  default, a binding, an override, a test cell — the name is bare and its type
+  comes from the site (§7.2a).
 
 ### 5.3 What a wire carries
 
@@ -1217,33 +1263,44 @@ an output's from `output()`.
 
 ### 6.4 `states`
 
-**One `states` section holds both kinds, and the kind keyword is mandatory.**
+**One `states` section holds all three kinds, and the kind keyword is mandatory.**
 
 ```
 states {
     continuous omega: double(rad/s) = 0.0;
-    discrete   cut: double(N*m) = 0.0;
-    discrete   ticks: int(-)    = 0;
+    discrete   cut:   double(N*m)   = 0.0;
+    discrete   ticks: int(-)        = 0;
+    finite     link:  LinkState     = IDLE;
 }
 ```
 
-Omitting `continuous`/`discrete` is an error (`SE0230`), not a default. There is
-deliberately **no preferred state kind**: a default would privilege one, and the
-two differ genuinely in write mechanism, in schedule, and in their relationship
-to the solver.
+Omitting `continuous`/`discrete`/`finite` is an error (`SE0230`), not a default.
+There is deliberately **no preferred state kind**: a default would privilege one,
+and the three differ genuinely in write mechanism, in schedule, and in their
+relationship to the solver.
 
-| | write accessors | written in | in the solver state vector |
-|---|---|---|---|
-| `continuous` | `der.<name>`, `adjust.<name>` | `derivative()`, `adjust()` | **yes** |
-| `discrete` | `next.<name>` | `next()` | no |
+| | write accessors | written in | in the solver state vector | holds its node (§9.3) |
+|---|---|---|---|---|
+| `continuous` | `der.<name>`, `adjust.<name>` | `derivative()`, `adjust()` | **yes** | no |
+| `discrete` | `next.<name>` | `next()` | no | **yes** |
+| `finite` | `transition.<name>` | `transition()` | no | no |
+
+The kinds answer **how a state changes**, not what values it takes. A
+`continuous` state flows and is integrated; a `discrete` one is a sampled-data
+state, x⁺ = h(t,x,u) at the node's sample instants; a `finite` one is the state
+of a state machine, which **jumps** between steps and holds still within one
+(§6.4c). A `discrete int` and a `finite int` can hold the same numbers; what
+differs is when they move and what that does to the schedule.
 
 - The **write accessor is symmetric and separately enforced.** The generated
   `Der` struct carries only continuous fields and the `Store` struct only
   discrete ones, so `der.ticks` and `next.omega` are "no such member" compile
   errors with no body parsing whatsoever (I2). `Adj` (§6.4b) is the same field
-  set as `Der`, and buys the same thing for `adjust.ticks`. (`Store`, not
-  `Next`: the same type is both the committed block `dis` and the buffer `nxt`,
-  so naming it for the buffer would be wrong half the time it is used — §15.5.)
+  set as `Der`, and buys the same thing for `adjust.ticks`; `Fin` (§6.4c)
+  carries only finite fields, so `transition.omega` and `next.link` fail the
+  same way. (`Store`, not `Next`: the same type is both the committed block
+  `dis` and the buffer `nxt`, so naming it for the buffer would be wrong half
+  the time it is used — §15.5.)
 - **`next.` means simultaneous update.** A direct `state.x = …` mutation would be
   *sequential*, making results depend on statement order inside `next()`. With
   `next.`, every discrete state reads the old value and writes the new one, which
@@ -1256,11 +1313,17 @@ to the solver.
   is a no-op for it.
 - Only `double` may be `continuous` (`SE0431`); the state vector is a flat
   `double` array.
+- Only a type with finitely many values may be `finite` — `bool`, `int` or an
+  enum (§5.2a) — and `double`/`float` is `SE0434`. It is the counterpart of
+  `SE0431`, from the other side: a state machine's state is a name, and a real
+  number that only ever jumps is either a counter (`int`) or a `discrete`
+  state.
 - **The declared default is the initial condition.** There is no separate
   `initial` section — ICs ride the one override channel (§13.4). `init()` is the
   escape hatch for a computed or equilibrium IC.
-- Discrete states earn their place over `vars` precisely via that IC channel: a
-  declarative default plus a sim-file override, which `vars` never had.
+- Discrete and finite states earn their place over `vars` precisely via that IC
+  channel: a declarative default plus a sim-file override, which `vars` never
+  had.
 
 #### 6.4a Array-shaped states
 
@@ -1521,6 +1584,112 @@ construct these cases do not contain.
 again. `adjust()` keeps the *state* on the manifold across a long run; it never
 makes a consumer's precondition (§10.6) hold. A node publishing a quaternion
 that others rely on being unit still normalises what it publishes.
+
+#### 6.4c Finite states and `transition()`
+
+A `finite` state is the state of a **state machine**: a gear, a clutch that is
+locked or slipping, a controller in MANUAL or AUTO, a local mirror of a remote
+device's fifteen states. It jumps between steps and holds still within one, and
+it reads, like any state, as `state.<name>` in every method.
+
+It is a kind of its own because neither existing kind fits. A `discrete` state
+makes its node zero-order held (§9.3), so a leaf that keeps a gear beside a
+torque computed from a continuous speed would publish that torque as a
+staircase, and RK4 would collapse to first order across it. A `continuous`
+state with a derivative of zero, moved by `adjust()`, gives the right answer —
+but it is a `double` in the solver's vector standing in for a name, and every
+`derivative()` has to remember to write its zero.
+
+```
+states {
+    finite link: LinkState = IDLE;
+    finite retries: int(-) = 0;
+}
+
+transition(ack, err) {
+    if (in.err)                                      transition.link = LinkState::FAULT;
+    else if (state.link == LinkState::CONNECTING && in.ack)
+                                                     transition.link = LinkState::CONNECTED;
+    if (in.err) transition.retries = state.retries + 1;
+}
+```
+
+- **`transition()` writes finite states and nothing else.** `Fin` carries only
+  finite fields, so `transition.omega` is "no such member" by the mechanism that
+  stops `der.ticks`, and a finite state is reachable through no other write
+  accessor. Each write method now owns exactly one kind: `der.` and `adjust.`
+  the continuous states, `next.` the discrete ones, `transition.` the finite
+  ones.
+- **A node with a finite state needs `transition()`** (`SE0347`), and
+  `transition()` in a node without one is `SE0348` — §6.12's rule, for the
+  third kind.
+- **It runs once per accepted step, at the node's sample instants**, below the
+  recording and the exit and above `adjust()` (§9.6 step 7). Like every method
+  but `output()` its parameter list constrains no ordering (§8.3).
+
+**`transition.` is buffered.** Every `state.` read in the body sees the value
+the tick began with, and the writes land together when the body is done — the
+simultaneity `next.` has, for the same reason. A state machine's transition
+function maps the current state to the next one, and coupled machines in one
+node are ordinary:
+
+```
+states { finite range: Range = DRIVE;   finite gear: int(-) = 1; }
+
+transition(sel, w_out) {
+    transition.range = in.sel;
+    if (state.range == Range::DRIVE) transition.gear = schedule(in.w_out);   // the OLD range
+    else                             transition.gear = 0;
+}
+```
+
+Moving the selector to NEUTRAL drops the gear on the **following** tick,
+whichever order those two statements are in. Wanting it on this tick is a
+different transition function, and it says so: `in.sel == Range::NEUTRAL`
+rather than `state.range == Range::NEUTRAL`. A finite state the body does not
+write keeps its value.
+
+`adjust.` declines the same protection (§6.4b) and keeps it declined: its jobs
+are corrections that compute what they need before they write. Mode logic is
+where coupled updates are the norm, which is the whole difference.
+
+**The new value is in force from t_k⁺.** The commit happens before `adjust()`
+and before the advance, so `adjust()`, every stage of the solver and the next
+tick's `output()` all see it; `next()` and `on_step()`, which run above it, see
+the old one. That is exactly how an `adjust()` jump behaves, and it is why a
+finite state does **not** hold its node. A `discrete` node is held because its
+stages would otherwise read *dis*[k+1] while publishing the step that began at
+*dis*[k] (§9.3); a finite state has no such pair to confuse. It holds one value
+across the whole step, the one the step was decided under, and a node that
+reads it is re-evaluated at the stages like any other.
+
+**`adjust()` sees the new value, and `prev.` sees the old one.** A jump in a
+continuous state usually belongs to a transition, so the one runs straight
+after the other in the same tick. A reset that holds *throughout* a mode reads
+`state.`:
+
+```
+transition(w_eng) { if (!state.locked && slip_small(in.w_eng)) transition.locked = true; }
+adjust(w_eng)     { if (state.locked) adjust.w_clutch = in.w_eng; }      // the new value
+```
+
+A reset that happens only on **entry** compares the two. `prev.<name>` is the
+finite state as it was before this tick's transition — read-only, and in scope
+in `adjust()` alone, which is the one method that runs between the two values.
+Bumpless transfer is the standard case: the integrator is preset once, when the
+controller switches to AUTO, and left to integrate afterwards.
+
+```
+adjust(u_manual, err) {
+    if (state.ctl == Ctl::AUTO && prev.ctl != Ctl::AUTO)
+        adjust.integ = (in.u_manual - param.kp * in.err) / param.ki;
+}
+```
+
+Entry, exit and any particular edge are comparisons of the same two values, so
+no entry-hook syntax is needed. `prev.` costs nothing at run time: the commit is
+a swap of the block and its buffer (§15.5), and after it the buffer *is* the old
+block.
 
 ### 6.5 `vars`
 
@@ -1926,6 +2095,8 @@ Inside a verbatim body, node data is reached through **namespaced accessors**:
 | `der.<name>` | — | `derivative()` |
 | `next.<name>` | — | `next()` |
 | `adjust.<name>` | — | `adjust()` |
+| `transition.<name>` | — | `transition()` |
+| `prev.<name>` | `adjust()` | never |
 | `var.<name>` | every method | `init()`, `on_step()` |
 | bare name (`native`) | `init`, `on_step`, `final` | same |
 
@@ -1956,8 +2127,8 @@ namespace from outputs, and only from outputs** — a state and an output may sh
 a name; everything else collides (`SE0330`).
 
 A member may not be named `param`, `in`, `out`, `state`, `der`, `next`,
-`adjust`, `var`, `log`, or `sim`, since the generated code puts objects by those
-names in scope of bodies (`SE0331`).
+`adjust`, `transition`, `prev`, `var`, `log`, or `sim`, since the generated
+code puts objects by those names in scope of bodies (`SE0331`).
 
 ### 6.12 Consistency rules
 
@@ -1969,10 +2140,12 @@ functions:
 | `outputs` | `output()` | `SE0340` |
 | any `continuous` state | `derivative()` | `SE0341` |
 | any `discrete` state | `next()` | `SE0342` |
+| any `finite` state | `transition()` | `SE0347` |
 
-The converse is checked for all three, since none could do anything: `output()`
+The converse is checked for all four, since none could do anything: `output()`
 in a node with no outputs (`SE0344`), `derivative()` in a node with no continuous
-states (`SE0343`), and `next()` in a node with no discrete states (`SE0345`).
+states (`SE0343`), `next()` in a node with no discrete states (`SE0345`), and
+`transition()` in a node with no finite states (`SE0348`).
 
 **`adjust()` (§6.4b) is checked in that direction only.** `adjust()` in a node
 with no `continuous` states is `SE0346`, since `Adj` would be empty and the body
@@ -2044,13 +2217,13 @@ what is checked:
 | Side | Columns | Meaning |
 |---|---|---|
 | given | `param.<name>`, `in.<name>`, `state.<name>`, `step` | supplied before the invocation |
-| expected | `out.<name>`, `der.<name>`, `next.<name>`, `adjust.<name>`, `var.<name>` | read after it and compared |
+| expected | `out.<name>`, `der.<name>`, `next.<name>`, `transition.<name>`, `adjust.<name>`, `var.<name>` | read after it and compared |
 
 A column on the wrong side is `SE0361`. The split is not arbitrary: it is
 §6.10's writability column read from the outside. What a body may only write is
 what a test may only check.
 
-**The expected side is the four pure methods, plus `var`.** §8.1 makes the four
+**The expected side is the five pure methods, plus `var`.** §8.1 makes the five
 methods that carry an equation pure and names each for the accessor it writes,
 and purity is exactly the property that makes a method callable in isolation on
 a fabricated (x, u) and repeatable. Nothing else in the language is callable
@@ -2062,7 +2235,7 @@ solver. The solver is verified once, not once per node.
 one fixed order:
 
 ```
-init()  →  output()  →  derivative()  →  next()  →  adjust()
+init()  →  output()  →  derivative()  →  next()  →  transition()  →  adjust()
 ```
 
 `init()` always runs — a node whose `output()` reads a `var` its `init()`
@@ -2073,6 +2246,13 @@ than derived so that a set expecting several fields means one thing.
 
 `adjust.` and `state.` name the same storage (§6.4b), so an `adjust.` column
 checks the state as the adjustment left it.
+
+`transition()` also runs whenever `adjust()` does, because in a tick it always
+precedes it (§9.6 step 7) and an `adjust()` that reads a finite state reads the
+value `transition()` just committed. A given `state.` column on a finite state
+is therefore the value **before** the transition, and it is what `prev.` reads
+inside `adjust()`; there is no `prev.` column, since it could only ever repeat
+the given one.
 
 #### Rows
 
@@ -2320,6 +2500,7 @@ already.
 A small, total, side-effect-free expression language, evaluated **once per run,
 never per tick**. It appears in exactly four places: setting defaults, setting
 bindings at instantiation, state defaults, and sim-file / `.settings` values.
+(`tests {}` cells are §7 expressions too, at §7 sites — §6.13.)
 
 `sec` evaluates it at elaboration to produce the values a model starts with, and
 **emits** it — one C++ expression per §7 expression — so that configuration
@@ -2356,7 +2537,8 @@ Precedence, loosest to tightest: `+ -` · `* /` · unary `+ -` · `^`. So `-2^2`
 
 ### 7.2 Values and units
 
-Every value is a real number with a dimension.
+Every value is a real number with a dimension — or an enumerator, which has
+neither and appears only where an enum is expected (§7.2a).
 
 **An `aggregate` is not a value, which is why that sentence needs no
 qualification.** A brace list never reaches the evaluator: it is destructured
@@ -2378,6 +2560,32 @@ target's shape.
   multiplies the exponent vector.
 - The final value is converted to the target's declared unit, or rejected
   (`SE0410`).
+
+### 7.2a Enumerators
+
+An enum-typed site (§5.2a) — a setting, a state default, a binding, an
+override, a test cell — takes an **enumerator, written bare**:
+
+```
+finite link: LinkState = IDLE;          // a state default
+node dev : Device { policy = RETRY; };  // a binding
+dev.link = CONNECTED;                   // a sim-file or .settings override
+```
+
+The site's type says which enum the name belongs to, so `IDLE` can mean only
+`LinkState::IDLE` and there is nothing to qualify. Settings are read through
+`param.`, so a bare name never collides with one; and an enum-typed site looks
+an identifier up among its enumerators **before** §7.3's constants, so an
+enumerator named `e` is still that enumerator. A name the enum does not have is
+`SE0403`, and the message lists the ones it does.
+
+That is the whole of an enum's life in §7. An enum-typed site takes a bare
+enumerator or a `param.` reference to a setting of the **same** enum, which
+copies it; no arithmetic, no builtin and no unit applies to either, and an
+enumerator or enum setting anywhere else — an operand of `+`, an argument to
+`max`, the value of an `int` site — is `SE0404`. §7.4's absence of comparisons
+and conditionals is why there is nothing more: `param.mode == FAST ? HI : LO`
+is not §7, for enums or for anything else (Appendix C).
 
 ### 7.3 Builtin functions and constants
 
@@ -2423,7 +2631,7 @@ it would need run-time signals here, which is a much larger change than it looks
 
 This is the load-bearing part of the design.
 
-### 8.1 The seven methods
+### 8.1 The eight methods
 
 | Method | Equation | Purity | When it runs |
 |---|---|---|---|
@@ -2431,6 +2639,7 @@ This is the load-bearing part of the design.
 | `output()` | y = g(t, x, u) | **pure** | Whenever signals propagate — many times per step. |
 | `derivative()` | ẋ = f(t, x, u) | **pure** | Every minor step (4× per RK4 step). |
 | `next()` | x⁺ = h(t, x, u) | **pure** | Once per accepted step, at the node's sample instants. |
+| `transition()` | q⁺ = δ(t, q, x, u) | **pure** | Once per accepted step, below the exit and above `adjust()`, at the node's sample instants. |
 | `adjust()` | x⁺ = j(t, x, u) | **pure** | Once per accepted step, below the exit, at the node's sample instants. |
 | `on_step()` | — | mutating | Once per accepted step, immediately after `next()`. |
 | `final(ctx)` | — | mutating | Once at run end, in reverse init order. |
@@ -2441,13 +2650,15 @@ Write permissions, exactly:
 - `output()` writes `out` only.
 - `derivative()` writes `der` only.
 - `next()` writes `next` only.
+- `transition()` writes `transition` only.
 - `adjust()` writes `adjust` only.
 - `on_step()` writes `var`; may touch natives; may log.
 - `final(ctx)` writes nothing model-visible; may touch natives; may log.
 
-**The naming rule is the purity column.** The four methods that carry an
+**The naming rule is the purity column.** The five methods that carry an
 equation are pure and are named for the accessor they write — `out.` → `output()`,
-`der.` → `derivative()`, `next.` → `next()`, `adjust.` → `adjust()`. The three
+`der.` → `derivative()`, `next.` → `next()`, `transition.` → `transition()`,
+`adjust.` → `adjust()`. The three
 that carry none have no quantity to be named for, so they are named for the
 moment they fire: `init()`,
 `on_step()`, `final()`. Nothing else in the language is prefixed, and the singular
@@ -2461,9 +2672,10 @@ no `discrete` state at all. It is *not* the discrete counterpart of
 and lets [§6.12](#612-consistency-rules) check it in both directions.
 
 "Mutating" above describes what the method may change in the *model*, not the
-constness of the generated C++ member. All six of `output`, `derivative`, `next`,
-`adjust`, `on_step` and `final` lower to `const` members, and each receives what
-it may write as an out-parameter — `out`, `der`, `next`, `adjust`, `var`. Only
+constness of the generated C++ member. All seven of `output`, `derivative`,
+`next`, `transition`, `adjust`, `on_step` and `final` lower to `const` members,
+and each receives what it may write as an out-parameter — `out`, `der`, `next`,
+`transition`, `adjust`, `var`. Only
 `init()` is non-const, because it writes its own storage directly. See §15.4:
 that uniformity is what makes the write permissions above compile-time facts
 rather than documented conventions.
@@ -2476,6 +2688,13 @@ may write and in where the tick puts it (§9.6). It is deliberately **not** on
 not halt the run — because it runs below the exit, where a halt could not take
 effect until the following tick. Per-step work of that kind belongs in
 `on_step()`, which is above both the recording and the exit.
+
+`transition()` is `next()` for the third state kind (§6.4c), and q above is the
+finite states: same purity, same schedule, the same buffered write. It differs in
+which states it writes and in where the tick puts it — below the exit, so like
+`adjust()` it may not log, reach a native or halt the run — and its result is in
+force from t_k⁺ rather than from t_{k+1}, which is what lets a finite state leave
+its node unheld (§9.3).
 
 `next()`'s out-parameter is named `next`, shadowing the member function inside its
 own body. That is deliberate and harmless: §11 copies bodies verbatim, so a body
@@ -2498,6 +2717,7 @@ output(cmd)      { out.force = state.force + param.kff * in.cmd; }  // feedthrou
 output()         { out.velocity = state.velocity; }                 // breaks loops
 derivative(cmd, load) { … }                                         // constrains nothing
 next()                { … }                                         // constrains nothing
+transition(ack)       { … }                                         // constrains nothing
 adjust(sat)           { … }                                         // constrains nothing
 on_step(ws)           { … }                                         // constrains nothing
 ```
@@ -2517,8 +2737,8 @@ on_step(ws)           { … }                                         // constra
   feedthrough — a PID, or any state-space block with D ≠ 0 — so feedthrough
   cannot be derived from the leaf/composite inference.
 - Only `output()`'s list constrains ordering. `derivative()`, `next()`,
-  `adjust()` and `on_step()` run after outputs have propagated, so their lists
-  are documentation plus enforcement.
+  `transition()`, `adjust()` and `on_step()` run after outputs have propagated,
+  so their lists are documentation plus enforcement.
 
 ### 8.4 Why mutation is confined
 
@@ -2558,8 +2778,8 @@ Build a graph over the nodes active on the current tick:
 > **edge M → N** iff M sources one of N's **feedthrough** inputs.
 
 - `output()` runs in **topological order** of that graph.
-- `derivative()`, `next()` and `adjust()` may run in **any** order once outputs
-  have propagated.
+- `derivative()`, `next()`, `transition()` and `adjust()` may run in **any**
+  order once outputs have propagated.
 - A node whose `In_output` is empty is a **sort root** and needs no predecessor.
   Registered discrete nodes, unit delays, and integrators are all sort roots by
   the same single mechanism, not three special cases.
@@ -2668,6 +2888,13 @@ existed to resolve.
 Discrete outputs are **zero-order held** between sample instants: `output()` is
 evaluated at the node's sample ticks and the value persists until the next one.
 
+**A node is held when it has a `discrete` state or a declared `rate`**, and in no
+other case. A `finite` state (§6.4c) does not hold its node, although it too moves
+only between steps: its new value is committed before the advance, so the stages
+see one value across the whole step, and nothing a held output would protect is
+at risk. A leaf may therefore keep a gear beside a torque computed from a
+continuous speed, and the torque is re-evaluated at every stage.
+
 **No explicit rate-transition blocks exist or are needed.** Simulink's Rate
 Transition block exists because *its* multitasking execution order is not
 guaranteed; here (1) all rates are harmonic integer decimations and (2) there is a
@@ -2759,9 +2986,13 @@ One base tick at index *k*, normatively:
 4. **`on_step()`** on every active node that defines it, in any order.
 5. **Record** (§13.5) if this tick is a recording tick.
 6. **Exit** if the run has been halted (§10.2) or *k* is the last tick.
-7. **`adjust()`** on every active node that defines it, in any order. Each
-   reads `state` and writes `adjust`, which names the same storage (§6.4b), so
-   this is the tick's only write to *x* outside the solver.
+7. **Jump.** First **`transition()`** on every active node that defines it, in
+   any order; each reads the finite block and writes its buffer (§6.4c). Then
+   the finite block **commits**, all at once. Then **`adjust()`** on every
+   active node that defines it, in any order; each reads `state` — the finite
+   states at their new values — and `prev`, and writes `adjust`, which names
+   the same storage as `state` (§6.4b), so this is the tick's only write to *x*
+   outside the solver.
 8. **Advance both state kinds.** `dis = nxt` for the discrete block — and a
    second whole-block copy for `dis_arr` if the model has array-shaped discrete
    states (§15.5) — then `x` by the solver's combination of stage rates. Each
@@ -2775,24 +3006,30 @@ One base tick at index *k*, normatively:
 
 Two properties are load-bearing, and both come from advancing at the end.
 
-**The whole tick observes one state.** Steps 2–5 all see *x*[k] and *dis*[k], so
-one recorded row is one consistent sample of the model at *t*[k] — signals,
-continuous states and discrete states alike. `adjust()` is below the recording
-for exactly that reason: it is the last reader of *x*[k] and the first writer
+**The whole tick observes one state.** Steps 2–5 all see *x*[k], *dis*[k] and
+the finite block as the tick found it, so one recorded row is one consistent
+sample of the model at *t*[k] — signals and states of every kind alike. Step 7
+is below the recording for exactly that reason: it is the last reader of *x*[k] and the first writer
 after it, so the row it does not disturb reports the state that produced the
 signals beside it. The same reasoning is why `output()` sees *dis*[k] rather
 than *dis*[k+1]: y[k] = g(x[k]) precedes x⁺ = h(x[k], u[k]), which is what
 discrete-time state space says.
 
 **A stopped run holds a valid checkpoint.** The exit at step 6 is above the
-adjustment and above both advances, so a run ending on `sim.stop`, on
-`sim.abort` or on the tick count leaves `x` + `sig` + `dis` mutually consistent —
-the completeness §15.5 claims for that triple.
+jump and above both advances, so a run ending on `sim.stop`, on `sim.abort` or
+on the tick count leaves `x` + `sig` + `dis` + the finite block mutually
+consistent —
+the completeness §15.5 claims for that set.
 
 `next()` precedes `on_step()`, and both read the same `dis`[k], so the order
 matters only through `var`: a value `on_step()` learns from a native at tick *k*
 is stashed in a `var` and reaches a discrete state through `next()` at tick
 *k+1*. For I/O that is an honest one-sample transport delay.
+
+`transition()` precedes `adjust()` because a jump in a continuous state usually
+belongs to a transition (§6.4c): the clutch that locks also snaps its speed to
+the engine's, in the same tick. It follows `next()` and `on_step()`, which
+therefore see a finite state's old value, as they see every other state's.
 
 ---
 
@@ -2954,7 +3191,7 @@ finer to state, because the *schedule* rather than the value carries the
 distinction:
 
 - A node with `discrete` states or a declared `rate` is zero-order held across
-  the step (§9.3). Its `output()` is evaluated once, at its sample instant, and
+  the step (§9.3); a `finite` state does not make it one. Its `output()` is evaluated once, at its sample instant, and
   is **not** re-evaluated at the solver's minor steps; `sim.time()` there is
   that sample instant, identical for the whole step, and its held output stays
   held.
@@ -3378,9 +3615,12 @@ rides the **same settings channel, addressed by path**:
 total_mass          = 1800 (kg);    // a setting
 front.left.velocity =    2 (m/s);   // a state's initial value
 bw.w1[3]            =    0 (-);     // one element of an array state (§6.4a)
+dev.link            = CONNECTED;    // a finite state's, by enumerator (§7.2a)
 ```
 
-Layering: declared state default → `init()` code → external override.
+Layering: declared state default → `init()` code → external override. A
+`finite` state's initial value rides the channel exactly as a `discrete` one's
+does, and an enum-typed one is written as a bare enumerator.
 
 **A record setting is addressed one leaf at a time** (§6.2c), and never as a
 whole (`SE0460`):
@@ -3405,8 +3645,10 @@ source may be valid against one `order` and invalid against another.
 ### 13.5 Recording
 
 A recorded row is the model at *t*[k] for **every** kind of value it names —
-signals, continuous states and discrete states alike. Recording happens before
-either state kind advances (§9.6 steps 5 and 7), so a row never mixes vintages.
+signals and continuous, discrete and finite states alike. Recording happens
+before any state moves (§9.6 step 5, above steps 7 and 8), so a row never mixes
+vintages. On the tick a transition fires, the row still shows the old value;
+the new one is in the next row, beside the signals it produced.
 
 Recording is **quantitative**: an aligned numeric time-series table, distinct from
 logging in every respect.
@@ -3454,6 +3696,12 @@ record: {
 - A signal slower than the recording rate is **held (ZOH)** — which is its actual
   physical value, since that is precisely what downstream nodes see.
 - The header carries units: `plant.out.velocity [m/s]`.
+- **An enum is recorded as its value**, and the header names its type where a
+  unit would go: `dev.state.link [LinkState]`, then `0`, `1`, `15` in the rows.
+  The table stays numeric — every tool that reads the rest of it reads this
+  column too — and the manifest's `[types]` section (§15.6) maps each value back
+  to its name. A protocol code therefore appears in the file exactly as the
+  device reports it. A `bool` records as 0 or 1.
 - **An element of an array state is recorded by index** — `bw.state.w1[3]` — and
   the column is named that way. As with an override (§13.4), an index past the
   configured extent is a configuration failure, not a compile error; and since
@@ -3556,8 +3804,8 @@ a number, which is what this section already describes, so nothing below changed
 when records became settable.
 
 **The runtime accepts a restricted right-hand side.** `sec` evaluates all of §7;
-a compiled model accepts a **number with an optional unit suffix** and nothing
-else — no arithmetic, no builtins, no `param.*`. Two reasons: the full evaluator
+a compiled model accepts a **number with an optional unit suffix**, or at an
+enum-typed path a **bare enumerator** (§7.2a), and nothing else — no arithmetic, no builtins, no `param.*`. Two reasons: the full evaluator
 would have to ship inside every generated artifact, and `param.*` at this layer
 would name a value that a later line in the same source may itself rebind,
 requiring an evaluation order that the elaboration-time version gets for free
@@ -3580,7 +3828,8 @@ a hole here.
 
 **`dump_settings` and `load_settings` round-trip.** Dumping a model, loading the
 result into a freshly constructed one, and dumping again produces identical text.
-The dump emits canonical units and every settable path, so it doubles as a
+The dump emits canonical units, enumerators by name, and every settable path,
+so it doubles as a
 golden record of what a binary was configured with — and as the readable
 inventory of what a model exposes, which no external document has to be kept in
 sync with.
@@ -3663,12 +3912,15 @@ fails, but `this->state.x = …` still compiles. A guarantee with a one-token
 escape hatch is not a guarantee, so the storage itself carries the constness.
 
 - **Purity is `const` on the method, and the writable thing is an
-  out-parameter.** `output()`, `derivative()`, `next()`, `adjust()`, `on_step()`
-  and `final()` are all const members, so no body can write `state`, `var` or
-  `param` through `this`. What a method may write, it receives: `Out& out`,
-  `Der& der`, `Store& next`, `Adj& adjust`, `Var& var`. This is one rule,
-  applied uniformly, and it is why `on_step()` can write a `var` (§6.5) while
-  still reaching a state only through `next.` (§6.4).
+  out-parameter.** `output()`, `derivative()`, `next()`, `transition()`,
+  `adjust()`, `on_step()` and `final()` are all const members, so no body can
+  write `state`, `var` or `param` through `this`. What a method may write, it
+  receives: `Out& out`, `Der& der`, `Store& next`, `Fin& transition`,
+  `Adj& adjust`, `Var& var`. What it may only read beyond its own members, it
+  receives too: `adjust()` takes `const Fin& prev` in a node with finite
+  states (§6.4c). This is one rule, applied uniformly, and it is why
+  `on_step()` can write a `var` (§6.5) while still reaching a state only
+  through `next.` (§6.4).
 - **Settings are `const` by construction.** `param` is a `const Param` member,
   initialised when the leaf is constructed, because settings are fixed at
   elaboration (§6.2) and there is no moment at which writing one would be
@@ -3718,7 +3970,7 @@ struct Wheel {
 ```
 
 A consequence worth stating, because it is the property a reader of generated
-code most wants: **the four pure methods need no preamble at all.** The
+code most wants: **the five pure methods need no preamble at all.** The
 trace-only `log` and the reflection-only `sim` are members, and everything else
 they may touch is already const through `this`, so between their braces there is
 nothing but the verbatim body.
@@ -3749,6 +4001,10 @@ Signals sig{};
 struct Discrete { TractionController::Store tc; };
 Discrete dis{};                      // every discrete state, as committed
 Discrete nxt{};                      // the x⁺ = h(t,x,u) buffer
+
+struct Finite { Clutch::Fin cl; };   // only in a model with a `finite` state
+Finite fin{};                        // every finite state, as committed
+Finite fnx{};                        // transition()'s buffer; after the commit, `prev`
 ```
 
 A model containing an **array-shaped state** (§6.4a) differs in two ways, and
@@ -3772,8 +4028,8 @@ what it would have been. **A model with no array state emits the first form**,
 reason — an external solver integrates it directly. The same argument reaches
 further than the solver: an inspector, a shared-memory host, a replay recorder
 or a co-simulation peer wants an address, a size, and a table. Given those, none
-of them needs a line of generated accessor code. **`x` + `sig` + `dis` is a
-complete checkpoint of the model.**
+of them needs a line of generated accessor code. **`x` + `sig` + `dis` (+ `fin`,
+when the model has finite states) is a complete checkpoint of the model.**
 
 - **`x` is one flat `double` array** holding only `continuous` states, so an
   external solver integrates it directly. `x[i]` holds the value *in that
@@ -3796,6 +4052,16 @@ complete checkpoint of the model.**
   simultaneity is a property of the *model* rather than of each node survives
   unchanged; there are now two block copies at the bottom of the tick instead of
   one.
+- **`fin`/`fnx` is the finite block and its buffer**, a generated struct for
+  `dis`'s reasons: a finite state may be `bool`, `int` or an enum. The commit
+  is not a copy at the bottom of the tick but a three-step sequence in the
+  middle of it (§9.6 step 7): `fnx = fin` seeds the buffer, so a state no
+  `transition()` writes keeps its value; `transition()` writes `fnx`; and
+  `std::swap(fin, fnx)` commits. After the swap `fnx` holds the block as the
+  tick found it, which is precisely what `prev` (§6.4c) is — it is passed to
+  `adjust()` as a `const Fin&` into `fnx`, so it costs no storage of its own.
+  The swap exchanges values, not addresses, so every `value_ref` into `fin`
+  stays bound.
 - **A named state is a `value_ref<T>` proxy holding a `T*`.** The proxy exists
   because generated `State` and `Der` structs must be default-constructible
   before `bind()` runs, and a `T&` member can be neither default-constructed nor
@@ -3828,8 +4094,8 @@ complete checkpoint of the model.**
   node's continuous states, bound to the same slots of the same array. Like
   `Der` it is a `Sim` member rather than a leaf member, because the
   out-parameter has to be non-const at the call site while the method is const.
-  Nothing is allocated and nothing is copied, so `x` + `sig` + `dis` remains a
-  complete checkpoint: a view holds no state of its own.
+  Nothing is allocated and nothing is copied, so the checkpoint above remains
+  complete: a view holds no state of its own.
 - `der` is **`Sim`-owned scratch, not node data** — evaluated once per solver
   stage at trial states the trajectory never visits, then discarded. `states`
   and `vars` remain the only DSL storage sections; `vars` stay inside the node,
@@ -3929,6 +4195,10 @@ xd[0]     whl.omega'            rad/s^2
 [state.discrete]          # Sim::Impl::dis; offsets from Sim::Impl::discrete_map()
           tc.cut                N*m         double
 
+[state.finite]            # Sim::Impl::fin; offsets from Sim::Impl::finite_map()
+          cl.locked             -           bool
+          dev.link              -           device.LinkState
+
 [state.discrete.array]    # Sim::Impl::dis_arr; rows from Sim::Impl::discrete_array_map()
 dis_arr[?]  bw.w1 [param.nbq]   -           dynamic
 dis_arr[?]  bw.w2 [param.nbq]   -           dynamic
@@ -3954,12 +4224,19 @@ dis_arr[?]  bw.w2 [param.nbq]   -           dynamic
 drivetrain.WheelState.speed     rad/s
 se.math.Vec3                   units { U }
 se.math.Vec3.x                 U
+device.LinkState               enum { IDLE = 0, CONNECTING = 1, CONNECTED = 2, FAULT = 15 }
 ```
 
 Field units in `[types]` are shown **as declared**, so a parametric record (§5.2)
 reports its parameter rather than any one binding — the type is shared, and no
 single binding would be true of it. The substituted units are the per-field rows
 in `[signals]` and `[boundary.*]`, which is where a host reads what to send.
+
+**An enum's `[types]` row is its decoding table**: every enumerator with its
+value, in declaration order. Wherever an enum appears in another section its
+type column carries the enum's qualified name and its unit column `-`, and a
+recorded column of it (§13.5) is decoded through this row. Its `[settings]`
+value is the enumerator's name, which is also what `dump_settings` writes.
 
 Paths are **root-relative** (§13.2): the `root:` entry names a definition, not an
 instance, so there is no prefix for the root itself.
@@ -3973,6 +4250,7 @@ actually known:
 ```cpp
 static const se_rt::Slot* signal_map(std::size_t& count);
 static const se_rt::Slot* discrete_map(std::size_t& count);
+static const se_rt::Slot* finite_map(std::size_t& count);   // a model with finite states
 // Non-static, and emitted only for a model with array-shaped states: one
 // block each, so one accessor each. Both are built by configure().
 const se_rt::Slot* state_map(std::size_t& count) const;            // Sim::Impl::x
@@ -4098,7 +4376,7 @@ of thing wearing the same name.
 | `SE0201` | 2 | Expected one token; found another |
 | `SE0202` | 2 | Missing `package` declaration |
 | `SE0203` | 2 | `use` declaration after a definition |
-| `SE0204` | 2 | Expected a definition (`node` or `type`) |
+| `SE0204` | 2 | Expected a definition (`node`, `type` or `enum`) |
 | `SE0205` | 2 | Wrong number of unit arguments on a scalar type |
 | `SE0206` | 2 | Malformed unit expression |
 | `SE0207` | 2 | Unknown scalar type |
@@ -4115,9 +4393,9 @@ of thing wearing the same name.
 | `SE0218` | 2 | A group declares no instances (warning) |
 | `SE0220` | 2 | Duplicate section in a node |
 | `SE0221` | 2 | Unknown section name |
-| `SE0230` | 2 | State kind (`continuous`/`discrete`) omitted |
+| `SE0230` | 2 | State kind (`continuous`/`discrete`/`finite`) omitted |
 | `SE0231` | — | *Retired.* A setting may not be a record type — lifted by §6.2c. The number stays burned; codes are stable. |
-| `SE0232` | 2 | A state may not be a record type |
+| `SE0232` | 3 | A state may not be a record type |
 | `SE0233` | 2 | A `native` member may not carry a unit |
 | `SE0234` | 2 | An extent is not permitted on this declaration (port, setting, record field, `native`) |
 | `SE0235` | 2 | Malformed array extent |
@@ -4157,6 +4435,9 @@ of thing wearing the same name.
 | `SE0314` | 3 | A bare wire endpoint needs exactly one port on that side |
 | `SE0315` | 3 | A `param` wire endpoint is a destination, or names no setting |
 | `SE0316` | 4 | The reserved setting `rate` cannot be a wire source |
+| `SE0317` | 3 | Two enumerators of one enum share a name |
+| `SE0318` | 3 | Two enumerators of one enum share a value |
+| `SE0319` | 3 | An enum declares no enumerators |
 | `SE0320` | 3 | Node has both code and a `structure` block |
 | `SE0321` | 3 | `collapsed` or `expanded` on a leaf, or on an instance of one |
 | `SE0330` | 3 | Duplicate member name in a node |
@@ -4168,12 +4449,16 @@ of thing wearing the same name.
 | `SE0344` | 3 | `output()` in a node with no outputs |
 | `SE0345` | 3 | `next()` in a node with no discrete states |
 | `SE0346` | 3 | `adjust()` in a node with no continuous states |
+| `SE0347` | 3 | Finite state declared but no `transition()` |
+| `SE0348` | 3 | `transition()` in a node with no finite states |
 | `SE0350` | 3 | Method parameter is not a declared input |
 | `SE0351` | 3 | Duplicate method parameter |
 | `SE0360` | 3 | A test column names no member of the node |
 | `SE0361` | 3 | A test column is on the wrong side of the operator |
 | `SE0362` | 3 | An expected column names a method the node does not define |
 | `SE0402` | 4 | Lossy literal conversion to an integer target |
+| `SE0403` | 4 | Not an enumerator of the enum the site expects |
+| `SE0404` | 4 | An enum where a number is expected, or a number where an enum is |
 | `SE0410` | 4 | Incompatible units |
 | `SE0411` | 4 | Offset unit in a compound unit expression |
 | `SE0412` | 4 | Builtin function argument has the wrong dimension |
@@ -4195,6 +4480,7 @@ of thing wearing the same name.
 | `SE0431` | 4 | A `continuous` state must be `double` |
 | `SE0432` | 4 | An array extent must be a dimensionless, non-negative integer |
 | `SE0433` | 4 | An array state or var must be `double` |
+| `SE0434` | 3 | A `finite` state must be `bool`, `int` or an enum |
 | `SE0440` | 4 | Cross-instance reference in a setting binding |
 | `SE0441` | 4 | Unknown or duplicated setting binding |
 | `SE0442` | 4 | Fan-in: two sources into one input |
@@ -4241,7 +4527,7 @@ package_decl    = "package" qualified_name ";" ;
 use_decl        = "use" qualified_name ";" ;
 qualified_name  = IDENT { "." IDENT } ;
 
-definition      = { annotation } ( type_def | node_def ) ;
+definition      = { annotation } ( type_def | enum_def | node_def ) ;
 
 (* §6.15 — a value is a literal, never an expression. *)
 annotation      = "@" IDENT [ "(" annotation_arg { "," annotation_arg } ")" ] ;
@@ -4251,6 +4537,10 @@ annotation_arg  = IDENT [ "=" ( STRING | [ "-" ] NUMBER | IDENT ) ] ;
 
 type_def        = "type" IDENT "{" [ units_sec ] { field_decl } "}" ;
 field_decl      = IDENT ":" type_ref ";" ;
+
+(* §5.2a *)
+enum_def        = "enum" IDENT "{" enumerator { "," enumerator } [ "," ] "}" ;
+enumerator      = IDENT [ "=" [ "-" ] INT ] ;
 
 (* One production for every declaration, scalar or record. A one-segment path
    naming a closed scalar type (5.1) takes its unit as the argument: one for
@@ -4287,7 +4577,7 @@ given           = "step" | accessor ;
 accessor_list   = accessor { "," accessor } ;
 accessor        = accessor_ns "." IDENT { "." IDENT | "[" INT "]" } ;
 accessor_ns     = "param" | "in" | "state" | "out" | "der" | "next"
-                | "adjust" | "var" ;
+                | "transition" | "adjust" | "var" ;
 test_row        = expression { "," expression } "," STRING ";" ;
 
 inputs_sec      = "inputs"  "{" { port_decl } "}" ;
@@ -4297,7 +4587,7 @@ port_decl       = IDENT ":" type_ref ";" ;
 states_sec      = "states" "{" { state_decl } "}" ;
 state_decl      = state_kind IDENT [ extent ] ":" type_ref
                   [ "=" expression ] ";" ;
-state_kind      = "continuous" | "discrete" ;
+state_kind      = "continuous" | "discrete" | "finite" ;
 extent          = "[" expression "]" ;                  (* §6.4a *)
 
 vars_sec        = "vars" "{" { var_decl } "}" ;
@@ -4353,6 +4643,7 @@ lifecycle_method= "init"    "(" ")"                VERBATIM_BLOCK
                 | "output"  "(" [ ident_list ] ")" VERBATIM_BLOCK
                 | "derivative" "(" [ ident_list ] ")" VERBATIM_BLOCK
                 | "next"       "(" [ ident_list ] ")" VERBATIM_BLOCK
+                | "transition" "(" [ ident_list ] ")" VERBATIM_BLOCK
                 | "adjust"     "(" [ ident_list ] ")" VERBATIM_BLOCK
                 | "on_step"    "(" [ ident_list ] ")" VERBATIM_BLOCK ;
 ident_list      = IDENT { "," IDENT } ;
@@ -4463,14 +4754,14 @@ An unknown symbol is `SE0414`, and the diagnostic must suggest near matches —
 
 ```
 adjust      build       continuous    declarations  derivative  discrete
-final       init        inputs        native        next        node
-on_step     output      outputs       package       self        settings
-sim         states      structure     type          units       use
-vars
+enum        final       finite        init          inputs      native
+next        node        on_step       output        outputs     package
+self        settings    sim           states        structure   transition
+type        units       use           vars
 ```
 
-`param`, `in`, `out`, `state`, `der`, `next`, `adjust`, `var`, `log`, and `sim`
-are additionally unavailable as member names (§6.11), because the generated code
+`param`, `in`, `out`, `state`, `der`, `next`, `adjust`, `transition`, `prev`,
+`var`, `log`, and `sim` are additionally unavailable as member names (§6.11), because the generated code
 puts objects by those names in scope of bodies.
 
 Everything else — including every sim-file key, every build primitive, `when`,
@@ -4566,6 +4857,12 @@ Recorded so that their absence is visibly deliberate.
    itself. Recorded here rather than in the list below because it is a
    *tightening*: it would reject interiors that are accidentally monomorphic,
    which the ones written so far are not, but which is not nothing.
+8d. **Comparisons and conditionals in §7** (§7.4, §7.2a). Enums made the
+   absence visible: a flow-down that picks an enumerator from another setting —
+   `param.mode == FAST ? HI : LO` — has no spelling, so for now it is a setting
+   of its own. Adding `==`/`!=`/`?:` would still emit as one C++ expression, so
+   §7.4's (c) survives; what it costs is a boolean value in an evaluator whose
+   every value has so far been a number with a dimension.
 
 **Deliberately deferred, each a pure extension:**
 
