@@ -1,11 +1,11 @@
-// §5.2a / §7.2a — every way an enum can be misused that `sec` must refuse.
+// §5.2a / §7.2a — every way a finite type can be misused that `sec` must refuse.
 // Each line marked below is wrong in exactly one way.
 package enumbad;
 
-enum Mode { OFF, ON }
-enum Twice { A, B, A }          // SE0317 — A declared twice
-enum Clash { X = 1, Y = 0, Z }  // SE0318 — Z counts on to 1, which X has
-enum Empty { }                  // SE0319
+finite Mode { OFF, ON }
+finite Twice { A, B, A }          // SE0317 — A declared twice
+finite Clash { X = 1, Y = 0, Z }  // SE0318 — Z counts on to 1, which X has
+finite Empty { }                  // SE0319
 
 type Pair { a: double(-); b: double(-); }
 
@@ -18,7 +18,7 @@ node EnumBad {
         n:  Mode  = 1;              // SE0404 — a number where an enumerator belongs
         k:  int(-) = param.ok;      // SE0404 — an enumerator where a number belongs
         s:  double(-) = param.ok * 2; // SE0404 — arithmetic on an enumerator
-        u:  Mode(-) = OFF;          // SE0313 — an enum takes no unit argument
+        u:  Mode(-) = OFF;          // SE0313 — a finite type takes no unit argument
     }
     outputs { y: double(-); }
 

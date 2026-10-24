@@ -3645,7 +3645,7 @@ std::string Emitter::manifest() {
         std::string vs;
         for (std::size_t i = 0; i < e->values.size(); ++i)
             vs += (i ? ", " : "") + e->values[i].name + " = " + std::to_string(e->values[i].value);
-        t << col(e->fq, 34) << "enum { " << vs << " }\n";
+        t << col(e->fq, 34) << "finite { " << vs << " }\n";
     }
 
     if (m_.record.present) {

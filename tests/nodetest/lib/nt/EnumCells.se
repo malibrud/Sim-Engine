@@ -1,11 +1,11 @@
-// SPECIFICATION 5.2a / 6.13 -- enum cells in a node test. An enumerator is a
+// SPECIFICATION 5.2a / 6.13 -- finite-type cells in a node test. An enumerator is a
 // bare name in a cell exactly as in a default (7.2a), on the given side (an
 // input, a setting pin, a state) and on the expected side (an output, `next.`).
 // AMBER's explicit 4 makes GREEN 5, so a cell decoded by position rather than
 // by value fails.
 package nt;
 
-enum Light { RED, AMBER = 4, GREEN }
+finite Light { RED, AMBER = 4, GREEN }
 
 node EnumCells {
     settings { go: Light = GREEN; }
@@ -27,7 +27,7 @@ node EnumCells {
             GREEN, 0, 5, GREEN, "green goes";
             RED,   1, 0, RED,   "red stops";
         }
-        set "a setting column pins an enum", param.go, in.l = out.stop {
+        set "a setting column pins an enumerator", param.go, in.l = out.stop {
             RED, RED, 0, "red is go for this row";
         }
         set "next() stores the light", state.last, in.l = next.last {

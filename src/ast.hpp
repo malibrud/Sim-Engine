@@ -386,7 +386,7 @@ struct TypeDef {              // §5.2
     std::uint32_t start_line = 0;      // as `Group::start_line`
 };
 
-// §5.2a — `enum LinkState { IDLE, CONNECTING, FAULT = 15 }`. Values are
+// §5.2a — `finite LinkState { IDLE, CONNECTING, FAULT = 15 }`. Values are
 // assigned here, C's way, so every later stage reads a finished list.
 struct Enumerator {
     std::string name;

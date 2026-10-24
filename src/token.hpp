@@ -24,7 +24,7 @@ enum class Tok {
     String,
 
     // Reserved words — §3.4 and Appendix B.
-    KwPackage, KwUse, KwType, KwEnum, KwNode, KwSelf,
+    KwPackage, KwUse, KwType, KwNode, KwSelf,
     KwSettings, KwInputs, KwOutputs, KwStates, KwVars, KwNative, KwUnits,
     KwStructure, KwDeclarations, KwBuild,
     KwContinuous, KwDiscrete, KwFinite,

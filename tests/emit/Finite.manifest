@@ -52,8 +52,8 @@ xd[2]     pi.integ'               1/s
 [decimation]              # derived from `rate` at configuration
 
 [types]
-fsm.Finite#Ctl                    enum { MANUAL = 0, AUTO = 1 }
-fsm.Finite#Range                  enum { DRIVE = 0, NEUTRAL = 1 }
+fsm.Finite#Ctl                    finite { MANUAL = 0, AUTO = 1 }
+fsm.Finite#Range                  finite { DRIVE = 0, NEUTRAL = 1 }
 
 [recorded]                # columns of finite.csv
           time                    s

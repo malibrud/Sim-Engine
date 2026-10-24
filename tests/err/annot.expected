@@ -98,7 +98,7 @@ error[SE0287]: this annotation annotates nothing
   --> tests/err/annot.se:52:1
    |
 52 | @diagram(collapsed)
-   | ^^^^^^^^ expected a `node`, `type` or `enum` definition to follow
+   | ^^^^^^^^ expected a `node`, `type` or `finite` definition to follow
    = note: an annotation leads the declaration below it: a `node` definition, a `group`, or an instance in `structure` (§6.15)
 
 error[SE0203]: `use` declaration after a definition

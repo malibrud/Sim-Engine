@@ -240,7 +240,7 @@ void collect_decls(const ast::ModelFile& f, const std::string& stem, std::vector
     // their own documentation, and the ones that are not say so in the enum's.
     for (const ast::EnumDef& e : f.enums) {
         const bool pub = e.name == stem;
-        add(e.start_line ? e.start_line : e.loc.line, &e, e.loc, "enum `" + e.name + "`", pub, true);
+        add(e.start_line ? e.start_line : e.loc.line, &e, e.loc, "finite type `" + e.name + "`", pub, true);
         for (const ast::Enumerator& x : e.enumerators)
             add(x.loc.line, &x, x.loc, "enumerator `" + x.name + "`", false);
     }
@@ -695,7 +695,7 @@ void write_enum(std::ostream& o, const FileDocs& fd, const ast::EnumDef& en,
                 const std::string& pkg, const SpecIndex& spec, const std::string& spec_rel,
                 const std::string& src_rel) {
     o << "## " << en.name << "\n\n";
-    o << "`enum " << pkg << "." << en.name << "` \xc2\xb7 enum \xc2\xb7 [source](" << src_rel
+    o << "`finite " << pkg << "." << en.name << "` \xc2\xb7 finite type \xc2\xb7 [source](" << src_rel
       << ")\n\n";
     write_prose(o, fd.docs, &en, false, spec, spec_rel);
     o << "### Enumerators\n\n| Name | Value | Description |\n|---|---|---|\n";

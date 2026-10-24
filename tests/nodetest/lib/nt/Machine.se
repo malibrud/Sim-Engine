@@ -5,7 +5,7 @@
 // whose given state is not already AUTO.
 package nt;
 
-enum Ctl { MANUAL, AUTO }
+finite Ctl { MANUAL, AUTO }
 
 node Machine {
     settings { kp: double(-) = 2.0; ki: double(-) = 4.0; }

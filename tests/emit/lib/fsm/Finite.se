@@ -30,8 +30,8 @@ package fsm;
 
 use se.sig.ct;
 
-enum Ctl   { MANUAL, AUTO }
-enum Range { DRIVE, NEUTRAL }
+finite Ctl   { MANUAL, AUTO }
+finite Range { DRIVE, NEUTRAL }
 
 node Finite {
     structure {

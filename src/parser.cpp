@@ -208,7 +208,7 @@ void Parser::recover_to_definition() {
     int depth = 0;
     while (!at_end()) {
         if (depth == 0 && (tok_.kind == Tok::KwNode || tok_.kind == Tok::KwType ||
-                           tok_.kind == Tok::KwEnum || tok_.kind == Tok::At))
+                           tok_.kind == Tok::KwFinite || tok_.kind == Tok::At))
             return;
         if (tok_.kind == Tok::LBrace) ++depth;
         else if (tok_.kind == Tok::RBrace && depth > 0) --depth;
@@ -841,9 +841,9 @@ std::unique_ptr<ast::ModelFile> Parser::parse_model_file() {
                 recover_to_definition();
                 continue;
             }
-            if (!at(Tok::KwType) && !at(Tok::KwEnum) && !at(Tok::KwNode)) {
+            if (!at(Tok::KwType) && !at(Tok::KwFinite) && !at(Tok::KwNode)) {
                 stray_annotations(annots,
-                                  "expected a `node`, `type` or `enum` definition to follow");
+                                  "expected a `node`, `type` or `finite` definition to follow");
                 continue;
             }
         }
@@ -859,7 +859,7 @@ std::unique_ptr<ast::ModelFile> Parser::parse_model_file() {
             } else {
                 recover_to_definition();
             }
-        } else if (at(Tok::KwEnum)) {
+        } else if (at(Tok::KwFinite)) {
             ast::EnumDef e;
             ast::DiagramHints none;
             apply_annotations(annots, AnnotSite::Enum, none);
@@ -899,15 +899,15 @@ std::unique_ptr<ast::ModelFile> Parser::parse_model_file() {
             accept(Tok::Semi);
         } else {
             std::vector<Attachment> att;
-            att.push_back(note("a `.se` file contains `node`, `type` and `enum` "
+            att.push_back(note("a `.se` file contains `node`, `type` and `finite` "
                                "declarations (\xc2\xa7""2.3)"));
             if (at(Tok::KwSim))
                 att.push_back(help("a `sim` declaration belongs in its own `.sim` file "
                                    "(\xc2\xa7""13)"));
             err("SE0204", tok_.loc,
-                std::string("expected a definition (`node`, `type` or `enum`), found ") +
+                std::string("expected a definition (`node`, `type` or `finite`), found ") +
                     describe(tok_.kind),
-                "expected `node`, `type` or `enum`", std::move(att));
+                "expected `node`, `type` or `finite`", std::move(att));
             recover_to_definition();
         }
 
@@ -934,15 +934,15 @@ bool Parser::parse_type_def(ast::TypeDef& out) {
                             &out.unit_params);
 }
 
-// §5.2a — `enum Name { A, B = 15, C }`. The values are settled here, so every
+// §5.2a — `finite Name { A, B = 15, C }`. The values are settled here, so every
 // later stage reads a finished list; the duplicate and empty checks belong to
 // resolution (SE0317-19), which reports them against the whole declaration.
 bool Parser::parse_enum_def(ast::EnumDef& out) {
     out.loc = tok_.loc;
-    advance();  // enum
+    advance();  // finite
     if (!at(Tok::Ident)) {
-        err("SE0201", tok_.loc, std::string("expected an enum name, found ") + describe(tok_.kind),
-            "expected an enum name");
+        err("SE0201", tok_.loc, std::string("expected a type name, found ") + describe(tok_.kind),
+            "expected a type name");
         return false;
     }
     out.name = tok_.text;
@@ -956,7 +956,7 @@ bool Parser::parse_enum_def(ast::EnumDef& out) {
             err("SE0201", tok_.loc,
                 std::string("expected an enumerator name, found ") + describe(tok_.kind),
                 "expected an enumerator name",
-                {note("an enum body is a comma-separated list of names, each optionally "
+                {note("a finite type is a comma-separated list of names, each optionally "
                       "`= n` (\xc2\xa7""5.2a)")});
             return false;
         }
@@ -1903,7 +1903,7 @@ void Parser::apply_annotations(const std::vector<ast::Annotation>& in, AnnotSite
                                ast::DiagramHints& out) {
     const char* site_name = site == AnnotSite::Definition ? "a node definition"
                             : site == AnnotSite::Type     ? "a `type`"
-                            : site == AnnotSite::Enum     ? "an `enum`"
+                            : site == AnnotSite::Enum     ? "a `finite` type"
                             : site == AnnotSite::Group    ? "a group"
                                                           : "an instance";
     const ast::Annotation* first = nullptr;
@@ -1963,7 +1963,7 @@ void Parser::apply_annotations(const std::vector<ast::Annotation>& in, AnnotSite
                 if (site == AnnotSite::Type)
                     att.push_back(note("a record type is never drawn on the topology diagram"));
                 else if (site == AnnotSite::Enum)
-                    att.push_back(note("an enum is never drawn on the topology diagram"));
+                    att.push_back(note("a finite type is never drawn on the topology diagram"));
                 else if (arg.key == "expanded")
                     att.push_back(note("everything is drawn expanded unless it says "
                                        "`collapsed`; `expanded` is for an instance, to "

@@ -186,7 +186,7 @@ void dump(std::ostream& o, const ast::ModelFile& f) {
     }
 
     for (const ast::EnumDef& e : f.enums) {
-        o << indent(1) << "enum " << e.name << "  [line " << e.loc.line << "]\n";
+        o << indent(1) << "finite " << e.name << "  [line " << e.loc.line << "]\n";
         for (const ast::Enumerator& en : e.enumerators)
             o << indent(2) << en.name << " = " << en.value << "\n";
     }

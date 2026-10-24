@@ -675,8 +675,8 @@ bool Elaborator::require_number(const Value& v, const Source& src, Loc loc, cons
     if (!v.enm) return true;
     diag_.error("SE0404", src, loc,
                 "an enumerator of `" + v.enm->fq + "` used as " + where, "not a number",
-                {note("an enum's values are names: \xc2\xa7""7 can copy one to a site of the "
-                      "same enum, and do nothing else with it (\xc2\xa7""7.2a)")});
+                {note("a finite type's values are names: \xc2\xa7""7 can copy one to a site of the "
+                      "same type, and do nothing else with it (\xc2\xa7""7.2a)")});
     return false;
 }
 
@@ -692,7 +692,7 @@ bool Elaborator::eval_at(const ast::Expr* e, const Type& target, const Source& s
         const EnumInfo::Value* ev = enm->find(e->text);
         if (!ev) {
             diag_.error("SE0403", src, e->loc,
-                        "`" + e->text + "` is not an enumerator of `" + enm->fq + "`",
+                        "`" + e->text + "` is not an enumerator of the finite type `" + enm->fq + "`",
                         "unknown enumerator",
                         {note("`" + enm->fq + "` has " + enm->names())});
             return false;
@@ -707,10 +707,10 @@ bool Elaborator::eval_at(const ast::Expr* e, const Type& target, const Source& s
     // names the same enum. Anything else is a number where a name belongs.
     if (e->kind == ast::Expr::Kind::Param) return eval(e, src, env, out);
     diag_.error("SE0404", src, e->loc,
-                "a number where an enumerator of `" + enm->fq + "` is expected",
+                "a number where an enumerator of the finite type `" + enm->fq + "` is expected",
                 "expected an enumerator",
-                {note("an enum site takes a bare enumerator, or a `param.` setting of the "
-                      "same enum (\xc2\xa7""7.2a)"),
+                {note("a site of finite type takes a bare enumerator, or a `param.` setting of "
+                      "the same type (\xc2\xa7""7.2a)"),
                  note("`" + enm->fq + "` has " + enm->names())});
     return false;
 }
@@ -725,7 +725,7 @@ bool Elaborator::coerce(const Value& v, const Type& target, const Source& src, L
             const std::string want = target.enm ? "an enumerator of `" + target.enm->fq + "`"
                                                 : "a number";
             diag_.error("SE0404", src, loc, got + " for " + what, "expected " + want,
-                        {note("an enum converts to nothing, not even another enum or an "
+                        {note("a finite type converts to nothing, not even another one or an "
                               "`int` (\xc2\xa7""5.2a)")});
             return false;
         }
@@ -1882,9 +1882,9 @@ bool Elaborator::port_conversion(const Field& from, const Field& to, const Sourc
         auto name = [](const Type& t) {
             return t.enm ? "`" + t.enm->fq + "`" : "`" + t.scalar + "(" + t.unit.str() + ")`";
         };
-        diag_.error("SE0410", src, loc, "an enum can be wired only to the same enum",
+        diag_.error("SE0410", src, loc, "a finite type can be wired only to the same type",
                     name(from.type) + " -> " + name(to.type),
-                    {note("an enum converts to nothing, not even an `int` (\xc2\xa7""5.2a)")});
+                    {note("a finite type converts to nothing, not even an `int` (\xc2\xa7""5.2a)")});
         return false;
     }
     if (!compatible(from.type.unit, to.type.unit)) {

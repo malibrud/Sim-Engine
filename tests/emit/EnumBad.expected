@@ -1,31 +1,31 @@
 ﻿error[SE0317]: duplicate enumerator `A` in `Twice`
- --> tests/emit/lib/enumbad/EnumBad.se:6:20
+ --> tests/emit/lib/enumbad/EnumBad.se:6:22
   |
-6 | enum Twice { A, B, A }          // SE0317 — A declared twice
-  |                    ^ declared twice
+6 | finite Twice { A, B, A }          // SE0317 — A declared twice
+  |                      ^ declared twice
   = note: first here  [tests/emit/lib/enumbad/EnumBad.se:6]
 
 error[SE0318]: `Z` and `X` share the value 1
- --> tests/emit/lib/enumbad/EnumBad.se:7:28
+ --> tests/emit/lib/enumbad/EnumBad.se:7:30
   |
-7 | enum Clash { X = 1, Y = 0, Z }  // SE0318 — Z counts on to 1, which X has
-  |                            ^ counted on to the same value
+7 | finite Clash { X = 1, Y = 0, Z }  // SE0318 — Z counts on to 1, which X has
+  |                              ^ counted on to the same value
   = note: a recorded column is decoded by value (§13.5), so two names for one value would make it ambiguous
   = note: `X` is here  [tests/emit/lib/enumbad/EnumBad.se:7]
 
 error[SE0313]: `enumbad.EnumBad#Mode` takes no unit argument, 1 given
   --> tests/emit/lib/enumbad/EnumBad.se:21:17
    |
-21 |         u:  Mode(-) = OFF;          // SE0313 — an enum takes no unit argument
+21 |         u:  Mode(-) = OFF;          // SE0313 — a finite type takes no unit argument
    |                 ^ 1 given
-   = note: an enum's values are names, and a name has no dimension (§5.2a)
+   = note: a finite type's values are names, and a name has no dimension (§5.2a)
    = help: write `Mode` with no parentheses
 
-error[SE0319]: enum `Empty` has no enumerators
- --> tests/emit/lib/enumbad/EnumBad.se:8:6
+error[SE0319]: finite type `Empty` has no enumerators
+ --> tests/emit/lib/enumbad/EnumBad.se:8:8
   |
-8 | enum Empty { }                  // SE0319
-  |      ^^^^^ empty
+8 | finite Empty { }                  // SE0319
+  |        ^^^^^ empty
   = note: a state or setting of this type could hold no value (§5.2a)
 
 error[SE0232]: a state may not be a record type
@@ -35,19 +35,19 @@ error[SE0232]: a state may not be a record type
    |                     ^^^^
    = note: the solver ABI is a flat `double` vector (§5.2)
 
-error[SE0403]: `ONN` is not an enumerator of `enumbad.EnumBad#Mode`
+error[SE0403]: `ONN` is not an enumerator of the finite type `enumbad.EnumBad#Mode`
   --> tests/emit/lib/enumbad/EnumBad.se:17:21
    |
 17 |         m:  Mode  = ONN;            // SE0403 — no such enumerator
    |                     ^^^ unknown enumerator
    = note: `enumbad.EnumBad#Mode` has OFF, ON
 
-error[SE0404]: a number where an enumerator of `enumbad.EnumBad#Mode` is expected
+error[SE0404]: a number where an enumerator of the finite type `enumbad.EnumBad#Mode` is expected
   --> tests/emit/lib/enumbad/EnumBad.se:18:21
    |
 18 |         n:  Mode  = 1;              // SE0404 — a number where an enumerator belongs
    |                     ^ expected an enumerator
-   = note: an enum site takes a bare enumerator, or a `param.` setting of the same enum (§7.2a)
+   = note: a site of finite type takes a bare enumerator, or a `param.` setting of the same type (§7.2a)
    = note: `enumbad.EnumBad#Mode` has OFF, ON
 
 error[SE0404]: an enumerator of `enumbad.EnumBad#Mode` for setting `k`
@@ -55,27 +55,27 @@ error[SE0404]: an enumerator of `enumbad.EnumBad#Mode` for setting `k`
    |
 19 |         k:  int(-) = param.ok;      // SE0404 — an enumerator where a number belongs
    |                      ^^^^^^^^ expected a number
-   = note: an enum converts to nothing, not even another enum or an `int` (§5.2a)
+   = note: a finite type converts to nothing, not even another one or an `int` (§5.2a)
 
 error[SE0404]: an enumerator of `enumbad.EnumBad#Mode` used as an operand of `*`
   --> tests/emit/lib/enumbad/EnumBad.se:20:25
    |
 20 |         s:  double(-) = param.ok * 2; // SE0404 — arithmetic on an enumerator
    |                         ^^^^^^^^ not a number
-   = note: an enum's values are names: §7 can copy one to a site of the same enum, and do nothing else with it (§7.2a)
+   = note: a finite type's values are names: §7 can copy one to a site of the same type, and do nothing else with it (§7.2a)
 
-error[SE0410]: an enum can be wired only to the same enum
+error[SE0410]: a finite type can be wired only to the same type
   --> tests/emit/lib/enumbad/EnumBad.se:30:17
    |
 30 |         src --> dst;               // SE0410 — Mode into int
    |                 ^^^ `enumbad.EnumBad#Mode` -> `int(-)`
-   = note: an enum converts to nothing, not even an `int` (§5.2a)
+   = note: a finite type converts to nothing, not even an `int` (§5.2a)
 
-error[SE0410]: an enum can be wired only to the same enum
+error[SE0410]: a finite type can be wired only to the same type
   --> tests/emit/lib/enumbad/EnumBad.se:31:17
    |
 31 |         1.0 --> sink;              // SE0410 — a literal is no enumerator
    |                 ^^^^ `double(-)` -> `enumbad.EnumBad#Mode`
-   = note: an enum converts to nothing, not even an `int` (§5.2a)
+   = note: a finite type converts to nothing, not even an `int` (§5.2a)
 
 11 errors emitted

@@ -1,4 +1,4 @@
 // §5.2a — an enumerator's value is an integer literal.
 package device;
 
-enum Gear { PARK, DRIVE = 1.5 }
+finite Gear { PARK, DRIVE = 1.5 }

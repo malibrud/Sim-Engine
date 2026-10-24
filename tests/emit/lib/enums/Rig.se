@@ -1,11 +1,11 @@
-// §5.2a / §7.2a — enumerated types end to end: a public enum and a private
+// §5.2a / §7.2a — finite types end to end: a public one and a private
 // one, as settings, as a flow-down copy, as a discrete state with an IC
 // override, as a port and a root output, as a record field, and recorded.
 //
 // The device climbs IDLE -> CONNECTING -> CONNECTED and, `fail_after` ticks in,
 // drops to whatever `on_fault` says. `enums.settings` starts it at CONNECTING
 // (an IC override, by enumerator) and leaves `on_fault` at the Rig's default,
-// which flows down as a whole-enum copy. So the recorded link column reads
+// which flows down as a whole-value copy. So the recorded link column reads
 //
 //   k:     0  1  2  3  4  5 ...
 //   link:  1  2  2  2 15 15 ...     (CONNECTING, CONNECTED x3, FAULT)
@@ -16,9 +16,9 @@
 // enumerator numbered wrongly, is a wrong number and not a plausible one.
 package enums;
 
-// A private enum: it lowers into the file's private namespace, and is reached
+// A private finite type: it lowers into the file's private namespace, and is reached
 // from a setting the sim file never names.
-enum Retry { NEVER, ONCE = 1, ALWAYS = 9 }
+finite Retry { NEVER, ONCE = 1, ALWAYS = 9 }
 
 type Status {
     link: LinkState;
@@ -69,7 +69,7 @@ node Device {
                 break;
             case LinkState::FAULT:      next.link = LinkState::FAULT;      break;
         }
-        // A file-private enum is named bare in the body, as anywhere in its file.
+        // A file-private finite type is named bare in the body, as anywhere in its file.
         (void)(param.retry == Retry::ALWAYS);
     }
 }

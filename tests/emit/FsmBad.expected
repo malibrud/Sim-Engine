@@ -1,4 +1,4 @@
-﻿error[SE0434]: a `finite` state must be `bool`, `int` or an enum
+﻿error[SE0434]: a `finite` state must be `bool`, `int` or a finite type
   --> tests/emit/lib/fsmbad/FsmBad.se:16:21
    |
 16 |     states { finite x: double(-) = 0.0; }    // SE0434 — not finitely valued

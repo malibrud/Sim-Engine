@@ -1,9 +1,9 @@
-// §5.2a — the public enum the Enums case runs on. C numbering with one
+// §5.2a — the public finite type the Enums case runs on. C numbering with one
 // explicit value, so the gap between CONNECTED (2) and FAULT (15) shows in the
 // manifest's [types] row and in every recorded column that carries one.
 package enums;
 
-enum LinkState {
+finite LinkState {
     IDLE, CONNECTING, CONNECTED,
     FAULT = 15
 }

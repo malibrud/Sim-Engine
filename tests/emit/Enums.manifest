@@ -43,8 +43,8 @@
 [types]
 enums.Rig#Status.link             enums.LinkState
 enums.Rig#Status.code             -
-enums.LinkState                   enum { IDLE = 0, CONNECTING = 1, CONNECTED = 2, FAULT = 15 }
-enums.Rig#Retry                   enum { NEVER = 0, ONCE = 1, ALWAYS = 9 }
+enums.LinkState                   finite { IDLE = 0, CONNECTING = 1, CONNECTED = 2, FAULT = 15 }
+enums.Rig#Retry                   finite { NEVER = 0, ONCE = 1, ALWAYS = 9 }
 
 [recorded]                # columns of enums.csv
           time                    s

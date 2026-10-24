@@ -41,7 +41,7 @@ meaning:
 
 | Kind | Extension | Contents |
 |---|---|---|
-| Model file | `.se` | Exactly one public `node`, `type` or `enum` declaration, plus optional file-private helpers. |
+| Model file | `.se` | Exactly one public `node`, `type` or `finite` declaration, plus optional file-private helpers. |
 | Sim file | `.sim` | One `sim` declaration: the run/experiment configuration. |
 | Settings source | `.settings` | A flat list of path-addressed setting and initial-condition overrides. |
 
@@ -93,7 +93,7 @@ column in §16.4 gives the detecting stage.
 
 ### 1.4 Terminology
 
-- **Definition** — a `node`, `type` or `enum` declaration. Lowers to a C++
+- **Definition** — a `node`, `type` or `finite` declaration. Lowers to a C++
   class, struct or scoped enumeration.
 - **Instance** — a `node name : Definition { … };` statement inside a
   `structure` block. Lowers to an object (leaf) or to nothing (composite).
@@ -205,7 +205,7 @@ members and are named by filesystem path only.
 ### 2.3 One public declaration per file
 
 A `.se` file contains exactly one **public** declaration, whose name must equal
-the file's base name. Any further `node`, `type` or `enum` declarations in the same file
+the file's base name. Any further `node`, `type` or `finite` declarations in the same file
 are **file-private**: visible to the rest of that file, invisible to every other
 file, and not addressable by any package path.
 
@@ -253,7 +253,7 @@ imports it back. Resolution is whole-program (stage 3), not single-pass.
 ### 2.6 Package manifest files
 
 A file named `package.se` in a package directory is a **package manifest**. It
-declares no node, type or enum; it may contain only a `package` declaration, `use`
+declares no node, type or finite type; it may contain only a `package` declaration, `use`
 declarations, and a `build` block (§12). Its purpose is to let a package act as
 a **dependency bundle** — a named collection of build primitives that any model
 can pull in by depending on the package.
@@ -734,15 +734,16 @@ type WheelState {
   §6.2c does not make §7 record-valued, it splits a record setting into the
   scalar leaves it carries before §7 ever sees it.*
 
-### 5.2a Enumerated types
+### 5.2a Finite types
 
-An `enum` declaration defines a type whose values are a fixed list of names:
+A `finite` declaration at file level defines a **finite type**: a type whose
+values are a fixed list of names, its **enumerators**.
 
 ```
 // LinkState.se
 package device;
 
-enum LinkState {
+finite LinkState {
     IDLE, CONNECTING, CONNECTED,
     FAULT = 15                    // the remote device's own code
 }
@@ -753,33 +754,40 @@ state machine — a remote device, a protocol, a controller's AUTO/MANUAL — wh
 an `int` with a comment beside each value is the incumbent, and where the
 values are what §6.4's `finite` states range over.
 
+**One keyword, two places, one idea.** At file level `finite` declares a finite
+set of values; inside `states` it declares a state that ranges over one and
+jumps between them (§6.4c). Position alone tells the parser which is meant, so
+neither needs a second keyword. The word was chosen over `enum`, which would
+have meant something narrower than the C++ `enum` written a few lines away in
+the same file's verbatim bodies.
+
 - **It is its own declaration**, a sibling of `node` and `type`, and obeys §2.3
-  the same way: one public `enum` per file, named for the file, with file-private
-  ones beside it.
+  the same way: one public finite type per file, named for the file, with
+  file-private ones beside it.
 - **Values follow C.** An enumerator without `= n` takes one more than the one
   before it, and the first takes 0. `n` is an integer literal, optionally
   negative. Two enumerators may not share a name (`SE0317`) or a value
   (`SE0318`): a recorded column (§13.5) is decoded by value, and two names for
-  one value would make the decoding ambiguous. An enum with no enumerators is
-  `SE0319`.
-- **An enum takes no unit argument**, for `bool`'s reason (§5.1): a name has no
-  dimension. `link: LinkState;` is the declaration, and `LinkState(-)` is the
-  arity error from the other side.
+  one value would make the decoding ambiguous. A finite type with no
+  enumerators is `SE0319`.
+- **A finite type takes no unit argument**, for `bool`'s reason (§5.1): a name
+  has no dimension. `link: LinkState;` is the declaration, and `LinkState(-)` is
+  the arity error from the other side.
 - **It goes wherever a scalar goes** — a setting, a port, a var, a record field, a
   `discrete` or a `finite` state (§6.4) — except a `continuous` state, which
   stays `double` (`SE0431`), and an array, whose element stays `double`
   (`SE0433`).
-- **A wire carries an enum only into the same enum.** There is no unit, so there
-  is nothing to convert, and there is no conversion to or from `int`: a
+- **A wire carries a finite type only into the same type.** There is no unit, so
+  there is nothing to convert, and there is no conversion to or from `int`: a
   `LinkState` into an `int` input is the same port-type mismatch as a record into
   a scalar.
 - **In C++ it is a scoped enumeration**, `enum class LinkState : int`, in the
   package's namespace, and a body names its values the C++ way:
-  `state.link == LinkState::CONNECTED`. A file-private enum is named bare in
-  every body of its file, as §2.3 says the rest of the file sees it; another
-  package's enum is qualified as any C++ name is. Where the DSL names one itself — a
-  default, a binding, an override, a test cell — the name is bare and its type
-  comes from the site (§7.2a).
+  `state.link == LinkState::CONNECTED`. A file-private finite type is named bare
+  in every body of its file, as §2.3 says the rest of the file sees it; another
+  package's is qualified as any C++ name is. Where the DSL names an enumerator
+  itself — a default, a binding, an override, a test cell — the name is bare and
+  its type comes from the site (§7.2a).
 
 ### 5.3 What a wire carries
 
@@ -1316,7 +1324,7 @@ differs is when they move and what that does to the schedule.
 - Only `double` may be `continuous` (`SE0431`); the state vector is a flat
   `double` array.
 - Only a type with finitely many values may be `finite` — `bool`, `int` or an
-  enum (§5.2a) — and `double`/`float` is `SE0434`. It is the counterpart of
+  finite type (§5.2a) — and `double`/`float` is `SE0434`. It is the counterpart of
   `SE0431`, from the other side: a state machine's state is a name, and a real
   number that only ever jumps is either a counter (`int`) or a `discrete`
   state.
@@ -2540,7 +2548,7 @@ Precedence, loosest to tightest: `+ -` · `* /` · unary `+ -` · `^`. So `-2^2`
 ### 7.2 Values and units
 
 Every value is a real number with a dimension — or an enumerator, which has
-neither and appears only where an enum is expected (§7.2a).
+neither and appears only where a finite type is expected (§7.2a).
 
 **An `aggregate` is not a value, which is why that sentence needs no
 qualification.** A brace list never reaches the evaluator: it is destructured
@@ -2565,7 +2573,7 @@ target's shape.
 
 ### 7.2a Enumerators
 
-An enum-typed site (§5.2a) — a setting, a state default, a binding, an
+A site of finite type (§5.2a) — a setting, a state default, a binding, an
 override, a test cell — takes an **enumerator, written bare**:
 
 ```
@@ -2574,20 +2582,20 @@ node dev : Device { policy = RETRY; };  // a binding
 dev.link = CONNECTED;                   // a sim-file or .settings override
 ```
 
-The site's type says which enum the name belongs to, so `IDLE` can mean only
+The site's type says which finite type the name belongs to, so `IDLE` can mean only
 `LinkState::IDLE` and there is nothing to qualify. Settings are read through
-`param.`, so a bare name never collides with one; and an enum-typed site looks
+`param.`, so a bare name never collides with one; and a site of finite type looks
 an identifier up among its enumerators **before** §7.3's constants, so an
-enumerator named `e` is still that enumerator. A name the enum does not have is
+enumerator named `e` is still that enumerator. A name the type does not have is
 `SE0403`, and the message lists the ones it does.
 
-That is the whole of an enum's life in §7. An enum-typed site takes a bare
-enumerator or a `param.` reference to a setting of the **same** enum, which
+That is the whole of a finite type's life in §7. A site of finite type takes a
+bare enumerator or a `param.` reference to a setting of the **same** type, which
 copies it; no arithmetic, no builtin and no unit applies to either, and an
-enumerator or enum setting anywhere else — an operand of `+`, an argument to
+enumerator or such a setting anywhere else — an operand of `+`, an argument to
 `max`, the value of an `int` site — is `SE0404`. §7.4's absence of comparisons
 and conditionals is why there is nothing more: `param.mode == FAST ? HI : LO`
-is not §7, for enums or for anything else (Appendix C).
+is not §7, for finite types or for anything else (Appendix C).
 
 ### 7.3 Builtin functions and constants
 
@@ -3622,7 +3630,7 @@ dev.link            = CONNECTED;    // a finite state's, by enumerator (§7.2a)
 
 Layering: declared state default → `init()` code → external override. A
 `finite` state's initial value rides the channel exactly as a `discrete` one's
-does, and an enum-typed one is written as a bare enumerator.
+does, and one of finite type is written as a bare enumerator.
 
 **A record setting is addressed one leaf at a time** (§6.2c), and never as a
 whole (`SE0460`):
@@ -3698,12 +3706,12 @@ record: {
 - A signal slower than the recording rate is **held (ZOH)** — which is its actual
   physical value, since that is precisely what downstream nodes see.
 - The header carries units: `plant.out.velocity [m/s]`.
-- **An enum is recorded as its value**, and the header names its type, fully
-  qualified, where a unit would go: `dev.state.link [device.LinkState]`, then
+- **A finite type is recorded as its value**, and the header names the type,
+  fully qualified, where a unit would go: `dev.state.link [device.LinkState]`, then
   `0`, `1`, `15` in the rows. The table stays numeric — every tool that reads
   the rest of it reads this column too — and the manifest's `[types]` row of
-  the same name (§15.6) maps each value back to its name. A protocol code therefore appears in the file exactly as the
-  device reports it. A `bool` records as 0 or 1.
+  the same name (§15.6) maps each value back to its name. A protocol code
+  therefore appears in the file exactly as the device reports it. A `bool` records as 0 or 1.
 - **An element of an array state is recorded by index** — `bw.state.w1[3]` — and
   the column is named that way. As with an override (§13.4), an index past the
   configured extent is a configuration failure, not a compile error; and since
@@ -3807,7 +3815,7 @@ when records became settable.
 
 **The runtime accepts a restricted right-hand side.** `sec` evaluates all of §7;
 a compiled model accepts a **number with an optional unit suffix**, or at an
-enum-typed path a **bare enumerator** (§7.2a), and nothing else — no arithmetic, no builtins, no `param.*`. Two reasons: the full evaluator
+path of finite type a **bare enumerator** (§7.2a), and nothing else — no arithmetic, no builtins, no `param.*`. Two reasons: the full evaluator
 would have to ship inside every generated artifact, and `param.*` at this layer
 would name a value that a later line in the same source may itself rebind,
 requiring an evaluation order that the elaboration-time version gets for free
@@ -4055,7 +4063,7 @@ when the model has finite states) is a complete checkpoint of the model.**
   unchanged; there are now two block copies at the bottom of the tick instead of
   one.
 - **`fin`/`fnx` is the finite block and its buffer**, a generated struct for
-  `dis`'s reasons: a finite state may be `bool`, `int` or an enum. The commit
+  `dis`'s reasons: a finite state may be `bool`, `int` or a finite type. The commit
   is not a copy at the bottom of the tick but a three-step sequence in the
   middle of it (§9.6 step 7): `fnx = fin` seeds the buffer, so a state no
   `transition()` writes keeps its value; `transition()` writes `fnx`; and
@@ -4226,7 +4234,7 @@ dis_arr[?]  bw.w2 [param.nbq]   -           dynamic
 drivetrain.WheelState.speed     rad/s
 se.math.Vec3                   units { U }
 se.math.Vec3.x                 U
-device.LinkState               enum { IDLE = 0, CONNECTING = 1, CONNECTED = 2, FAULT = 15 }
+device.LinkState               finite { IDLE = 0, CONNECTING = 1, CONNECTED = 2, FAULT = 15 }
 ```
 
 Field units in `[types]` are shown **as declared**, so a parametric record (§5.2)
@@ -4234,9 +4242,9 @@ reports its parameter rather than any one binding — the type is shared, and no
 single binding would be true of it. The substituted units are the per-field rows
 in `[signals]` and `[boundary.*]`, which is where a host reads what to send.
 
-**An enum's `[types]` row is its decoding table**: every enumerator with its
-value, in declaration order. Wherever an enum appears in another section its
-type column carries the enum's qualified name and its unit column `-`, and a
+**A finite type's `[types]` row is its decoding table**: every enumerator with
+its value, in declaration order. Wherever the type appears in another section
+its type column carries the type's qualified name and its unit column `-`, and a
 recorded column of it (§13.5) is decoded through this row. Its `[settings]`
 value is the enumerator's name, which is also what `dump_settings` writes.
 
@@ -4378,7 +4386,7 @@ of thing wearing the same name.
 | `SE0201` | 2 | Expected one token; found another |
 | `SE0202` | 2 | Missing `package` declaration |
 | `SE0203` | 2 | `use` declaration after a definition |
-| `SE0204` | 2 | Expected a definition (`node`, `type` or `enum`) |
+| `SE0204` | 2 | Expected a definition (`node`, `type` or `finite`) |
 | `SE0205` | 2 | Wrong number of unit arguments on a scalar type |
 | `SE0206` | 2 | Malformed unit expression |
 | `SE0207` | 2 | Unknown scalar type |
@@ -4437,9 +4445,9 @@ of thing wearing the same name.
 | `SE0314` | 3 | A bare wire endpoint needs exactly one port on that side |
 | `SE0315` | 3 | A `param` wire endpoint is a destination, or names no setting |
 | `SE0316` | 4 | The reserved setting `rate` cannot be a wire source |
-| `SE0317` | 3 | Two enumerators of one enum share a name |
-| `SE0318` | 3 | Two enumerators of one enum share a value |
-| `SE0319` | 3 | An enum declares no enumerators |
+| `SE0317` | 3 | Two enumerators of one finite type share a name |
+| `SE0318` | 3 | Two enumerators of one finite type share a value |
+| `SE0319` | 3 | A finite type declares no enumerators |
 | `SE0320` | 3 | Node has both code and a `structure` block |
 | `SE0321` | 3 | `collapsed` or `expanded` on a leaf, or on an instance of one |
 | `SE0330` | 3 | Duplicate member name in a node |
@@ -4459,8 +4467,8 @@ of thing wearing the same name.
 | `SE0361` | 3 | A test column is on the wrong side of the operator |
 | `SE0362` | 3 | An expected column names a method the node does not define |
 | `SE0402` | 4 | Lossy literal conversion to an integer target |
-| `SE0403` | 4 | Not an enumerator of the enum the site expects |
-| `SE0404` | 4 | An enum where a number is expected, or a number where an enum is |
+| `SE0403` | 4 | Not an enumerator of the finite type the site expects |
+| `SE0404` | 4 | An enumerator where a number is expected, or a number where an enumerator is |
 | `SE0410` | 4 | Incompatible units |
 | `SE0411` | 4 | Offset unit in a compound unit expression |
 | `SE0412` | 4 | Builtin function argument has the wrong dimension |
@@ -4482,7 +4490,7 @@ of thing wearing the same name.
 | `SE0431` | 4 | A `continuous` state must be `double` |
 | `SE0432` | 4 | An array extent must be a dimensionless, non-negative integer |
 | `SE0433` | 4 | An array state or var must be `double` |
-| `SE0434` | 3 | A `finite` state must be `bool`, `int` or an enum |
+| `SE0434` | 3 | A `finite` state must be `bool`, `int` or a finite type |
 | `SE0440` | 4 | Cross-instance reference in a setting binding |
 | `SE0441` | 4 | Unknown or duplicated setting binding |
 | `SE0442` | 4 | Fan-in: two sources into one input |
@@ -4529,7 +4537,7 @@ package_decl    = "package" qualified_name ";" ;
 use_decl        = "use" qualified_name ";" ;
 qualified_name  = IDENT { "." IDENT } ;
 
-definition      = { annotation } ( type_def | enum_def | node_def ) ;
+definition      = { annotation } ( type_def | finite_def | node_def ) ;
 
 (* §6.15 — a value is a literal, never an expression. *)
 annotation      = "@" IDENT [ "(" annotation_arg { "," annotation_arg } ")" ] ;
@@ -4541,7 +4549,7 @@ type_def        = "type" IDENT "{" [ units_sec ] { field_decl } "}" ;
 field_decl      = IDENT ":" type_ref ";" ;
 
 (* §5.2a *)
-enum_def        = "enum" IDENT "{" enumerator { "," enumerator } [ "," ] "}" ;
+finite_def      = "finite" IDENT "{" enumerator { "," enumerator } [ "," ] "}" ;
 enumerator      = IDENT [ "=" [ "-" ] INT ] ;
 
 (* One production for every declaration, scalar or record. A one-segment path
@@ -4756,10 +4764,10 @@ An unknown symbol is `SE0414`, and the diagnostic must suggest near matches —
 
 ```
 adjust      build       continuous    declarations  derivative  discrete
-enum        final       finite        init          inputs      native
-next        node        on_step       output        outputs     package
-self        settings    sim           states        structure   transition
-type        units       use           vars
+final       finite      init          inputs        native      next
+node        on_step     output        outputs       package     self
+settings    sim         states        structure     transition  type
+units       use         vars
 ```
 
 `param`, `in`, `out`, `state`, `der`, `next`, `adjust`, `transition`, `prev`,
@@ -4859,7 +4867,7 @@ Recorded so that their absence is visibly deliberate.
    itself. Recorded here rather than in the list below because it is a
    *tightening*: it would reject interiors that are accidentally monomorphic,
    which the ones written so far are not, but which is not nothing.
-8d. **Comparisons and conditionals in §7** (§7.4, §7.2a). Enums made the
+8d. **Comparisons and conditionals in §7** (§7.4, §7.2a). Finite types made the
    absence visible: a flow-down that picks an enumerator from another setting —
    `param.mode == FAST ? HI : LO` — has no spelling, so for now it is a setting
    of its own. Adding `==`/`!=`/`?:` would still emit as one C++ expression, so

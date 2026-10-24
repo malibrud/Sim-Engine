@@ -17,7 +17,6 @@ const char* describe(Tok k) {
         case Tok::KwPackage:      return "`package`";
         case Tok::KwUse:          return "`use`";
         case Tok::KwType:         return "`type`";
-        case Tok::KwEnum:         return "`enum`";
         case Tok::KwNode:         return "`node`";
         case Tok::KwSelf:         return "`self`";
         case Tok::KwSettings:     return "`settings`";
@@ -70,7 +69,6 @@ Tok keyword_kind(std::string_view w) {
     static const std::unordered_map<std::string_view, Tok> table = {
         {"package", Tok::KwPackage},           {"use", Tok::KwUse},
         {"type", Tok::KwType},                 {"node", Tok::KwNode},
-        {"enum", Tok::KwEnum},
         {"self", Tok::KwSelf},                 {"settings", Tok::KwSettings},
         {"inputs", Tok::KwInputs},             {"outputs", Tok::KwOutputs},
         {"states", Tok::KwStates},             {"vars", Tok::KwVars},

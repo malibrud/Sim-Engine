@@ -420,7 +420,7 @@ bool Resolver::resolve_named_type_ref(const FileInfo& from, const ast::Path& p,
     }
     diag_.error("SE0304", src, loc, "`" + p.str() + "` names no type",
                 "unresolved",
-                {note("this file declares no public `type " + name + "` or `enum " + name +
+                {note("this file declares no public `type " + name + "` or `finite " + name +
                           "`",
                       file->path)});
     return false;
@@ -496,7 +496,7 @@ bool Resolver::resolve_type(const FileInfo& file, const ast::TypeRef& ref, Type&
                         "`" + enm->fq + "` takes no unit argument, " +
                             std::to_string(ref.unit_args.size()) + " given",
                         std::to_string(ref.unit_args.size()) + " given",
-                        {note("an enum's values are names, and a name has no dimension "
+                        {note("a finite type's values are names, and a name has no dimension "
                               "(§5.2a)"),
                          help("write `" + ref.record.str() + "` with no parentheses")});
             return false;
@@ -607,7 +607,7 @@ EnumInfo* Resolver::resolve_enum(FileInfo& file, const ast::EnumDef& def, const 
     enum_by_def_[&def] = info;
 
     if (def.enumerators.empty())
-        diag_.error("SE0319", *file.src, def.loc, "enum `" + def.name + "` has no enumerators",
+        diag_.error("SE0319", *file.src, def.loc, "finite type `" + def.name + "` has no enumerators",
                     "empty",
                     {note("a state or setting of this type could hold no value (§5.2a)")});
     for (std::size_t i = 0; i < def.enumerators.size(); ++i) {
@@ -781,7 +781,7 @@ NodeInfo* Resolver::resolve_node(FileInfo& file, const ast::NodeDef& def,
         if (st.kind == ast::StateKind::Finite && !st.type.is_record && !st.type.enm &&
             st.type.scalar != "int" && st.type.scalar != "bool") {
             diag_.error("SE0434", *file.src, s.loc,
-                        "a `finite` state must be `bool`, `int` or an enum",
+                        "a `finite` state must be `bool`, `int` or a finite type",
                         "declared `" + st.type.scalar + "`",
                         {note("a finite state is the state of a state machine, which has "
                               "finitely many values (§6.4)"),
