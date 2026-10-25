@@ -1,0 +1,37 @@
+// §6.11 — every kind of name the generated C++ spells verbatim, each a C++
+// keyword the DSL does not itself reserve. Each line marked below is wrong in
+// exactly one way, and the instance named `delete` is not wrong at all: an
+// instance name only reaches C++ through a generated identifier.
+package cppkw;
+
+finite Op { add, delete }        // SE0332 — an enumerator
+finite union { A, B }            // SE0332 — a finite type
+type Span { lo: double(-); new: double(-); }   // SE0332 — a record field
+
+node CppKw {
+    outputs { y: double(-); }
+    structure {
+        node delete : Leaf {};
+        node bad    : Bad {};
+        delete --> self.y;
+        1.0 --> bad;
+    }
+}
+
+node Bad {
+    settings {
+        class: double(-) = 1.0;                // SE0332 — a setting
+        op:    Op        = add;
+        u:     union     = A;
+        s:     Span      = { 0.0, 1.0 };
+    }
+    inputs   { this: double(-); }              // SE0332 — an input
+    states   { discrete int: int(-) = 0; }     // SE0332 — a state
+    vars     { or: double(-); }                // SE0332 — a var
+    next() {}
+}
+
+node Leaf {
+    outputs { y: double(-); }
+    output() { out.y = 1.0; }
+}

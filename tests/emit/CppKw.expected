@@ -1,0 +1,57 @@
+﻿error[SE0332]: `delete` is a C++ keyword
+ --> tests/emit/lib/cppkw/CppKw.se:7:18
+  |
+7 | finite Op { add, delete }        // SE0332 — an enumerator
+  |                  ^^^^^^ enumerator named `delete`
+  = note: the generated C++ spells this name as written, because the compiler never parses or rewrites a body (I1, §6.11)
+  = help: choose another name; `delete_` or a longer word both work
+
+error[SE0332]: `union` is a C++ keyword
+ --> tests/emit/lib/cppkw/CppKw.se:8:8
+  |
+8 | finite union { A, B }            // SE0332 — a finite type
+  |        ^^^^^ finite type named `union`
+  = note: the generated C++ spells this name as written, because the compiler never parses or rewrites a body (I1, §6.11)
+  = help: choose another name; `union_` or a longer word both work
+
+error[SE0332]: `new` is a C++ keyword
+ --> tests/emit/lib/cppkw/CppKw.se:9:28
+  |
+9 | type Span { lo: double(-); new: double(-); }   // SE0332 — a record field
+  |                            ^^^ record field named `new`
+  = note: the generated C++ spells this name as written, because the compiler never parses or rewrites a body (I1, §6.11)
+  = help: choose another name; `new_` or a longer word both work
+
+error[SE0332]: `class` is a C++ keyword
+  --> tests/emit/lib/cppkw/CppKw.se:23:9
+   |
+23 |         class: double(-) = 1.0;                // SE0332 — a setting
+   |         ^^^^^ setting named `class`
+   = note: the generated C++ spells this name as written, because the compiler never parses or rewrites a body (I1, §6.11)
+   = help: choose another name; `class_` or a longer word both work
+
+error[SE0332]: `this` is a C++ keyword
+  --> tests/emit/lib/cppkw/CppKw.se:28:16
+   |
+28 |     inputs   { this: double(-); }              // SE0332 — an input
+   |                ^^^^ input named `this`
+   = note: the generated C++ spells this name as written, because the compiler never parses or rewrites a body (I1, §6.11)
+   = help: choose another name; `this_` or a longer word both work
+
+error[SE0332]: `or` is a C++ keyword
+  --> tests/emit/lib/cppkw/CppKw.se:30:16
+   |
+30 |     vars     { or: double(-); }                // SE0332 — a var
+   |                ^^ var named `or`
+   = note: the generated C++ spells this name as written, because the compiler never parses or rewrites a body (I1, §6.11)
+   = help: choose another name; `or_` or a longer word both work
+
+error[SE0332]: `int` is a C++ keyword
+  --> tests/emit/lib/cppkw/CppKw.se:29:25
+   |
+29 |     states   { discrete int: int(-) = 0; }     // SE0332 — a state
+   |                         ^^^ state named `int`
+   = note: the generated C++ spells this name as written, because the compiler never parses or rewrites a body (I1, §6.11)
+   = help: choose another name; `int_` or a longer word both work
+
+7 errors emitted

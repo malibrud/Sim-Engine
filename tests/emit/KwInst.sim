@@ -1,0 +1,11 @@
+// §6.11 / I5 — C++ keywords as instance names. See lib/cppkw/KwInst.se.
+sim KwInst {
+    root: cppkw.KwInst {};
+    step:     1 (ms);
+    duration: 2 (ms);
+
+    record: {
+        file: "kwinst.csv";
+        signals { delete.y; new.y; }
+    }
+}

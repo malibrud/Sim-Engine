@@ -24,6 +24,16 @@ bool is_reserved_member(const std::string& n) {
     return false;
 }
 
+// "se.sig.ct" -> {"se", "sig", "ct"}
+std::vector<std::string> raw_segments(const std::string& dotted) {
+    std::vector<std::string> out(1);
+    for (char c : dotted) {
+        if (c == '.') out.emplace_back();
+        else out.back() += c;
+    }
+    return out;
+}
+
 std::string join_path(const std::string& dir, const std::string& rel) {
     if (dir.empty() || dir == ".") return rel;
     if (dir.back() == '/' || dir.back() == '\\') return dir + rel;
@@ -211,6 +221,10 @@ FileInfo* Resolver::load_file(const std::string& pkg, const std::string& name,
                      help("the declared path must equal the directory path "
                           "relative to the root that resolved it (§2.2)")});
     }
+
+    // §6.11 — a package segment is a C++ namespace.
+    for (const std::string& seg : raw_segments(pkg))
+        cpp_name_ok(*file->src, seg, file->ast->package.loc, "package segment");
 
     FileInfo* raw = file.get();
     program_.files.push_back(std::move(file));
@@ -576,7 +590,9 @@ RecordInfo* Resolver::resolve_record(FileInfo& file, const ast::TypeDef& def,
     program_.records[fq] = std::move(owned);
     record_by_def_[&def] = info;
 
+    cpp_name_ok(*file.src, def.name, def.loc, "type");
     for (const ast::FieldDecl& f : def.fields) {
+        cpp_name_ok(*file.src, f.name, f.loc, "record field");
         Field field;
         field.name = f.name;
         field.loc = f.loc;
@@ -606,6 +622,9 @@ EnumInfo* Resolver::resolve_enum(FileInfo& file, const ast::EnumDef& def, const 
     program_.enum_order.push_back(info);
     enum_by_def_[&def] = info;
 
+    cpp_name_ok(*file.src, def.name, def.loc, "finite type");
+    for (const ast::Enumerator& e : def.enumerators)
+        cpp_name_ok(*file.src, e.name, e.loc, "enumerator");
     if (def.enumerators.empty())
         diag_.error("SE0319", *file.src, def.loc, "finite type `" + def.name + "` has no enumerators",
                     "empty",
@@ -682,6 +701,7 @@ NodeInfo* Resolver::resolve_node(FileInfo& file, const ast::NodeDef& def,
     info->composite = def.is_composite();
     program_.nodes[fq] = std::move(owned);
     node_by_def_[&def] = info;
+    cpp_name_ok(*file.src, def.name, def.loc, "node");
 
     // §6.2a — the unit parameters must be known before any declaration in this
     // node is resolved, since every port unit may reference them.
@@ -867,12 +887,27 @@ void Resolver::check_node(const NodeInfo& info) {
     check_structure(info);
 }
 
+bool Resolver::cpp_name_ok(const Source& src, const std::string& name, Loc loc,
+                           const char* what) {
+    if (!is_cpp_keyword(name)) return true;
+    diag_.error("SE0332", src, loc, "`" + name + "` is a C++ keyword",
+                std::string(what) + " named `" + name + "`",
+                {note("the generated C++ spells this name as written, because the compiler "
+                      "never parses or rewrites a body (I1, §6.11)"),
+                 help("choose another name; `" + name + "_` or a longer word both work")});
+    return false;
+}
+
 void Resolver::check_members(const NodeInfo& info) {
     const Source& src = *info.file->src;
     // §6.11 — one namespace for settings, inputs, outputs, vars, natives and
     // instance names. States sit in a separate namespace FROM OUTPUTS ONLY.
     std::map<std::string, Loc> seen;
     auto claim = [&](const std::string& name, Loc loc, const char* what) {
+        // §6.11 — an instance name reaches C++ only through a generated
+        // identifier, which steps around a keyword itself (I5); every other
+        // member is spelled verbatim in bodies.
+        if (std::string(what) != "instance" && !cpp_name_ok(src, name, loc, what)) return;
         if (is_reserved_member(name)) {
             diag_.error("SE0331", src, loc,
                         "member `" + name + "` shadows a generated accessor",

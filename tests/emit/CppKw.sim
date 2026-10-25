@@ -1,0 +1,6 @@
+// §6.11 — C++ keywords as names. See lib/cppkw/CppKw.se.
+sim CppKw {
+    root: cppkw.CppKw {};
+    step:     1 (ms);
+    duration: 1 (ms);
+}

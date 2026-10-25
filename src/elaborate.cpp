@@ -2896,6 +2896,10 @@ bool Elaborator::run(const ast::SimFile& sim, const Source& sim_src,
         // The root itself may be a leaf, in which case its model path is empty
         // — §13.2 addresses from the root without naming it.
         std::string base = leaf.path.empty() ? "root" : ident_of(leaf.path);
+        // An instance name is a path segment, never a body's name for
+        // anything, so a C++ keyword is legal there (§6.11) and the identifier
+        // simply steps around it: `delete` at the root becomes `delete_`.
+        if (is_cpp_keyword(base)) base += "_";
         int& n = used[base];
         leaf.ident = n == 0 ? base : base + "_" + std::to_string(n);
         ++n;

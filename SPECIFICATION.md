@@ -2140,6 +2140,20 @@ A member may not be named `param`, `in`, `out`, `state`, `der`, `next`,
 `adjust`, `transition`, `prev`, `var`, `log`, or `sim`, since the generated
 code puts objects by those names in scope of bodies (`SE0331`).
 
+**No name the generated C++ spells verbatim may be a C++ keyword** (`SE0332`):
+a setting, port, state, var or native; a record field; an enumerator; a node,
+`type` or `finite` name; a package segment, which becomes a namespace. Appendix
+B reserves only the DSL's own words, so without this rule `settings { new: … }`
+would be accepted here and rejected by the C++ compiler, at a line in generated
+code. The list is C++20's keywords and alternative tokens — `class`, `int`,
+`delete`, `enum`, `and`, `or` and the rest.
+
+**An instance name is exempt.** It is a path segment, and nothing in a body
+names it; it reaches C++ only through an identifier the generator makes from the
+path, which steps around a keyword itself (`delete` becomes `delete_`), as I5
+says generated identifiers are its business. `node delete : Valve {};` is
+legal, and `delete.y` records under that name.
+
 ### 6.12 Consistency rules
 
 Typo safety comes from these rules rather than from a marker keyword on
@@ -4452,6 +4466,7 @@ of thing wearing the same name.
 | `SE0321` | 3 | `collapsed` or `expanded` on a leaf, or on an instance of one |
 | `SE0330` | 3 | Duplicate member name in a node |
 | `SE0331` | 3 | Member name shadows a generated accessor |
+| `SE0332` | 3 | A name the generated C++ spells verbatim is a C++ keyword |
 | `SE0340` | 3 | `outputs` declared but no `output()` |
 | `SE0341` | 3 | Continuous state declared but no `derivative()` |
 | `SE0342` | 3 | Discrete state declared but no `next()` |
@@ -4773,6 +4788,9 @@ units       use         vars
 `param`, `in`, `out`, `state`, `der`, `next`, `adjust`, `transition`, `prev`,
 `var`, `log`, and `sim` are additionally unavailable as member names (§6.11), because the generated code
 puts objects by those names in scope of bodies.
+
+C++'s keywords are not reserved here but are refused as names where the generated
+C++ spells a name verbatim (§6.11, `SE0332`).
 
 Everything else — including every sim-file key, every build primitive, `when`,
 every platform atom, and `tests`, `set` and `within` (§6.13) — is contextual and

@@ -1,0 +1,17 @@
+// §6.11 / I5 — an instance may be named after a C++ keyword: the name is a
+// path segment, and the identifier the generator makes from it steps around
+// the keyword (`delete` -> `delete_`). The case compiles, runs and records
+// `delete.y` by the name the model gave it.
+package cppkw;
+
+node KwInst {
+    structure {
+        node delete : One {};
+        node new    : One {};
+    }
+}
+
+node One {
+    outputs { y: double(-); }
+    output() { out.y = 1.0; }
+}
