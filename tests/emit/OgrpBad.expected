@@ -1,0 +1,53 @@
+﻿error[SE0353]: `x` is not a declared output of `NotAnOutput`
+  --> tests/emit/lib/ogrpbad/OgrpBad.se:22:15
+   |
+22 |     output y, x() { out.y = 0.0; }               // SE0353 — `x` is a state
+   |               ^ not an output
+   = note: an output group lists the outputs it writes, bare (§8.3a)
+   = help: declared outputs: `y`
+
+error[SE0354]: output `z` is written by two output groups
+  --> tests/emit/lib/ogrpbad/OgrpBad.se:28:12
+   |
+28 |     output z()    { }                            // SE0354 — `z` is claimed already
+   |            ^ claimed again
+   = note: each output is written by exactly one method (§8.3a)  [tests/emit/lib/ogrpbad/OgrpBad.se:27]
+
+error[SE0354]: output `y` listed twice in one group
+  --> tests/emit/lib/ogrpbad/OgrpBad.se:33:15
+   |
+33 |     output y, y() { out.y = 0.0; }               // SE0354 — listed twice
+   |               ^ listed twice
+   = note: a group's list is a set of outputs (§8.3a)
+
+error[SE0355]: `output()` has nothing left to write
+  --> tests/emit/lib/ogrpbad/OgrpBad.se:40:5
+   |
+40 |     output()   { }                               // SE0355 — nothing left to write
+   |     ^^^^^^ nothing to write
+   = note: a bare `output()` writes the outputs no group names, and the groups of `NothingLeft` name all of them (§8.3a)
+   = help: remove it, or move an output out of a group's list
+
+error[SE0340]: no output method of `Uncovered` computes `z`, `w`
+  --> tests/emit/lib/ogrpbad/OgrpBad.se:43:6
+   |
+43 | node Uncovered {                                 // SE0340 — nothing writes `z`, `w`
+   |      ^^^^^^^^^ outputs nothing writes
+   = note: each output is written by exactly one method: the group that names it, or else the bare `output()` (§8.3a)
+   = help: name them in a group, or add an `output(...)` to write the rest
+
+error[SE0352]: `output()` is defined twice in `TwoBare`
+  --> tests/emit/lib/ogrpbad/OgrpBad.se:51:5
+   |
+51 |     output() { out.y = 0.0; }                    // SE0352 — a second `output()`
+   |     ^^^^^^ second definition
+   = note: a lifecycle method is defined at most once (§6.12)  [tests/emit/lib/ogrpbad/OgrpBad.se:50]
+
+error[SE0352]: `derivative()` is defined twice in `TwoDerivatives`
+  --> tests/emit/lib/ogrpbad/OgrpBad.se:59:5
+   |
+59 |     derivative() { der.x = 0.0; }                // SE0352 — used to vanish silently
+   |     ^^^^^^^^^^ second definition
+   = note: a lifecycle method is defined at most once (§6.12)  [tests/emit/lib/ogrpbad/OgrpBad.se:58]
+
+7 errors emitted

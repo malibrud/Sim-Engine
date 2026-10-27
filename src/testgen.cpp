@@ -497,6 +497,39 @@ bool TestGen::run(const std::string& fq, const Source& req_src, Loc req_loc) {
             const char* mname[5] = {"output", "derivative", "next", "transition", "adjust"};
             for (int k = 0; k < 5; ++k) {
                 if (!call[k]) continue;
+                if (k == 0) {
+                    // §6.13 / §8.3a — every output method that writes an
+                    // expected `out.` column, in declaration order, into one
+                    // `Out`; with groups each writes through its own view.
+                    calls << "            " << node_t << "::Out out{};\n";
+                    for (const NodeInfo::OutputGroup& g : info_->out_groups) {
+                        bool wanted = false;
+                        for (const Col& c : expected)
+                            if (c.ns == "out" && g.writes_port(c.ast->segs.front()))
+                                wanted = true;
+                        if (!wanted) continue;
+                        const std::string in = "in_" + g.cpp;
+                        calls << "            " << node_t << "::In_" << g.cpp << " " << in
+                              << "{};\n";
+                        for (const std::string& p : g.method->params) {
+                            auto it = ins.find(p);
+                            if (it == ins.end()) continue;
+                            for (const auto& kv : it->second)
+                                calls << "            " << in << "." << kv.first << " = "
+                                      << kv.second << ";\n";
+                        }
+                        calls << "            n." << g.cpp << "(" << in << ", ";
+                        if (!info_->grouped) {
+                            calls << "out);\n";
+                            continue;
+                        }
+                        calls << "{";
+                        for (std::size_t i = 0; i < g.writes.size(); ++i)
+                            calls << (i ? ", " : "") << "out." << g.writes[i];
+                        calls << "});\n";
+                    }
+                    continue;
+                }
                 const ast::Method* meth = info_->method(order[k]);
                 const std::string in = std::string("in_") + mname[k];
                 calls << "            " << node_t << "::In_" << mname[k] << " " << in
@@ -508,10 +541,7 @@ bool TestGen::run(const std::string& fq, const Source& req_src, Loc req_loc) {
                         calls << "            " << in << "." << kv.first << " = " << kv.second
                               << ";\n";
                 }
-                if (k == 0)
-                    calls << "            " << node_t << "::Out out{};\n"
-                          << "            n.output(" << in << ", out);\n";
-                else if (k == 1)
+                if (k == 1)
                     calls << "            n.derivative(" << in << ", s." << ident << "_der);\n";
                 else if (k == 2)
                     calls << "            n.next(" << in << ", s.nxt." << ident << ");\n";

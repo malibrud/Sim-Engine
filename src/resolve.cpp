@@ -875,11 +875,102 @@ NodeInfo* Resolver::resolve_node(FileInfo& file, const ast::NodeDef& def,
         }
     }
 
+    resolve_output_groups(*info);
     check_node(*info);
     return info;
 }
 
 // ─── Checks ──────────────────────────────────────────────────────────────────
+
+// §8.3a — the output methods, and what each writes. It is also the one place a
+// method defined twice is caught (SE0352, §6.12): `method()` takes the first
+// it finds, so a second `derivative()` used to vanish without a word. An output
+// group is a different method from the bare `output()`, keyed by what it names,
+// so it is checked against the other groups instead.
+void Resolver::resolve_output_groups(NodeInfo& info) {
+    if (!info.def) return;
+    const Source& src = *info.file->src;
+    std::map<ast::Method::Which, const ast::Method*> bare_of;
+    std::map<std::string, const ast::Method*> claimed;   // output -> its group
+    const std::size_t none = static_cast<std::size_t>(-1);
+    std::size_t bare = none;                             // the bare `output()`'s index
+
+    for (const ast::Method& m : info.def->methods) {
+        if (!m.writes.empty()) {
+            info.grouped = true;
+            NodeInfo::OutputGroup g;
+            g.method = &m;
+            g.cpp = "output_" + m.writes.front();
+            for (std::size_t i = 0; i < m.writes.size(); ++i) {
+                const std::string& w = m.writes[i];
+                const Loc loc = i < m.write_locs.size() ? m.write_locs[i] : m.loc;
+                if (!info.output(w)) {
+                    std::vector<Attachment> att;
+                    att.push_back(note("an output group lists the outputs it writes, "
+                                       "bare (§8.3a)"));
+                    if (!info.outputs.empty()) {
+                        std::string have = "declared outputs: ";
+                        for (std::size_t k = 0; k < info.outputs.size(); ++k) {
+                            if (k) have += ", ";
+                            have += "`" + info.outputs[k].name + "`";
+                        }
+                        att.push_back(help(have));
+                    }
+                    diag_.error("SE0353", src, loc,
+                                "`" + w + "` is not a declared output of `" +
+                                    info.def->name + "`",
+                                "not an output", std::move(att));
+                    continue;
+                }
+                auto [it, fresh] = claimed.emplace(w, &m);
+                if (!fresh) {
+                    const bool same = it->second == &m;
+                    diag_.error("SE0354", src, loc,
+                                same ? "output `" + w + "` listed twice in one group"
+                                     : "output `" + w + "` is written by two output groups",
+                                same ? "listed twice" : "claimed again",
+                                {note(same ? std::string("a group's list is a set of "
+                                                         "outputs (§8.3a)")
+                                           : "each output is written by exactly one "
+                                             "method (§8.3a)",
+                                      same ? std::string()
+                                           : info.file->path + ":" +
+                                                 std::to_string(it->second->loc.line))});
+                    continue;
+                }
+                g.writes.push_back(w);
+            }
+            info.out_groups.push_back(std::move(g));
+            continue;
+        }
+        auto [it, fresh] = bare_of.emplace(m.which, &m);
+        if (!fresh) {
+            diag_.error("SE0352", src, m.loc,
+                        "`" + std::string(m.name()) + "()` is defined twice in `" +
+                            info.def->name + "`",
+                        "second definition",
+                        {note("a lifecycle method is defined at most once (§6.12)",
+                              info.file->path + ":" + std::to_string(it->second->loc.line))});
+            continue;
+        }
+        if (m.which == ast::Method::Which::Output) {
+            bare = info.out_groups.size();
+            info.out_groups.push_back({&m, {}, "output"});
+        }
+    }
+
+    // The bare `output()` writes the rest, in declaration order.
+    if (bare == none) return;
+    NodeInfo::OutputGroup& rest = info.out_groups[bare];
+    for (const Field& f : info.outputs)
+        if (!claimed.count(f.name)) rest.writes.push_back(f.name);
+    if (info.grouped && rest.writes.empty() && !info.outputs.empty())
+        diag_.error("SE0355", src, rest.method->loc,
+                    "`output()` has nothing left to write", "nothing to write",
+                    {note("a bare `output()` writes the outputs no group names, and the "
+                          "groups of `" + info.def->name + "` name all of them (§8.3a)"),
+                     help("remove it, or move an output out of a group's list")});
+}
 
 void Resolver::check_node(const NodeInfo& info) {
     check_members(info);
@@ -956,7 +1047,10 @@ void Resolver::check_methods(const NodeInfo& info) {
     const Source& src = *info.file->src;
     const ast::NodeDef& def = *info.def;
 
-    const ast::Method* out_m = info.method(ast::Method::Which::Output);
+    // The bare `output()`, not a group: groups are §8.3a's business.
+    const ast::Method* out_m = nullptr;
+    for (const NodeInfo::OutputGroup& g : info.out_groups)
+        if (g.method->writes.empty()) out_m = g.method;
     const ast::Method* der_m = info.method(ast::Method::Which::Derivative);
     const ast::Method* next_m = info.method(ast::Method::Which::Next);
     const ast::Method* adj_m = info.method(ast::Method::Which::Adjust);
@@ -964,11 +1058,31 @@ void Resolver::check_methods(const NodeInfo& info) {
 
     // §6.12 — typo safety, per kind, in both directions.
     if (!info.composite) {
-        if (!info.outputs.empty() && !out_m)
+        if (!info.outputs.empty() && info.out_groups.empty())
             diag_.error("SE0340", src, def.loc,
                         "node `" + def.name + "` declares outputs but no `output()`",
                         "no `output()`",
                         {note("nothing else could compute them (§6.12)")});
+        else if (info.grouped) {
+            // §8.3a — groups and no bare `output()` to take the rest.
+            std::string missing;
+            std::size_t n = 0;
+            for (const Field& f : info.outputs) {
+                bool written = false;
+                for (const NodeInfo::OutputGroup& g : info.out_groups)
+                    written = written || g.writes_port(f.name);
+                if (written) continue;
+                missing += std::string(n++ ? ", " : "") + "`" + f.name + "`";
+            }
+            if (n)
+                diag_.error("SE0340", src, def.loc,
+                            "no output method of `" + def.name + "` computes " + missing,
+                            n == 1 ? "an output nothing writes" : "outputs nothing writes",
+                            {note("each output is written by exactly one method: the group "
+                                  "that names it, or else the bare `output()` (§8.3a)"),
+                             help("name " + std::string(n == 1 ? "it" : "them") +
+                                  " in a group, or add an `output(...)` to write the rest")});
+        }
         if (info.has_continuous() && !der_m)
             diag_.error("SE0341", src, def.loc,
                         "node `" + def.name +
@@ -994,6 +1108,7 @@ void Resolver::check_methods(const NodeInfo& info) {
                     "`derivative()` in a node with no `continuous` states",
                     "nothing to write",
                     {note("`derivative()` may write only `der.`, and `Der` is empty here")});
+    // A group in such a node is SE0353 on its first name instead.
     if (out_m && info.outputs.empty())
         diag_.error("SE0344", src, out_m->loc,
                     "`output()` in a node with no outputs", "nothing to write",

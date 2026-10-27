@@ -1,0 +1,12 @@
+// SPECIFICATION 8.3a -- only `output` names what it writes before its
+// parameter list. Every other method writes a whole accessor (SE0201).
+package tests;
+
+node ListOnDerivative {
+    inputs  { u: double(-); }
+    outputs { y: double(-); }
+    states  { continuous x: double(-) = 0.0; }
+
+    output y() { out.y = state.x; }
+    derivative x(u) { der.x = in.u; }
+}

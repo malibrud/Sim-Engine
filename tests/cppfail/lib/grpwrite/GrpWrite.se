@@ -1,0 +1,23 @@
+// A model that MUST NOT COMPILE. It lives outside tests/emit so the normal
+// "generated C++ compiles clean" loop does not sweep it up.
+//
+// §8.3a makes a group's write list a compile-time fact: the group writes
+// through `Out_w_out`, a struct of references to the outputs it names and
+// nothing else (§15.4). `sec` cannot see the body — bodies are verbatim — so
+// the list is only as good as the view, and nothing else in the suite would
+// notice a refactor that handed every group the whole `Out`.
+//
+// The `out.w_out` line is the positive half: the group's own output MUST
+// compile. The runner requires the failure to name `tau_out` and `Out_w_out`
+// and to say nothing about `w_out`.
+package grpwrite;
+
+node GrpWrite {
+    outputs { w_out: double(rad/s); tau_out: double(N*m); }
+
+    output w_out() {
+        out.tau_out = 1.0;   // must NOT compile: `tau_out` is the other group's
+        out.w_out = 2.0;     // must compile
+    }
+    output tau_out() { out.tau_out = 0.0; }
+}

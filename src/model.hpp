@@ -218,6 +218,24 @@ struct NodeInfo {
     // Instances, by name, resolved to their definitions (composites only).
     std::map<std::string, const NodeInfo*> children;
 
+    // §8.3a — one per output method, in declaration order. `writes` is what
+    // the method writes: the names a group lists, or, for the bare
+    // `output()`, every output no group names. `cpp` is the member it lowers
+    // to (§15.4), and `grouped` says whether any method names its outputs —
+    // without groups the bare one keeps today's `In_output` and `Out&`.
+    struct OutputGroup {
+        const ast::Method* method = nullptr;
+        std::vector<std::string> writes;
+        std::string cpp;   // "output", or "output_<first>"
+        bool writes_port(const std::string& p) const {
+            for (const std::string& w : writes)
+                if (w == p) return true;
+            return false;
+        }
+    };
+    std::vector<OutputGroup> out_groups;
+    bool grouped = false;
+
     const ast::Method* method(ast::Method::Which w) const;
     const Field* input(const std::string& n) const;
     const Field* output(const std::string& n) const;
@@ -498,6 +516,16 @@ struct Model {
 
     std::vector<Leaf> leaves;          // elaboration order
     std::vector<std::size_t> order;    // §8.5 topological order, into `leaves`
+    // §8.5, §8.3a — the sort's real vertices: one output method of one leaf,
+    // `group` indexing `node->out_groups`, in the order the output pass calls
+    // them. A leaf with no output method is one vertex with `group == none`,
+    // so `order` above — each leaf at its first vertex — still lists them all.
+    struct OutputCall {
+        static constexpr std::size_t none = static_cast<std::size_t>(-1);
+        std::size_t leaf = 0;
+        std::size_t group = none;
+    };
+    std::vector<OutputCall> calls;
     std::size_t n_states = 0;
 
     // §6.4a — two lowerings, chosen by whether ANY state carries an extent

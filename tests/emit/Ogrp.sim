@@ -1,0 +1,18 @@
+// §8.3a — output groups. See lib/ogrp/Ogrp.se: three copies of one loop,
+// which run.ps1 checks are identical and settle as the algebra says.
+sim Ogrp {
+    root: ogrp.Ogrp {};
+
+    step:     1 (ms);
+    solver:   rk4;
+    duration: 0.5 (s);
+
+    record: {
+        file: "ogrp.csv";
+        signals {
+            la.state.w;
+            lb.state.w;
+            lc.state.w;
+        }
+    }
+}

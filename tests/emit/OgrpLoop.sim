@@ -1,0 +1,7 @@
+// §8.6 / §8.3a — the false loop output groups exist to remove, written the
+// old way: SE0510, with the help that names the group to split off.
+sim OgrpLoop {
+    root: ogrploop.OgrpLoop {};
+    step:     1 (ms);
+    duration: 1 (ms);
+}

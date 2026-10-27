@@ -1,0 +1,98 @@
+// §8.3a — output groups end to end. Three copies of one closed loop:
+//
+//     load.w -> gear.w_in -> gear.w_out -> ctl.w -> ctl.tau
+//            -> gear.tau_in -> gear.tau_out -> load.tau
+//
+// A gear with one `output(w_in, tau_in)` closes that loop algebraically
+// (SE0510; see ../ogrploop). Here it does not:
+//
+//   a  `Gear`       two named groups;
+//   b  `GearRest`   one named group, and a bare `output()` writing the rest;
+//   c  `GearSplit`  the composite the language used to require, two leaves.
+//
+// run.ps1 checks that all three speeds are identical, column for column, and
+// that the loop settles where the algebra says it does.
+package ogrp;
+
+node Ogrp {
+    outputs { w_a: double(rad/s); w_b: double(rad/s); w_c: double(rad/s); }
+    structure {
+        node la : Load {};  node ga : Gear {};      node ca : Ctl {};
+        node lb : Load {};  node gb : GearRest {};  node cb : Ctl {};
+        node lc : Load {};  node gc : GearSplit {}; node cc : Ctl {};
+
+        la.w --> ga.w_in;  ga.w_out --> ca.w;  ca.tau --> ga.tau_in;  ga.tau_out --> la.tau;
+        lb.w --> gb.w_in;  gb.w_out --> cb.w;  cb.tau --> gb.tau_in;  gb.tau_out --> lb.tau;
+        lc.w --> gc.w_in;  gc.w_out --> cc.w;  cc.tau --> gc.tau_in;  gc.tau_out --> lc.tau;
+
+        la.w --> self.w_a;
+        lb.w --> self.w_b;
+        lc.w --> self.w_c;
+    }
+}
+
+// An inertia: integrates its torque, reads no input in output().
+node Load {
+    settings { inertia: double(kg*m^2) = 0.5; }
+    inputs   { tau: double(N*m); }
+    outputs  { w: double(rad/s); }
+    states   { continuous w: double(rad/s) = 0.0; }
+
+    output()        { out.w = state.w; }
+    derivative(tau) { der.w = in.tau / param.inertia; }
+}
+
+// A proportional speed controller: feeds its input straight through.
+node Ctl {
+    settings { gain: double(N*m*s/rad) = 2.0; w_ref: double(rad/s) = 30.0; }
+    inputs   { w: double(rad/s); }
+    outputs  { tau: double(N*m); }
+
+    output(w) { out.tau = param.gain * (param.w_ref - in.w); }
+}
+
+node Gear {
+    settings { ratio: double(-) = 3.0; }
+    inputs   { w_in: double(rad/s); tau_in: double(N*m); }
+    outputs  { w_out: double(rad/s); tau_out: double(N*m); }
+
+    output w_out(w_in)     { out.w_out = param.ratio * in.w_in; }
+    output tau_out(tau_in) { out.tau_out = param.ratio * in.tau_in; }
+}
+
+node GearRest {
+    settings { ratio: double(-) = 3.0; }
+    inputs   { w_in: double(rad/s); tau_in: double(N*m); }
+    outputs  { w_out: double(rad/s); tau_out: double(N*m); }
+
+    output(tau_in)     { out.tau_out = param.ratio * in.tau_in; }
+    output w_out(w_in) { out.w_out = param.ratio * in.w_in; }
+}
+
+node GearSplit {
+    settings { ratio: double(-) = 3.0; }
+    inputs   { w_in: double(rad/s); tau_in: double(N*m); }
+    outputs  { w_out: double(rad/s); tau_out: double(N*m); }
+    structure {
+        node kin : GearKin { ratio = param.ratio; };
+        node trq : GearTorque { ratio = param.ratio; };
+        self.w_in --> kin.w_in;
+        self.tau_in --> trq.tau_in;
+        kin.w_out --> self.w_out;
+        trq.tau_out --> self.tau_out;
+    }
+}
+
+node GearKin {
+    settings { ratio: double(-); }
+    inputs   { w_in: double(rad/s); }
+    outputs  { w_out: double(rad/s); }
+    output(w_in) { out.w_out = param.ratio * in.w_in; }
+}
+
+node GearTorque {
+    settings { ratio: double(-); }
+    inputs   { tau_in: double(N*m); }
+    outputs  { tau_out: double(N*m); }
+    output(tau_in) { out.tau_out = param.ratio * in.tau_in; }
+}

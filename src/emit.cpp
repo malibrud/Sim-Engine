@@ -135,6 +135,20 @@ std::string cpp_type(const Type& t) {
     return t.is_record ? t.record->cpp_name : t.scalar;
 }
 
+// §8.3a — the output group a method is, or null for every method but `output`.
+const NodeInfo::OutputGroup* group_of(const NodeInfo& n, const ast::Method& m) {
+    for (const NodeInfo::OutputGroup& g : n.out_groups)
+        if (g.method == &m) return &g;
+    return nullptr;
+}
+
+// §15.4 — the struct a group writes through: references to its outputs and
+// nothing else. Named for the first output it lists; `Out_output` is the bare
+// method's share beside groups, and cannot collide, `output` being a keyword.
+std::string out_view(const NodeInfo::OutputGroup& g) {
+    return g.method->writes.empty() ? "Out_output" : "Out_" + g.method->writes.front();
+}
+
 // §6.4 — the three state kinds, spelled once. A state is in `x`, in `dis`, or
 // in `fin`, and every block walk below asks exactly one of these.
 template <class S> bool is_cont(const S& s) { return s.kind == ast::StateKind::Continuous; }
@@ -402,6 +416,7 @@ private:
     // The expression a consumer reads for one of its inputs (§15.3).
     std::string input_expr(const Leaf& leaf, const std::string& port) const;
     std::string in_braces(const Leaf& leaf, const ast::Method* method) const;
+    std::string output_call(const Leaf& leaf, const NodeInfo::OutputGroup& g) const;
     bool needs_tick_gate(const Leaf& leaf) const;
     bool minor_step_output(const Leaf& leaf) const;
     // True when the leaf's decimation is a runtime value rather than 1.
@@ -751,6 +766,21 @@ void Emitter::leaf_class(const NodeInfo& node) {
     rows.clear();
     for (const Field& f : node.outputs) rows.push_back(field_row(f.name, f.type, "{}"));
     emit_struct(o_, "Out  ", rows);
+    // §8.3a / §15.4 — with output groups, each method writes through a view of
+    // its own outputs only, bound to `Out`'s members at the call site, so
+    // writing another group's output is "no such member" as reading an
+    // undeclared input is.
+    if (node.grouped) {
+        for (const NodeInfo::OutputGroup& g : node.out_groups) {
+            rows.clear();
+            for (const std::string& w : g.writes) {
+                Row r = field_row(w, node.output(w)->type, "");
+                r.type += "&";
+                rows.push_back(r);
+            }
+            emit_struct(o_, out_view(g).c_str(), rows);
+        }
+    }
 
     // FEEDTHROUGH IS THIS: one In view per method, holding exactly the inputs
     // that method's DSL signature listed. Reading an input you did not declare
@@ -762,8 +792,9 @@ void Emitter::leaf_class(const NodeInfo& node) {
     for (const ast::Method& meth : node.def->methods) {
         using W = ast::Method::Which;
         if (meth.which == W::Init || meth.which == W::Final) continue;
+        const NodeInfo::OutputGroup* grp = group_of(node, meth);
         const std::string name =
-            std::string("In_") + (meth.which == W::Output       ? "output"
+            std::string("In_") + (meth.which == W::Output       ? (grp ? grp->cpp : "output")
                                   : meth.which == W::Derivative ? "derivative"
                                   : meth.which == W::Next       ? "next"
                                   : meth.which == W::Transition ? "transition"
@@ -843,7 +874,16 @@ void Emitter::leaf_class(const NodeInfo& node) {
                 o_ << "    void init() {\n";
                 break;
             case W::Output:
-                o_ << "    void output(const In_output& in, Out& out) const {\n";
+                if (node.grouped) {
+                    // §8.3a — each group is its own member. The view is taken by
+                    // value: it is a struct of references, built at the call site
+                    // from the node's slice of `sig`, so a copy writes through.
+                    const NodeInfo::OutputGroup* g = group_of(node, meth);
+                    o_ << "    void " << g->cpp << "(const In_" << g->cpp << "& in, "
+                       << out_view(*g) << " out) const {\n";
+                } else {
+                    o_ << "    void output(const In_output& in, Out& out) const {\n";
+                }
                 break;
             case W::Derivative:
                 o_ << "    void derivative(const In_derivative& in, Der& der) const {\n";
@@ -983,6 +1023,19 @@ std::string Emitter::in_braces(const Leaf& leaf, const ast::Method* method) cons
         r += input_expr(leaf, method->params[i]);
     }
     return r + "}";
+}
+
+// One output method's call, `;` included. Without groups it is the one
+// `output()` writing the node's whole slice of `sig`; with them (§8.3a) each
+// method gets a view of its own outputs, bound here.
+std::string Emitter::output_call(const Leaf& leaf, const NodeInfo::OutputGroup& g) const {
+    const std::string slice = "sig." + leaf.ident;
+    std::string r = leaf.ident + "." + g.cpp + "(" + in_braces(leaf, g.method) + ", ";
+    if (!leaf.node->grouped) return r + slice + ");";
+    r += "{";
+    for (std::size_t i = 0; i < g.writes.size(); ++i)
+        r += (i ? ", " : "") + slice + "." + g.writes[i];
+    return r + "});";
 }
 
 // EVERY slow node is gated. This used to exempt a slow node whose `output()`
@@ -1837,12 +1890,10 @@ void Emitter::sim_output_pass() {
     o_ << "\n// Topological order over feedthrough edges (§8.5). A node with an empty\n";
     o_ << "// In_output is a sort root and needs no predecessor.\n";
     o_ << "void Sim::Impl::output_pass(std::uint64_t k) {\n";
-    for (std::size_t i : m_.order) {
-        const Leaf& leaf = m_.leaves[i];
-        const ast::Method* out = leaf.node->method(ast::Method::Which::Output);
-        if (!out) continue;
-        const std::string call = leaf.ident + ".output(" + in_braces(leaf, out) + ", sig." +
-                                 leaf.ident + ");";
+    for (const Model::OutputCall& c : m_.calls) {
+        if (c.group == Model::OutputCall::none) continue;
+        const Leaf& leaf = m_.leaves[c.leaf];
+        const std::string call = output_call(leaf, leaf.node->out_groups[c.group]);
         if (needs_tick_gate(leaf))
             o_ << "    if (k % " << decim_of(leaf) << " == 0) " << call << "\n";
         else
@@ -1859,13 +1910,12 @@ void Emitter::sim_output_pass() {
     o_ << "// value it published at the tick.\n";
     o_ << "void Sim::Impl::output_pass_minor() {\n";
     bool any = false;
-    for (std::size_t i : m_.order) {
-        const Leaf& leaf = m_.leaves[i];
-        const ast::Method* out = leaf.node->method(ast::Method::Which::Output);
-        if (!out || !minor_step_output(leaf)) continue;
+    for (const Model::OutputCall& c : m_.calls) {
+        if (c.group == Model::OutputCall::none) continue;
+        const Leaf& leaf = m_.leaves[c.leaf];
+        if (!minor_step_output(leaf)) continue;
         any = true;
-        o_ << "    " << leaf.ident << ".output(" << in_braces(leaf, out) << ", sig."
-           << leaf.ident << ");\n";
+        o_ << "    " << output_call(leaf, leaf.node->out_groups[c.group]) << "\n";
     }
     if (!any) o_ << "    // every node is zero-order held across the step\n";
     o_ << "}\n";
@@ -3069,7 +3119,6 @@ Topo Emitter::topology() const {
     // ---- wires -------------------------------------------------------------
     for (std::size_t i = 0; i < m_.leaves.size(); ++i) {
         const Leaf& leaf = m_.leaves[i];
-        const ast::Method* out = leaf.node->method(ast::Method::Which::Output);
         for (const Field& port : leaf.ports_in) {
             auto it = leaf.inputs.find(port.name);
             if (it == leaf.inputs.end()) continue;   // unconnected; SE0430 said so
@@ -3079,9 +3128,10 @@ Topo Emitter::topology() const {
             e.dst = i;
             e.dst_port = port.name;
             // The SAME question schedule.cpp asks when it builds the sort: only
-            // `output()`'s parameter list constrains ordering (§8.3).
-            if (out)
-                for (const std::string& q : out->params)
+            // an output method's parameter list constrains ordering (§8.3), and
+            // with groups (§8.3a) the port orders the schedule if any lists it.
+            for (const NodeInfo::OutputGroup& g : leaf.node->out_groups)
+                for (const std::string& q : g.method->params)
                     if (q == port.name) e.feedthrough = true;
 
             if (src.kind == InputSource::Kind::Boundary) {

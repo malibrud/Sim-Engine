@@ -167,6 +167,10 @@ struct Method {               // §8.1
     Which which = Which::Init;
     std::vector<std::string> params;   // the feedthrough set for output()
     std::vector<Loc> param_locs;
+    // §8.3a — the outputs an output group names, between `output` and its
+    // parameter list. Empty on a bare `output()` and on every other method.
+    std::vector<std::string> writes;
+    std::vector<Loc> write_locs;
     Verbatim body;
     Loc loc;
 

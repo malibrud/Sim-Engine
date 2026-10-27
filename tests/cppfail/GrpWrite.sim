@@ -1,0 +1,9 @@
+// See lib/grpwrite/GrpWrite.se. This model is expected to emit cleanly and
+// then FAIL to compile.
+sim GrpWrite {
+    root: grpwrite.GrpWrite {};
+
+    step:     1 (ms);
+    solver:   rk4;
+    duration: 1 (ms);
+}

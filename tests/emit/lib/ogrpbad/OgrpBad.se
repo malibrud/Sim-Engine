@@ -1,0 +1,60 @@
+// §8.3a / §6.12 — every way an output group can be misdeclared that `sec`
+// must refuse, and a lifecycle method defined twice. Each node is wrong in
+// exactly one way. None has inputs, so nothing here is about wiring.
+package ogrpbad;
+
+node OgrpBad {
+    structure {
+        node a : NotAnOutput {};
+        node b : TwoGroups {};
+        node c : TwiceInOne {};
+        node d : NothingLeft {};
+        node e : Uncovered {};
+        node f : TwoBare {};
+        node g : TwoDerivatives {};
+    }
+}
+
+node NotAnOutput {
+    outputs { y: double(-); }
+    states  { discrete x: double(-) = 0.0; }
+    next()        { next.x = state.x; }
+    output y, x() { out.y = 0.0; }               // SE0353 — `x` is a state
+}
+
+node TwoGroups {
+    outputs { y: double(-); z: double(-); }
+    output y, z() { out.y = 0.0; out.z = 0.0; }
+    output z()    { }                            // SE0354 — `z` is claimed already
+}
+
+node TwiceInOne {
+    outputs { y: double(-); }
+    output y, y() { out.y = 0.0; }               // SE0354 — listed twice
+}
+
+node NothingLeft {
+    outputs { y: double(-); z: double(-); }
+    output y() { out.y = 0.0; }
+    output z() { out.z = 0.0; }
+    output()   { }                               // SE0355 — nothing left to write
+}
+
+node Uncovered {                                 // SE0340 — nothing writes `z`, `w`
+    outputs { y: double(-); z: double(-); w: double(-); }
+    output y() { out.y = 0.0; }
+}
+
+node TwoBare {
+    outputs { y: double(-); }
+    output() { out.y = 1.0; }
+    output() { out.y = 0.0; }                    // SE0352 — a second `output()`
+}
+
+node TwoDerivatives {
+    outputs { y: double(-); }
+    states  { continuous x: double(-) = 0.0; }
+    output()     { out.y = state.x; }
+    derivative() { der.x = 1.0; }
+    derivative() { der.x = 0.0; }                // SE0352 — used to vanish silently
+}

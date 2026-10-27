@@ -2363,6 +2363,32 @@ bool Parser::parse_method(ast::NodeDef& node) {
     const std::string name = tok_.text;
     advance();
 
+    // §8.3a — an output group names what it writes before its parameter list.
+    if (at(Tok::Ident)) {
+        if (m.which != ast::Method::Which::Output) {
+            err("SE0201", tok_.loc,
+                "`" + name + "` does not take a list of names before its parameters",
+                "expected `(`",
+                {note("only `output` names what it writes, because only `out.` can be "
+                      "written in pieces: an output group is the feedthrough set of "
+                      "the outputs it lists (\xc2\xa7""8.3a)"),
+                 help("write `" + name + "(...) { ... }`")});
+            return false;
+        }
+        for (;;) {
+            m.writes.push_back(tok_.text);
+            m.write_locs.push_back(tok_.loc);
+            advance();
+            if (!accept(Tok::Comma)) break;
+            if (!at(Tok::Ident)) {
+                err("SE0201", tok_.loc,
+                    std::string("expected an output name, found ") + describe(tok_.kind),
+                    "expected an output name");
+                return false;
+            }
+        }
+    }
+
     if (!at(Tok::LParen)) {
         // The ruling of 2026-07-27: parens are required on every lifecycle
         // method, so `init { … }` is an error with a precise fix.

@@ -892,7 +892,11 @@ if (-not $cl) {
         @{ name = 'PureStop'; member = 'stop';    legal = 'time';
            note = 'sim.stop in output() is a compile error at the .se line, and sim.time() is not' },
         @{ name = 'PureReq';  member = 'require'; legal = 'check_near';
-           note = 'sim.require in output() is a compile error at the .se line, and sim.check_near() is not' }
+           note = 'sim.require in output() is a compile error at the .se line, and sim.check_near() is not' },
+        # Section 8.3a: an output group writes through a view of its own
+        # outputs, so writing another group's is "no such member" too.
+        @{ name = 'GrpWrite'; member = 'tau_out'; legal = 'w_out'; type = 'Out_w_out';
+           note = "an output group writing another group's output is a compile error at the .se line" }
     )
     foreach ($cf in $cppFail) {
         $cfOut = Join-Path $emitOut $cf.name
@@ -910,7 +914,9 @@ if (-not $cl) {
         $cfLog  = (& powershell -NoProfile -File '.\build.ps1' exe 2>&1 | Out-String)
         $cfCode = $LASTEXITCODE
         Pop-Location
-        $named  = ($cfLog -match ("'" + $cf.member + "'")) -and ($cfLog -match 'RunView')
+        $cfType = 'RunView'
+        if ($cf.type) { $cfType = $cf.type }
+        $named  = ($cfLog -match ("'" + $cf.member + "'")) -and ($cfLog -match $cfType)
         $quiet  = ($cfLog -notmatch ("'" + $cf.legal + "'"))
         $atLine = ($cfLog -match ($cf.name + '\.se'))
         if ($cfCode -ne 0 -and $named -and $quiet -and $atLine) {
@@ -934,16 +940,18 @@ if (-not $cl) {
     # tests/nodetest holds the runner's own cases: `Every` reaches every
     # column namespace, `EnumCells` writes enumerators in cells (SPEC 7.2a),
     # `Machine` checks `transition.` and runs it ahead of `adjust.` with the
-    # given state as `prev` (SPEC 6.4c), and `Fails` MUST fail -- a runner that
-    # printed "ok" for everything would pass every other case here. The script
+    # given state as `prev` (SPEC 6.4c), `Groups` calls only the output groups
+    # a set expects, each through its own view (SPEC 8.3a), and `Fails` MUST
+    # fail -- a runner that printed "ok" for everything would pass every other
+    # case here. The script
     # is invoked in process: its `exit` returns here with $LASTEXITCODE set.
     $nodetest = Join-Path $root 'tools/nodetest.ps1'
     & $nodetest -I @('stdlib', 'tests/nodetest/lib') -Out 'build/test' `
         'stdlib' 'tests/nodetest/lib/nt/Every.se' 'tests/nodetest/lib/nt/EnumCells.se' `
-        'tests/nodetest/lib/nt/Machine.se'
+        'tests/nodetest/lib/nt/Machine.se' 'tests/nodetest/lib/nt/Groups.se'
     if ($LASTEXITCODE -eq 0) {
         Write-Host ("ok   tools/nodetest.ps1 : every tested stdlib node, nt.Every, " +
-                    "nt.EnumCells and nt.Machine") -ForegroundColor Green
+                    "nt.EnumCells, nt.Machine and nt.Groups") -ForegroundColor Green
         $script:pass++
     } else {
         Write-Host ("FAIL tools/nodetest.ps1 : node tests, exit " + $LASTEXITCODE) `
@@ -1668,6 +1676,47 @@ if (-not $cl) {
             $script:pass++
         } else {
             Write-Host ("FAIL build/emit/Finite : " + $why) -ForegroundColor Red
+            $script:fail++
+        }
+    }
+
+    # SPECIFICATION 8.3a -- output groups. See tests/emit/lib/ogrp/Ogrp.se:
+    # three copies of a loop that one output() per gear would close
+    # algebraically. Two named groups, a group plus the bare output(), and the
+    # split composite must give IDENTICAL speeds on every row, since all three
+    # evaluate the same expressions in the same order; and the speed must be
+    # 10 (1 - exp(-36 t)), the loop's closed form (w_ref / ratio, and
+    # J / (ratio^2 gain) = 1/36 s), to the CSV's nine figures.
+    if ($emitDirs.ContainsKey('Ogrp')) {
+        $ogDir = $emitDirs['Ogrp']
+        Push-Location $ogDir
+        & '.\build\release\bin\Ogrp.exe' 2>&1 | Out-Null
+        $ran = ($LASTEXITCODE -eq 0)
+        Pop-Location
+        $csv = Join-Path $ogDir 'ogrp.csv'
+        $why = 'did not run'
+        $worst = 0.0
+        if ($ran -and (Test-Path $csv)) {
+            $why = ''
+            $rows = @(Get-Content $csv | Select-Object -Skip 1 | Where-Object { $_ })
+            if ($rows.Count -ne 501) { $why = "$($rows.Count) rows, not 501" }
+            for ($k = 0; $k -lt $rows.Count -and -not $why; $k++) {
+                $c = $rows[$k] -split ','
+                if ($c[1] -ne $c[2] -or $c[1] -ne $c[3]) {
+                    $why = "row $k differs: " + $c[1] + ', ' + $c[2] + ', ' + $c[3]
+                }
+                $w = 10.0 * (1.0 - [Math]::Exp(-36.0 * [double]$c[0]))
+                $worst = [Math]::Max($worst, [Math]::Abs([double]$c[1] - $w))
+            }
+            if (-not $why -and $worst -ge 1e-6) { $why = 'max error ' + $worst }
+        }
+        if (-not $why) {
+            Write-Host ("ok   build/emit/Ogrp : output groups break the false loop, named, " +
+                        "with the bare rest, and split agree exactly, max error " +
+                        $worst.ToString('E2')) -ForegroundColor Green
+            $script:pass++
+        } else {
+            Write-Host ("FAIL build/emit/Ogrp : " + $why) -ForegroundColor Red
             $script:fail++
         }
     }

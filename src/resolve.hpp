@@ -84,6 +84,7 @@ private:
     // SE0332 if `name` is a C++ keyword: true when it is usable. `what` names
     // the declaration for the message: "setting", "enumerator", "package".
     bool cpp_name_ok(const Source& src, const std::string& name, Loc loc, const char* what);
+    void resolve_output_groups(NodeInfo& info);
     void check_node(const NodeInfo& info);
     void check_members(const NodeInfo& info);
     void check_methods(const NodeInfo& info);

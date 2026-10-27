@@ -649,9 +649,27 @@ void write_node(std::ostream& o, const FileDocs& fd, const ast::NodeDef& n, cons
         o << "\n";
     }
     if (!n.is_composite()) {
+        // §8.3a — with output groups, one line per method, each naming what it
+        // writes; the bare `output()` writes the rest.
+        bool grouped = false;
+        for (const ast::Method& m : n.methods) grouped = grouped || !m.writes.empty();
         for (const ast::Method& m : n.methods) {
             if (m.which != ast::Method::Which::Output) continue;
-            o << "**Direct feedthrough:** ";
+            o << "**Direct feedthrough";
+            if (grouped) {
+                std::vector<std::string> writes = m.writes;
+                if (writes.empty())
+                    for (const ast::FieldDecl& f : n.outputs) {
+                        bool named = false;
+                        for (const ast::Method& g : n.methods)
+                            for (const std::string& w : g.writes) named = named || w == f.name;
+                        if (!named) writes.push_back(f.name);
+                    }
+                o << " of ";
+                for (std::size_t i = 0; i < writes.size(); ++i)
+                    o << (i ? ", " : "") << code(writes[i]);
+            }
+            o << ":** ";
             if (m.params.empty()) o << "none; `output()` reads no inputs.";
             for (std::size_t i = 0; i < m.params.size(); ++i)
                 o << (i ? ", " : "") << code(m.params[i]);

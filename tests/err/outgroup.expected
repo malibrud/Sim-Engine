@@ -1,0 +1,9 @@
+﻿error[SE0201]: `derivative` does not take a list of names before its parameters
+  --> tests/err/outgroup.se:11:16
+   |
+11 |     derivative x(u) { der.x = in.u; }
+   |                ^ expected `(`
+   = note: only `output` names what it writes, because only `out.` can be written in pieces: an output group is the feedthrough set of the outputs it lists (§8.3a)
+   = help: write `derivative(...) { ... }`
+
+1 error emitted

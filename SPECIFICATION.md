@@ -2928,8 +2928,8 @@ cycle enters on for the sake of some of its outputs, and the cycle leaves on
 another. The help names that fix first:
 
 ```
-   = help: if `tau_s` does not need `w_s`, give it its own group:
-           `output tau_s(tau_out) { ... }` (§8.3a)
+   = help: if `w_out` does not need `tau_out`, give it its own group in
+           `FinalDrive`: `output w_out(w_s) { ... }` (§8.3a)
 ```
 
 The generator cannot tell whether `tau_s` needs `w_s`, since bodies are
@@ -4050,10 +4050,11 @@ escape hatch is not a guarantee, so the storage itself carries the constness.
   root and the loop-breaker.
 - **An output group's write set is a struct of references.** A group (§8.3a)
   lowers to its own const member, `output_<first>(const In_output_<first>&,
-  Out_<first>&)`, named for the first output it lists. `Out_<first>` holds a
+  Out_<first>)`, named for the first output it lists. `Out_<first>` holds a
   reference to each output the group names and nothing else, bound at the call
-  site to the node's slice of `sig`, so writing another group's output is "no
-  such member" too. A bare `output()` beside groups gets the same kind of view
+  site to the node's slice of `sig` — so it is passed by value, and the copy
+  writes through — and writing another group's output is "no such member"
+  too. A bare `output()` beside groups gets the same kind of view
   of the outputs left to it, `Out_output`; without groups it keeps `Out&`.
 - **I/O confinement is name withholding.** Native aliases and the full `log`
   object are emitted into the preamble of the methods where they are legal, and

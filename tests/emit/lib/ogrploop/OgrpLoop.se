@@ -1,0 +1,40 @@
+// §8.6 / §8.3a — a gear whose one `output()` feeds through both inputs. The
+// controller turns `w_out` into `tau_in`, so the gear depends on itself:
+// SE0510. The help names the fix — `w_out` needs only `w_in` — before the
+// latch-or-delay advice that applies to a real loop.
+package ogrploop;
+
+node OgrpLoop {
+    structure {
+        node load : Load {};
+        node gear : Gear {};
+        node ctl  : Ctl {};
+        load.w --> gear.w_in;
+        gear.w_out --> ctl.w;
+        ctl.tau --> gear.tau_in;
+        gear.tau_out --> load.tau;
+    }
+}
+
+node Load {
+    inputs  { tau: double(N*m); }
+    outputs { w: double(rad/s); }
+    states  { continuous w: double(rad/s) = 0.0; }
+    output()        { out.w = state.w; }
+    derivative(tau) { der.w = in.tau; }
+}
+
+node Ctl {
+    inputs  { w: double(rad/s); }
+    outputs { tau: double(N*m); }
+    output(w) { out.tau = -in.w; }
+}
+
+node Gear {
+    inputs  { w_in: double(rad/s); tau_in: double(N*m); }
+    outputs { w_out: double(rad/s); tau_out: double(N*m); }
+    output(w_in, tau_in) {
+        out.w_out = 3.0 * in.w_in;
+        out.tau_out = 3.0 * in.tau_in;
+    }
+}

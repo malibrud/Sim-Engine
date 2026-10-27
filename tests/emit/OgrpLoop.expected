@@ -1,0 +1,13 @@
+﻿error[SE0510]: algebraic loop through 2 nodes
+  --> tests/emit/lib/ogrploop/OgrpLoop.se:36:5
+   |
+36 |     output(w_in, tau_in) {
+   |     ^^^^^^ in this feedthrough set
+   = note: cycle: gear.w_out -> ctl.w -> ctl.tau -> gear.tau_in
+   = note: ctl.output(w) declares feedthrough on `w`  [tests/emit/lib/ogrploop/OgrpLoop.se:30]
+   = note: gear.output(tau_in) declares feedthrough on `tau_in`  [tests/emit/lib/ogrploop/OgrpLoop.se:36]
+   = help: if `w_out` does not need `tau_in`, give it its own group in `Gear`: `output w_out(w_in) { ... }` (§8.3a)
+   = help: drop `w` from `ctl.output(w)` and latch it in `next()`, or insert a unit delay / integrator anywhere in the cycle
+   = note: an algebraic loop is an implicit equation z = f(z) with no valid ordering; it is rejected rather than solved, because most are modelling mistakes and iteration has no statable worst-case execution time (§8.6)
+
+1 error emitted

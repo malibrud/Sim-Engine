@@ -1,0 +1,6 @@
+// §8.3a / §6.12 — output-group misuse. See lib/ogrpbad/OgrpBad.se.
+sim OgrpBad {
+    root: ogrpbad.OgrpBad {};
+    step:     1 (ms);
+    duration: 1 (ms);
+}
