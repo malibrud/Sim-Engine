@@ -2161,7 +2161,7 @@ functions:
 
 | If the node has… | it must define… | else |
 |---|---|---|
-| `outputs` | `output()` | `SE0340` |
+| `outputs` | an output method for each output (§8.3a) | `SE0340` |
 | any `continuous` state | `derivative()` | `SE0341` |
 | any `discrete` state | `next()` | `SE0342` |
 | any `finite` state | `transition()` | `SE0347` |
@@ -2169,7 +2169,14 @@ functions:
 The converse is checked for all four, since none could do anything: `output()`
 in a node with no outputs (`SE0344`), `derivative()` in a node with no continuous
 states (`SE0343`), `next()` in a node with no discrete states (`SE0345`), and
-`transition()` in a node with no finite states (`SE0348`).
+`transition()` in a node with no finite states (`SE0348`). A bare `output()`
+whose every output a group has already claimed is the same mistake one level
+down (`SE0355`).
+
+Every lifecycle method is defined at most once (`SE0352`). An output group is
+not a second `output()` but a different method, named by what it writes, so
+§8.3a's rules — each output written exactly once — are the ones that apply to
+it.
 
 **`adjust()` (§6.4b) is checked in that direction only.** `adjust()` in a node
 with no `continuous` states is `SE0346`, since `Adj` would be empty and the body
@@ -2264,7 +2271,10 @@ init()  →  output()  →  derivative()  →  next()  →  transition()  →  a
 
 `init()` always runs — a node whose `output()` reads a `var` its `init()`
 computed is not callable before it, which is most discrete filters — and the
-rest run only if some column names what they write. So a set expecting only
+rest run only if some column names what they write. In a node with output
+groups (§8.3a), `output()` in that line means the groups that write an
+expected `out.` column, in declaration order; they write disjoint outputs and
+read only the row's inputs, so the order among them cannot matter. So a set expecting only
 `var.g` supplies no inputs and calls nothing else. The order is fixed rather
 than derived so that a set expecting several fields means one thing.
 
@@ -2396,7 +2406,7 @@ instantiated.
 **The comment supplies prose; the source supplies everything else.** For each
 file's public definition (§2.3) the page shows its unit parameters; its settings
 with their types and defaults as written; its inputs, outputs and states with
-their types and initial conditions; whether `output()` reads any input (§8.3);
+their types and initial conditions; which inputs each output method reads (§8.3);
 and each set of its `tests` section (§6.13) as a table of worked examples. A doc
 comment therefore never restates a type, unit, default or initial condition: the
 page already shows it, and a restatement is a second copy that can disagree.
@@ -2671,7 +2681,8 @@ This is the load-bearing part of the design.
 Write permissions, exactly:
 
 - `init()` writes `state` (the IC escape hatch) and `var`; may touch natives; may log.
-- `output()` writes `out` only.
+- `output()` writes `out` only — and an output group (§8.3a) only the outputs it
+  names.
 - `derivative()` writes `der` only.
 - `next()` writes `next` only.
 - `transition()` writes `transition` only.
@@ -2763,6 +2774,68 @@ on_step(ws)           { … }                                         // constra
 - Only `output()`'s list constrains ordering. `derivative()`, `next()`,
   `transition()`, `adjust()` and `on_step()` run after outputs have propagated,
   so their lists are documentation plus enforcement.
+- Granularity is per-port on the output side too, where a node asks for it:
+  §8.3a splits `output()` into groups, each with its own list.
+
+### 8.3a Output groups
+
+One `output()` gives a node one feedthrough set, and that set applies to every
+output. A node whose outputs depend on different inputs therefore looks, to the
+sort, like a loop that is not there. The standard case is a reduction between
+two bodies: the speed goes one way through it and the torque comes back.
+
+```
+node FinalDrive {
+    settings { ratio: double(-); }
+    inputs   { w_s: double(rad/s);   tau_out: double(N*m); }
+    outputs  { w_out: double(rad/s); tau_s:   double(N*m); }
+
+    output w_out(w_s)     { out.w_out = param.ratio * in.w_s; }
+    output tau_s(tau_out) { out.tau_s = param.ratio * in.tau_out; }
+}
+```
+
+Written as one `output(w_s, tau_out)`, `w_out` would feed through `tau_out`,
+and the transmission that turns `w_out` into `tau_out` would close a cycle:
+`SE0510`. The only way out used to be splitting the node in two — a composite,
+two leaves, and every setting declared twice — for no reason the physics gave.
+
+- **An output method may name the outputs it writes**, between `output` and
+  its parameter list. That is an *output group*. Its parameter list is the
+  feedthrough set of exactly those outputs; several are written
+  `output a, b (u, v) { … }`.
+- **A bare `output(...)` writes every output no group names.** With no groups
+  that is every output, which is the one `output()` of §8.3: a node that never
+  names a group is unaffected by any of this.
+- **Each output is written by exactly one method.** Named by two groups, or
+  twice by one: `SE0354`. A group naming something that is not an output of
+  the node: `SE0353`. A bare `output()` left with nothing to write: `SE0355`.
+  An output that no method computes: `SE0340`.
+- **Only `output` takes a name list.** Every other method writes a whole
+  accessor, so a list there would select nothing (`SE0201`).
+- **The sort's vertices are groups** (§8.5). A group with an empty list is a
+  sort root, and a group may read an input wired from another group of the
+  same node, as long as no cycle runs through them.
+- **Holding is per node.** A held node (§9.3) holds all of its groups: each is
+  evaluated at the node's sample ticks and none at the solver's stages, so a
+  hold never splits a node's outputs across two instants.
+
+**Sharing goes through helpers.** Outputs that need a common intermediate
+either stay in one group or each call a helper (§11.4) that computes it. A
+helper receives what its caller passes, and a group can pass only the inputs
+its own list declares — the others do not exist in its `In_` struct (§15.4) —
+so a helper cannot carry a dependency past the sort. The price is
+recomputation, which is also what `output()` and `derivative()` pay today when
+both need the same intermediate at one stage, and it buys something: each call
+computes from the values of that moment, so nothing it returns can be stale.
+
+A hand-made cache does not have that property, and `const` does not stop one.
+A `mutable` member or a `static` in a helper survives from one pass to the
+next, so a value computed at an RK4 stage, at a trial state the trajectory
+never visits, can reach the next tick's `output()`; one computed in step 2 can
+reach an `adjust()` that runs after the modes have moved (§9.6). The generator
+cannot see it, because bodies are verbatim. A compute-once intermediate that the
+language manages is Appendix C 8e.
 
 ### 8.4 Why mutation is confined
 
@@ -2800,6 +2873,11 @@ the form that ends a run is `sim.require`, on the line above.
 Build a graph over the nodes active on the current tick:
 
 > **edge M → N** iff M sources one of N's **feedthrough** inputs.
+
+Strictly, the vertices are output methods rather than nodes: in a node with
+output groups (§8.3a) the edge runs from the group that writes the source port
+to the group whose list names the input, and a node without groups is one
+vertex, as before.
 
 - `output()` runs in **topological order** of that graph.
 - `derivative()`, `next()`, `transition()` and `adjust()` may run in **any**
@@ -2843,6 +2921,20 @@ error[SE0510]: algebraic loop through 3 nodes
 ```
 
 Beating "Algebraic loop detected involving block X" is an explicit goal.
+
+When the method through which the cycle passes a node writes more than one
+output, the loop may be §8.3a's false one: the method lists the input the
+cycle enters on for the sake of some of its outputs, and the cycle leaves on
+another. The help names that fix first:
+
+```
+   = help: if `tau_s` does not need `w_s`, give it its own group:
+           `output tau_s(tau_out) { ... }` (§8.3a)
+```
+
+The generator cannot tell whether `tau_s` needs `w_s`, since bodies are
+verbatim, so the help is conditional; it is offered whenever the method writes
+more than one output.
 
 Note that a loop solver **cannot** be a library node: it must re-evaluate an
 entire SCC iteratively, which requires engine support.
@@ -3956,6 +4048,13 @@ escape hatch is not a guarantee, so the storage itself carries the constness.
   method, holding exactly the inputs that method's DSL signature listed. Reading
   an undeclared input is "no such member". An **empty** `In_output` is the sort
   root and the loop-breaker.
+- **An output group's write set is a struct of references.** A group (§8.3a)
+  lowers to its own const member, `output_<first>(const In_output_<first>&,
+  Out_<first>&)`, named for the first output it lists. `Out_<first>` holds a
+  reference to each output the group names and nothing else, bound at the call
+  site to the node's slice of `sig`, so writing another group's output is "no
+  such member" too. A bare `output()` beside groups gets the same kind of view
+  of the outputs left to it, `Out_output`; without groups it keeps `Out&`.
 - **I/O confinement is name withholding.** Native aliases and the full `log`
   object are emitted into the preamble of the methods where they are legal, and
   simply are not declared elsewhere. Natives are `mutable`, which gives up
@@ -4467,7 +4566,7 @@ of thing wearing the same name.
 | `SE0330` | 3 | Duplicate member name in a node |
 | `SE0331` | 3 | Member name shadows a generated accessor |
 | `SE0332` | 3 | A name the generated C++ spells verbatim is a C++ keyword |
-| `SE0340` | 3 | `outputs` declared but no `output()` |
+| `SE0340` | 3 | An output that no output method computes |
 | `SE0341` | 3 | Continuous state declared but no `derivative()` |
 | `SE0342` | 3 | Discrete state declared but no `next()` |
 | `SE0343` | 3 | `derivative()` in a node with no continuous states |
@@ -4478,6 +4577,10 @@ of thing wearing the same name.
 | `SE0348` | 3 | `transition()` in a node with no finite states |
 | `SE0350` | 3 | Method parameter is not a declared input |
 | `SE0351` | 3 | Duplicate method parameter |
+| `SE0352` | 3 | A lifecycle method defined twice (two bare `output()`s included) |
+| `SE0353` | 3 | An output group names something that is not an output |
+| `SE0354` | 3 | An output named by two output groups, or twice by one |
+| `SE0355` | 3 | A bare `output()` beside groups that already name every output |
 | `SE0360` | 3 | A test column names no member of the node |
 | `SE0361` | 3 | A test column is on the wrong side of the operator |
 | `SE0362` | 3 | An expected column names a method the node does not define |
@@ -4665,7 +4768,9 @@ literal_endpoint= [ "+" | "-" ] NUMBER [ unit ] ;
 
 lifecycle_method= "init"    "(" ")"                VERBATIM_BLOCK
                 | "final"   "(" [ IDENT ] ")"      VERBATIM_BLOCK
-                | "output"  "(" [ ident_list ] ")" VERBATIM_BLOCK
+                | "output"  [ ident_list ] "(" [ ident_list ] ")" VERBATIM_BLOCK
+                    (* the first list, when present, names the outputs this
+                       group writes; see §8.3a *)
                 | "derivative" "(" [ ident_list ] ")" VERBATIM_BLOCK
                 | "next"       "(" [ ident_list ] ")" VERBATIM_BLOCK
                 | "transition" "(" [ ident_list ] ")" VERBATIM_BLOCK
@@ -4891,6 +4996,17 @@ Recorded so that their absence is visibly deliberate.
    of its own. Adding `==`/`!=`/`?:` would still emit as one C++ expression, so
    §7.4's (c) survives; what it costs is a boolean value in an evaluator whose
    every value has so far been a number with a dimension.
+8e. **Compute-once intermediates** (§8.3a). Output groups share work through
+   helpers that recompute it, and so do `output()` and `derivative()` at one
+   stage — a node computing an expensive intermediate pays for it once per
+   reader. A declared intermediate, computed once per pass by its own method
+   with its own input list and sorted like an output, would remove that. It
+   is safe only under two rules, both of which come from §9.6: it may not be
+   read in `adjust()`, which runs after the finite commit and would see a
+   value computed under the old modes; and it is recomputed at every stage
+   even in a held node, whose `derivative()` runs at trial states while its
+   outputs hold. To be decided together with recording intermediates, which
+   want DSL types and units where sharing wants opaque C++ ones.
 
 **Deliberately deferred, each a pure extension:**
 
