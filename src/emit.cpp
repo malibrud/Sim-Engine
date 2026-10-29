@@ -143,10 +143,11 @@ const NodeInfo::OutputGroup* group_of(const NodeInfo& n, const ast::Method& m) {
 }
 
 // §15.4 — the struct a group writes through: references to its outputs and
-// nothing else. Named for the first output it lists; `Out_output` is the bare
-// method's share beside groups, and cannot collide, `output` being a keyword.
+// nothing else. Named for the first output it lists; `Out_default` is the share
+// of `output default()`, and cannot collide, no output being nameable `default`
+// (SE0332).
 std::string out_view(const NodeInfo::OutputGroup& g) {
-    return g.method->writes.empty() ? "Out_output" : "Out_" + g.method->writes.front();
+    return g.method->is_default ? "Out_default" : "Out_" + g.method->writes.front();
 }
 
 // §6.4 — the three state kinds, spelled once. A state is in `x`, in `dis`, or

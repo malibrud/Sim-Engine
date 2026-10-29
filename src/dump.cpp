@@ -299,7 +299,8 @@ void dump(std::ostream& o, const ast::ModelFile& f) {
 
         for (const ast::Method& m : n.methods) {
             o << indent(2) << m.name();
-            for (std::size_t k = 0; k < m.writes.size(); ++k)   // §8.3a
+            if (m.is_default) o << " default";                  // §8.3a
+            for (std::size_t k = 0; k < m.writes.size(); ++k)
                 o << (k ? ", " : " ") << m.writes[k];
             o << "(";
             for (std::size_t k = 0; k < m.params.size(); ++k)

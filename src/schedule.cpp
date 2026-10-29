@@ -31,10 +31,12 @@ std::string where(const Model& m, const Call& c) {
     return leaf.node->file->path + ":" + std::to_string(loc.line);
 }
 
-// `output` or `output a, b` — the method's head as its author wrote it.
+// `output`, `output default` or `output a, b` — the method's head as its
+// author wrote it.
 std::string head(const NodeInfo::OutputGroup* g) {
     std::string h = "output";
     if (!g) return h;
+    if (g->method->is_default) return h + " default";
     for (std::size_t i = 0; i < g->method->writes.size(); ++i)
         h += (i ? ", " : " ") + g->method->writes[i];
     return h;

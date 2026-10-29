@@ -2375,7 +2375,23 @@ bool Parser::parse_method(ast::NodeDef& node) {
                  help("write `" + name + "(...) { ... }`")});
             return false;
         }
+        // `default` is contextual: SE0332 keeps it from ever naming an output,
+        // so here it can only be the catch-all's marker, and it stands alone.
+        auto lone_default = [&](Loc loc) {
+            err("SE0201", loc, "`default` stands alone", "not alone",
+                {note("`output default(...)` writes every output no group names, so "
+                      "it lists none of its own (\xc2\xa7""8.3a)"),
+                 help("write the named outputs as a group of their own")});
+            return false;
+        };
         for (;;) {
+            if (tok_.text == "default") {
+                if (!m.writes.empty()) return lone_default(tok_.loc);
+                m.is_default = true;
+                advance();
+                if (at(Tok::Comma)) return lone_default(tok_.loc);
+                break;
+            }
             m.writes.push_back(tok_.text);
             m.write_locs.push_back(tok_.loc);
             advance();

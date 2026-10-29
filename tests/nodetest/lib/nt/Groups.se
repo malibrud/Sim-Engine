@@ -1,6 +1,6 @@
 // SPECIFICATION 8.3a / 6.13 -- output groups in a node test. A set expecting
 // one group's output calls that group alone, with only its own inputs; a set
-// expecting outputs of two groups and the bare `output()` calls all three,
+// expecting outputs of two groups and `output default()` calls all three,
 // each through its own view of the one `Out`.
 package nt;
 
@@ -9,9 +9,9 @@ node Groups {
     inputs   { w_in: double(rad/s); tau_in: double(N*m); bias: double(N*m); }
     outputs  { w_out: double(rad/s); tau_out: double(N*m); tau_sum: double(N*m); }
 
-    output w_out(w_in)     { out.w_out = param.ratio * in.w_in; }
-    output tau_out(tau_in) { out.tau_out = param.ratio * in.tau_in; }
-    output(tau_in, bias)   { out.tau_sum = param.ratio * in.tau_in + in.bias; }
+    output w_out(w_in)           { out.w_out = param.ratio * in.w_in; }
+    output tau_out(tau_in)       { out.tau_out = param.ratio * in.tau_in; }
+    output default(tau_in, bias) { out.tau_sum = param.ratio * in.tau_in + in.bias; }
 
     tests {
         set "speed goes up by the ratio", in.w_in = out.w_out {

@@ -890,7 +890,11 @@ NodeInfo* Resolver::resolve_node(FileInfo& file, const ast::NodeDef& def,
 void Resolver::resolve_output_groups(NodeInfo& info) {
     if (!info.def) return;
     const Source& src = *info.file->src;
-    std::map<ast::Method::Which, const ast::Method*> bare_of;
+    // A method as its author wrote its head: `output default`, or its name.
+    auto head = [](const ast::Method& m) {
+        return m.is_default ? std::string("output default") : std::string(m.name());
+    };
+    std::map<std::pair<ast::Method::Which, bool>, const ast::Method*> bare_of;
     std::map<std::string, const ast::Method*> claimed;   // output -> its group
     const std::size_t none = static_cast<std::size_t>(-1);
     std::size_t bare = none;                             // the bare `output()`'s index
@@ -943,31 +947,66 @@ void Resolver::resolve_output_groups(NodeInfo& info) {
             info.out_groups.push_back(std::move(g));
             continue;
         }
-        auto [it, fresh] = bare_of.emplace(m.which, &m);
+        // `output()` and `output default()` are distinct methods here, so a
+        // leaf with both is told which one is wrong (SE0356, SE0357) rather
+        // than that it defines one twice.
+        auto [it, fresh] = bare_of.emplace(std::make_pair(m.which, m.is_default), &m);
         if (!fresh) {
             diag_.error("SE0352", src, m.loc,
-                        "`" + std::string(m.name()) + "()` is defined twice in `" +
-                            info.def->name + "`",
+                        "`" + head(m) + "()` is defined twice in `" + info.def->name + "`",
                         "second definition",
                         {note("a lifecycle method is defined at most once (§6.12)",
                               info.file->path + ":" + std::to_string(it->second->loc.line))});
             continue;
         }
         if (m.which == ast::Method::Which::Output) {
-            bare = info.out_groups.size();
-            info.out_groups.push_back({&m, {}, "output"});
+            // The default takes the slot if both appear: the bare one is an
+            // error beside groups, and the default one is without them.
+            if (bare != none && !m.is_default) continue;
+            const NodeInfo::OutputGroup g{&m, {}, m.is_default ? "output_default" : "output"};
+            if (bare != none) {
+                info.out_groups[bare] = g;
+            } else {
+                bare = info.out_groups.size();
+                info.out_groups.push_back(g);
+            }
         }
     }
 
-    // The bare `output()` writes the rest, in declaration order.
+    // §8.3a — `default` marks the catch-all exactly when groups exist.
+    auto params_of = [](const ast::Method& m) {
+        std::string p;
+        for (std::size_t i = 0; i < m.params.size(); ++i) p += (i ? ", " : "") + m.params[i];
+        return p;
+    };
+    for (const auto& [key, m] : bare_of) {
+        if (key.first != ast::Method::Which::Output) continue;
+        if (info.grouped && !key.second)
+            diag_.error("SE0356", src, m->loc, "a bare `output()` beside output groups",
+                        "not marked as the default",
+                        {note("beside groups, the method that writes the outputs no group "
+                              "names says so (§8.3a)"),
+                         help("write `output default(" + params_of(*m) + ") { ... }`")});
+        if (!info.grouped && key.second)
+            diag_.error("SE0357", src, m->loc,
+                        "`output default()` in a node with no output groups",
+                        "the default of nothing",
+                        {note("`default` marks the method that writes what the groups of "
+                              "a node leave; `" + info.def->name + "` has no groups, so its "
+                              "one output method writes every output (§8.3a)"),
+                         help("write `output(" + params_of(*m) + ") { ... }`")});
+    }
+
+    // The default method writes the rest, in declaration order.
     if (bare == none) return;
     NodeInfo::OutputGroup& rest = info.out_groups[bare];
     for (const Field& f : info.outputs)
         if (!claimed.count(f.name)) rest.writes.push_back(f.name);
     if (info.grouped && rest.writes.empty() && !info.outputs.empty())
         diag_.error("SE0355", src, rest.method->loc,
-                    "`output()` has nothing left to write", "nothing to write",
-                    {note("a bare `output()` writes the outputs no group names, and the "
+                    "`" + head(*rest.method) + "()` has nothing left to write",
+                    "nothing to write",
+                    {note("`output default()` writes the outputs no group names, and the "
                           "groups of `" + info.def->name + "` name all of them (§8.3a)"),
                      help("remove it, or move an output out of a group's list")});
 }
@@ -1079,9 +1118,10 @@ void Resolver::check_methods(const NodeInfo& info) {
                             "no output method of `" + def.name + "` computes " + missing,
                             n == 1 ? "an output nothing writes" : "outputs nothing writes",
                             {note("each output is written by exactly one method: the group "
-                                  "that names it, or else the bare `output()` (§8.3a)"),
+                                  "that names it, or else `output default()` (§8.3a)"),
                              help("name " + std::string(n == 1 ? "it" : "them") +
-                                  " in a group, or add an `output(...)` to write the rest")});
+                                  " in a group, or add an `output default(...)` to write "
+                                  "the rest")});
         }
         if (info.has_continuous() && !der_m)
             diag_.error("SE0341", src, def.loc,

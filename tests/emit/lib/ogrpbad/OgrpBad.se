@@ -12,6 +12,9 @@ node OgrpBad {
         node e : Uncovered {};
         node f : TwoBare {};
         node g : TwoDerivatives {};
+        node h : BareBeside {};
+        node i : LoneDefault {};
+        node j : TwoDefaults {};
     }
 }
 
@@ -37,7 +40,7 @@ node NothingLeft {
     outputs { y: double(-); z: double(-); }
     output y() { out.y = 0.0; }
     output z() { out.z = 0.0; }
-    output()   { }                               // SE0355 — nothing left to write
+    output default() { }                         // SE0355 — nothing left to write
 }
 
 node Uncovered {                                 // SE0340 — nothing writes `z`, `w`
@@ -57,4 +60,22 @@ node TwoDerivatives {
     output()     { out.y = state.x; }
     derivative() { der.x = 1.0; }
     derivative() { der.x = 0.0; }                // SE0352 — used to vanish silently
+}
+
+node BareBeside {
+    outputs { y: double(-); z: double(-); }
+    output y() { out.y = 0.0; }
+    output()   { out.z = 0.0; }                  // SE0356 — the catch-all says `default`
+}
+
+node LoneDefault {
+    outputs { y: double(-); }
+    output default() { out.y = 0.0; }           // SE0357 — no groups to be the default of
+}
+
+node TwoDefaults {
+    outputs { y: double(-); z: double(-); }
+    output y()       { out.y = 0.0; }
+    output default() { out.z = 0.0; }
+    output default() { out.z = 1.0; }           // SE0352 — a second `output default()`
 }

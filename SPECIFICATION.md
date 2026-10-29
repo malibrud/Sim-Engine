@@ -2169,9 +2169,9 @@ functions:
 The converse is checked for all four, since none could do anything: `output()`
 in a node with no outputs (`SE0344`), `derivative()` in a node with no continuous
 states (`SE0343`), `next()` in a node with no discrete states (`SE0345`), and
-`transition()` in a node with no finite states (`SE0348`). A bare `output()`
-whose every output a group has already claimed is the same mistake one level
-down (`SE0355`).
+`transition()` in a node with no finite states (`SE0348`). An
+`output default()` whose every output a group has already claimed is the same
+mistake one level down (`SE0355`).
 
 Every lifecycle method is defined at most once (`SE0352`). An output group is
 not a second `output()` but a different method, named by what it writes, so
@@ -2804,13 +2804,20 @@ two leaves, and every setting declared twice — for no reason the physics gave.
   its parameter list. That is an *output group*. Its parameter list is the
   feedthrough set of exactly those outputs; several are written
   `output a, b (u, v) { … }`.
-- **A bare `output(...)` writes every output no group names.** With no groups
-  that is every output, which is the one `output()` of §8.3: a node that never
-  names a group is unaffected by any of this.
+- **`output default(...)` writes every output no group names**, the way
+  `switch`'s `default:` takes every case no label names. It appears exactly
+  when groups do: beside groups, the catch-all says so, and a bare `output()`
+  there is `SE0356`; without groups, the one output method writes every output
+  and is the plain `output()` of §8.3, and an `output default()` there is
+  `SE0357`. So a node that never names a group is unaffected by any of this,
+  and in one that does, every output method's head says what it writes.
+  `default` is not reserved: it is a C++ keyword, so `SE0332` already keeps it
+  from naming an output, and after `output` it can mean nothing else. It
+  stands alone — `output default, a(...)` is `SE0201`.
 - **Each output is written by exactly one method.** Named by two groups, or
   twice by one: `SE0354`. A group naming something that is not an output of
-  the node: `SE0353`. A bare `output()` left with nothing to write: `SE0355`.
-  An output that no method computes: `SE0340`.
+  the node: `SE0353`. An `output default()` left with nothing to write:
+  `SE0355`. An output that no method computes: `SE0340`.
 - **Only `output` takes a name list.** Every other method writes a whole
   accessor, so a list there would select nothing (`SE0201`).
 - **The sort's vertices are groups** (§8.5). A group with an empty list is a
@@ -4054,8 +4061,10 @@ escape hatch is not a guarantee, so the storage itself carries the constness.
   reference to each output the group names and nothing else, bound at the call
   site to the node's slice of `sig` — so it is passed by value, and the copy
   writes through — and writing another group's output is "no such member"
-  too. A bare `output()` beside groups gets the same kind of view
-  of the outputs left to it, `Out_output`; without groups it keeps `Out&`.
+  too. `output default()` lowers the same way, to `output_default` with an
+  `Out_default` view of the outputs left to it — a name no group can take,
+  since no output can be called `default`. The plain `output()` of a node
+  without groups keeps `output(const In_output&, Out&)`.
 - **I/O confinement is name withholding.** Native aliases and the full `log`
   object are emitted into the preamble of the methods where they are legal, and
   simply are not declared elsewhere. Natives are `mutable`, which gives up
@@ -4578,10 +4587,12 @@ of thing wearing the same name.
 | `SE0348` | 3 | `transition()` in a node with no finite states |
 | `SE0350` | 3 | Method parameter is not a declared input |
 | `SE0351` | 3 | Duplicate method parameter |
-| `SE0352` | 3 | A lifecycle method defined twice (two bare `output()`s included) |
+| `SE0352` | 3 | A lifecycle method defined twice (two `output()`s or two `output default()`s included) |
 | `SE0353` | 3 | An output group names something that is not an output |
 | `SE0354` | 3 | An output named by two output groups, or twice by one |
-| `SE0355` | 3 | A bare `output()` beside groups that already name every output |
+| `SE0355` | 3 | An `output default()` beside groups that already name every output |
+| `SE0356` | 3 | A bare `output()` beside output groups: the catch-all is `output default()` |
+| `SE0357` | 3 | `output default()` in a node with no output groups |
 | `SE0360` | 3 | A test column names no member of the node |
 | `SE0361` | 3 | A test column is on the wrong side of the operator |
 | `SE0362` | 3 | An expected column names a method the node does not define |
@@ -4769,9 +4780,10 @@ literal_endpoint= [ "+" | "-" ] NUMBER [ unit ] ;
 
 lifecycle_method= "init"    "(" ")"                VERBATIM_BLOCK
                 | "final"   "(" [ IDENT ] ")"      VERBATIM_BLOCK
-                | "output"  [ ident_list ] "(" [ ident_list ] ")" VERBATIM_BLOCK
+                | "output"  [ ident_list | "default" ] "(" [ ident_list ] ")" VERBATIM_BLOCK
                     (* the first list, when present, names the outputs this
-                       group writes; see §8.3a *)
+                       group writes; `default`, contextual, marks the method
+                       that writes the rest; see §8.3a *)
                 | "derivative" "(" [ ident_list ] ")" VERBATIM_BLOCK
                 | "next"       "(" [ ident_list ] ")" VERBATIM_BLOCK
                 | "transition" "(" [ ident_list ] ")" VERBATIM_BLOCK
@@ -4900,7 +4912,9 @@ C++ spells a name verbatim (§6.11, `SE0332`).
 
 Everything else — including every sim-file key, every build primitive, `when`,
 every platform atom, and `tests`, `set` and `within` (§6.13) — is contextual and
-remains usable as an identifier. `tests` in particular *must* stay contextual:
+remains usable as an identifier. `default` after `output` (§8.3a) is contextual
+too, and needs no reservation: as a C++ keyword it can never name an output in
+the first place. `tests` in particular *must* stay contextual:
 `package tests;` is a real package path in this repository's own suite.
 
 ## Appendix C — Known gaps and open issues

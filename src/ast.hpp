@@ -171,6 +171,9 @@ struct Method {               // §8.1
     // parameter list. Empty on a bare `output()` and on every other method.
     std::vector<std::string> writes;
     std::vector<Loc> write_locs;
+    // §8.3a — `output default(...)`: the method that writes what no group
+    // names. Its `writes` stays empty; the resolver fills its share.
+    bool is_default = false;
     Verbatim body;
     Loc loc;
 

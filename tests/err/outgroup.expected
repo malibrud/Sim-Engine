@@ -1,9 +1,17 @@
-﻿error[SE0201]: `derivative` does not take a list of names before its parameters
-  --> tests/err/outgroup.se:11:16
+﻿error[SE0201]: `default` stands alone
+  --> tests/err/outgroup.se:10:19
    |
-11 |     derivative x(u) { der.x = in.u; }
+10 |     output default, y() { out.y = 0.0; out.z = 0.0; }
+   |                   ^ not alone
+   = note: `output default(...)` writes every output no group names, so it lists none of its own (§8.3a)
+   = help: write the named outputs as a group of their own
+
+error[SE0201]: `derivative` does not take a list of names before its parameters
+  --> tests/err/outgroup.se:19:16
+   |
+19 |     derivative x(u) { der.x = in.u; }
    |                ^ expected `(`
    = note: only `output` names what it writes, because only `out.` can be written in pieces: an output group is the feedthrough set of the outputs it lists (§8.3a)
    = help: write `derivative(...) { ... }`
 
-1 error emitted
+2 errors emitted

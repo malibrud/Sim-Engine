@@ -1682,7 +1682,7 @@ if (-not $cl) {
 
     # SPECIFICATION 8.3a -- output groups. See tests/emit/lib/ogrp/Ogrp.se:
     # three copies of a loop that one output() per gear would close
-    # algebraically. Two named groups, a group plus the bare output(), and the
+    # algebraically. Two named groups, a group plus output default(), and the
     # split composite must give IDENTICAL speeds on every row, since all three
     # evaluate the same expressions in the same order; and the speed must be
     # 10 (1 - exp(-36 t)), the loop's closed form (w_ref / ratio, and
@@ -1712,7 +1712,7 @@ if (-not $cl) {
         }
         if (-not $why) {
             Write-Host ("ok   build/emit/Ogrp : output groups break the false loop, named, " +
-                        "with the bare rest, and split agree exactly, max error " +
+                        "with the default, and split agree exactly, max error " +
                         $worst.ToString('E2')) -ForegroundColor Green
             $script:pass++
         } else {

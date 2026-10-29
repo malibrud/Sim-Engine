@@ -1,6 +1,14 @@
 // SPECIFICATION 8.3a -- only `output` names what it writes before its
-// parameter list. Every other method writes a whole accessor (SE0201).
+// parameter list. Every other method writes a whole accessor (SE0201). And
+// `default` stands alone: the catch-all writes what no group names, so a list
+// beside it is a contradiction (SE0201).
 package tests;
+
+node DefaultInAList {
+    outputs { y: double(-); z: double(-); }
+
+    output default, y() { out.y = 0.0; out.z = 0.0; }
+}
 
 node ListOnDerivative {
     inputs  { u: double(-); }
