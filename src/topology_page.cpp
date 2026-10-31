@@ -159,6 +159,7 @@ constexpr char kPage1[] = R"SETP(.hl [data-node].up > :is(polygon, path)[stroke]
   <input type="search" id="find" placeholder="Find a node by path…" list="paths">
   <datalist id="paths"></datalist>
   <label title="Wires whose value reaches the consumer through a state"><input type="checkbox" id="delayed" checked> delayed wires</label>
+  <label title="Outputs nothing reads: usually values a leaf keeps only so a run can record them"><input type="checkbox" id="unread"> <span id="unreadLabel">unread outputs</span></label>
   <button id="fit">Fit</button><button id="one">100%</button>
   <button id="expand">Expand all</button><button id="collapse">Collapse all</button><button id="reset" title="Back to the boxes the model opens collapsed">Reset</button>
   <span class="spacer"></span>
@@ -217,6 +218,19 @@ const collapsed = new Set();
 const defaults = () => { collapsed.clear(); for (const c of T.clusters) if (c.collapsed) collapsed.add(c.id); };
 defaults();
 let showDelayed = true;
+// Section 6.6: an output nothing reads is legal, and is how a leaf keeps a
+// value only to record it, so the page hides it until asked. "Read" means by
+// any wire in the model -- delayed ones included, whether drawn or not --
+// and a composite's declared output is read when a wire's route leaves
+// through it. The details panel lists every output regardless.
+const read = new Set();
+for (const e of T.edges) {
+  read.add(e.from + "\u0000" + e.fromPort);
+  for (const k of e.via || []) read.add(k);
+}
+const unreadLeaf = (n, p) => n.kind === "leaf" && !read.has(n.id + "\u0000" + p);
+const unreadDeclared = (c, p) => c.kind === "composite" && !read.has(c.path + "." + p);
+let showUnread = false;
 function buildView() {
   // The outermost collapsed cluster at or above `cid`, or null.
   const hiddenBy = cid => {
@@ -233,7 +247,8 @@ function buildView() {
     // writes them; a group has none, and gets ports as wires reach it.
     nodes.set("G:" + c.id, { id: "G:" + c.id, kind: "collapsed", cid: c.id, ckind: c.kind, name: c.name,
       path: c.path, cluster: c.parent, leaves,
-      ins: (c.ins || []).map(p => p.name), outs: (c.outs || []).map(p => p.name) });
+      ins: (c.ins || []).map(p => p.name),
+      outs: (c.outs || []).map(p => p.name).filter(p => showUnread || !unreadDeclared(c, p)) });
   }
   // A leaf inside a collapsed cluster is drawn as that cluster. A wire that
   // crosses a collapsed composite lands on the composite's own port, found on
@@ -245,7 +260,11 @@ function buildView() {
 )SETP";
 constexpr char kPage2[] = R"SETP(    const h = n.kind === "leaf" || n.kind === "setting" ? hiddenBy(n.cluster) : null;
     if (h) rep.set(n.id, { id: "G:" + h, hid: h, prefix: rel(clusterById.get(h).path, n.path) + "." });
-    else { rep.set(n.id, { id: n.id, hid: null, prefix: "" }); nodes.set(n.id, { ...n, ins: n.ins.map(p => p.name), outs: n.outs.map(p => p.name) }); }
+    else {
+      rep.set(n.id, { id: n.id, hid: null, prefix: "" });
+      nodes.set(n.id, { ...n, ins: n.ins.map(p => p.name),
+        outs: n.outs.map(p => p.name).filter(p => showUnread || !unreadLeaf(n, p)) });
+    }
   }
   const crossing = (cid, via, side) => {
     const c = clusterById.get(cid);
@@ -737,6 +756,12 @@ $("theme").onclick = () => {
   document.documentElement.dataset.theme = cur === "dark" ? "light" : "dark";
 };
 $("delayed").onchange = () => { showDelayed = $("delayed").checked; render(true); };
+$("unread").onchange = () => { showUnread = $("unread").checked; render(true); };
+{
+  const n = T.nodes.reduce((s, n) => s + n.outs.filter(p => unreadLeaf(n, p.name)).length, 0) +
+    T.clusters.reduce((s, c) => s + (c.outs || []).filter(p => unreadDeclared(c, p.name)).length, 0);
+  $("unreadLabel").textContent = `unread outputs (${n})`;
+}
 $("expand").onclick = () => { collapsed.clear(); render(); };
 $("collapse").onclick = () => { collapsed.clear(); for (const c of T.clusters) if (!c.parent) collapsed.add(c.id); render(); };
 $("reset").onclick = () => { defaults(); render(); };

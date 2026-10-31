@@ -1258,6 +1258,14 @@ an output's from `output()`.
 - **Fan-out is allowed**; **fan-in is forbidden** (§6.9.2).
 - An unconnected input is an error at stage 4 (`SE0430`) — there is no implicit
   zero. An unconnected *output* is fine; it is simply unread.
+- **An unread output is how a leaf exposes a value only to record it** (§13.5)
+  — a stroke command, a motor speed, an intermediate the outputs compute on
+  the way. There is no separate section and no qualifier: wiring it later is
+  the only change, and its recording path, `node.out.x`, stays the same either
+  way. The topology page hides outputs nothing reads until **unread outputs**
+  is ticked, and the details panel lists them regardless. What having no
+  syntax costs is that an output left unwired by mistake looks exactly like
+  one kept on purpose.
 
   What satisfies it need not be a producing node. §6.9.2 admits two constant
   sources — a literal, `0.0 --> ain.y`, and a setting, `param.grav --> …` — and
@@ -2506,9 +2514,10 @@ know where it will be used, and the root has no box to close.
 
 The page opens in the declared state. **Expand all** and **Collapse all**
 override it, **Reset** returns to it, and finding or selecting a node inside a
-collapsed box opens the box. The Mermaid file (`.topology.md`) ignores
-`@diagram`: it is a static, complete record, and a box drawn closed there could
-never be opened.
+collapsed box opens the box. It also opens with outputs nothing reads hidden
+(§6.3), until **unread outputs** is ticked. The Mermaid file (`.topology.md`)
+ignores `@diagram`, and hides nothing: it is a static, complete record, and a
+box drawn closed there could never be opened.
 
 Checking is **strict**: every mistake is an error, because a mistyped key that
 drew nothing would look exactly like a key that worked. At stage 2:
@@ -3791,6 +3800,14 @@ record: {
   same name (§6.11).
 - Recording internals directly was chosen over outputs-only recording, which
   would force boilerplate pass-through outputs just to observe a state.
+- **A computed intermediate is recorded as an output nothing reads** (§6.3).
+  States have storage and outputs have storage; a local in `output()` has
+  none, so it gains a column by becoming an output. It belongs to its row:
+  §9.6 step 2 writes outputs at *t*[k], before step 5 records, and the solver
+  stages that re-run `output()` at trial states come after the record and are
+  overwritten by the next tick's step 2. It costs a store when the outputs
+  compute the value anyway; work done only for the column is repeated at every
+  solver stage, as all of `output()` is.
 - **A port is a signal at every level of nesting**, input or output, on a
   composite as readily as on a leaf — `wash.aout.x` names the composite's own
   output where `wash.sfSum.y.x` names the leaf that happens to drive it. Both
@@ -5020,8 +5037,9 @@ Recorded so that their absence is visibly deliberate.
    read in `adjust()`, which runs after the finite commit and would see a
    value computed under the old modes; and it is recomputed at every stage
    even in a held node, whose `derivative()` runs at trial states while its
-   outputs hold. To be decided together with recording intermediates, which
-   want DSL types and units where sharing wants opaque C++ ones.
+   outputs hold. Recording does not need it — a recorded intermediate is an
+   output nothing reads (§6.3, §13.5) — so this is about sharing alone, which
+   wants opaque C++ types where a recorded column wants DSL ones and units.
 
 **Deliberately deferred, each a pure extension:**
 
