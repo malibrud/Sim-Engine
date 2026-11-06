@@ -832,7 +832,11 @@ void Emitter::leaf_class(const NodeInfo& node) {
     // a global: two models in one process do not share a clock.
     mem.push_back({"const char* const", "se_type_;", "// fq node type, §10.5"});
     mem.push_back({"const se_rt::RunState* const", "se_run_;", "// this model's clock"});
-    if (!node.states.empty()) mem.push_back({"State", "state;", "// views into x / dis"});
+    // `{}` even though Sim::bind() points every view before anything reads one:
+    // the leaf is aggregate-initialised through `se_run_` and no further, and a
+    // trailing member with no initialiser of its own is what g++'s
+    // -Wmissing-field-initializers reports, once per leaf, in every model.
+    if (!node.states.empty()) mem.push_back({"State", "state{};", "// views into x / dis"});
     if (!node.vars.empty()) mem.push_back({"Var", "var{};", ""});
     for (const ast::NativeDecl& n : node.def->natives) {
         std::string type, init;
@@ -4092,6 +4096,20 @@ bool emit(Diagnostics& diag, const Model& m, const EmitOptions& opt) {
                         opt.quiet) && ok;
         ok = write_file(diag, path("build.sh"), e.build_script(Script::Sh, exe_main, unity),
                         opt.quiet) && ok;
+        // Its own header says `./build.sh`, which needs the x bit, and fopen
+        // leaves a file at 0666 & ~umask. Executable by whoever may read it,
+        // the way `chmod +x` would set it. A failure is not an emit failure:
+        // `sh build.sh` still works. On Windows there is no bit to set.
+        namespace fs = std::filesystem;
+        std::error_code ec;
+        const fs::perms p = fs::status(path("build.sh"), ec).permissions();
+        if (!ec) {
+            fs::perms x = fs::perms::none;
+            if ((p & fs::perms::owner_read) != fs::perms::none) x |= fs::perms::owner_exec;
+            if ((p & fs::perms::group_read) != fs::perms::none) x |= fs::perms::group_exec;
+            if ((p & fs::perms::others_read) != fs::perms::none) x |= fs::perms::others_exec;
+            fs::permissions(path("build.sh"), x, fs::perm_options::add, ec);
+        }
     }
     return ok;
 }
