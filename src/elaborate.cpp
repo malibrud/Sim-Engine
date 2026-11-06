@@ -1056,9 +1056,9 @@ void Elaborator::apply_overrides(const NodeInfo* def, const std::string& path,
             OverrideEntry* o = find_override(sub(path, lf.key));
             if (!o) continue;
             Value v;
-            if (!eval_at(o->value, lf.type, *o->src, Env{}, v)) continue;
             double d = 0.0;
-            if (coerce(v, lf.type, *o->src, o->loc,
+            if (eval_at(o->value, lf.type, *o->src, Env{}, v) &&
+                coerce(v, lf.type, *o->src, o->loc,
                        ("setting `" + o->path + "`").c_str(), d)) {
                 // §13.3 — an override detaches from the flow-down, so it emits
                 // as a literal and the binding that would otherwise drive this
@@ -1066,6 +1066,11 @@ void Elaborator::apply_overrides(const NodeInfo* def, const std::string& path,
                 // so there is nothing it could depend on anyway. An enumerator's
                 // literal is its own spelling (§7.2a), not its number.
                 pinned[lf.key] = Pin{d, lf.type.enm ? v.code : ec_num(d), true};
+            } else {
+                // The override was the diagnostic. `emplace`, so a binding the
+                // parent pinned still stands; only a leaf that nothing else
+                // binds is filled, and then it is not also reported as SE0420.
+                pinned.emplace(lf.key, Pin{0.0, ec_num(0.0), true});
             }
         }
     }
@@ -1640,17 +1645,19 @@ void Elaborator::instantiate(const NodeInfo* def, const std::string& path,
                     // simply is not pinned, and the child's own default runs.
                     if (!lf.expr) continue;
                     Value v;
-                    if (!eval_at(lf.expr, lf.type, def_src, env, v)) {
-                        failed_ = true;
-                        continue;
-                    }
                     double d = 0.0;
                     ExprCode code;
-                    if (coerce(v, lf.type, def_src, lf.loc,
-                               ("setting `" + lf.key + "`").c_str(), d, &code))
+                    if (eval_at(lf.expr, lf.type, def_src, env, v) &&
+                        coerce(v, lf.type, def_src, lf.loc,
+                               ("setting `" + lf.key + "`").c_str(), d, &code)) {
                         child_pinned[lf.key] = Pin{d, std::move(code), v.constant};
-                    else
+                    } else {
                         failed_ = true;
+                        // Bound, just not to anything that evaluates: pinned
+                        // inert for the same reason as a bad brace list above,
+                        // or a required leaf is reported a second time as SE0420.
+                        child_pinned.emplace(lf.key, Pin{0.0, ec_num(0.0), true});
+                    }
                 }
             }
             auto bit = child_bindings.find(inst.name);
@@ -2880,15 +2887,19 @@ bool Elaborator::run(const ast::SimFile& sim, const Source& sim_src,
         for (const Leafling& lf : bl) {
             if (!lf.expr) continue;
             Value v;
-            if (!eval_at(lf.expr, lf.type, sim_src, Env{}, v)) continue;
             double d = 0.0;
             ExprCode code;
-            if (coerce(v, lf.type, sim_src, lf.loc, ("setting `" + lf.key + "`").c_str(),
+            if (eval_at(lf.expr, lf.type, sim_src, Env{}, v) &&
+                coerce(v, lf.type, sim_src, lf.loc, ("setting `" + lf.key + "`").c_str(),
                        d, &code))
                 // The root block is evaluated in an empty environment — there is
                 // no enclosing node whose settings it could read — so it always
                 // folds.
                 pinned[lf.key] = Pin{d, std::move(code), v.constant};
+            else
+                // Bound but not evaluable: inert, as for a bad brace list above,
+                // so a required leaf is not reported again as SE0420.
+                pinned.emplace(lf.key, Pin{0.0, ec_num(0.0), true});
         }
     }
 

@@ -1,10 +1,18 @@
 ﻿error[SE0263]: `window:` requires `mode: realtime`
- --> tests/emit/params.sim:9:5
+  --> tests/emit/params.sim:10:5
+   |
+10 |     window:   5 (s);
+   |     ^^^^^^ no frames to average over
+   = note: `window` sets the rolling window for `sim.utilization` and `sim.overrun_pct`, which only exist in real time (§13.6)
+   = note: a batch run has no frame boundaries, so both metrics would record as zero
+
+error[SE0410]: incompatible units in `+`
+ --> tests/emit/params.sim:3:51
   |
-9 |     window:   5 (s);
-  |     ^^^^^^ no frames to average over
-  = note: `window` sets the rolling window for `sim.utilization` and `sim.overrun_pct`, which only exist in real time (§13.6)
-  = note: a batch run has no frame boundaries, so both metrics would record as zero
+3 |     root:     params.Params { root_need = 1.0 (m) + 2.0 (s); };
+  |                                                   ^ `(m)` and `(s)`
+  = note: left is m
+  = note: right is s
 
 error[SE0410]: incompatible units for setting `total_mass`
  --> tests/emit/params.settings:6:1
@@ -15,24 +23,32 @@ error[SE0410]: incompatible units for setting `total_mass`
   = note: target is kg
 
 error[SE0420]: required setting `mass` is not bound
-  --> tests/emit/lib/params/Params.se:13:14
+  --> tests/emit/lib/params/Params.se:18:14
    |
-13 |         node needy : Needy {};                    // SE0420: `mass` is required
+18 |         node needy : Needy {};                    // SE0420: `mass` is required
    |              ^^^^^ instantiated here
-   = note: declared with no default, so every instantiation must bind it (§6.2)  [tests/emit/lib/params/Params.se:22]
+   = note: declared with no default, so every instantiation must bind it (§6.2)  [tests/emit/lib/params/Params.se:28]
+
+error[SE0410]: incompatible units for setting `overridden.mass`
+ --> tests/emit/params.settings:9:1
+  |
+9 | overridden.mass = 3 (m);
+  | ^^^^^^^^^^ `(m)` where `(kg)` is declared
+  = note: value is m
+  = note: target is kg
 
 error[SE0421]: cycle among derived settings of `Ring`
-  --> tests/emit/lib/params/Params.se:29:9
+  --> tests/emit/lib/params/Params.se:35:9
    |
-29 |         a: double(-) = param.b + 1.0;
+35 |         a: double(-) = param.b + 1.0;
    |         ^ `a` depends on itself
    = note: cycle: a -> b -> c -> a
    = note: settings are a dependency graph requiring a topological sort, so a cycle has no value (§6.2)
 
 error[SE0450]: rate 60 Hz is not an integer divisor of the base rate
-  --> tests/emit/lib/params/Params.se:15:14
+  --> tests/emit/lib/params/Params.se:21:14
    |
-15 |         node slow  : Slow  { rate = 60.0; };      // SE0450: 1000/60 is not integral
+21 |         node slow  : Slow  { rate = 60.0; };      // SE0450: 1000/60 is not integral
    |              ^^^^ instantiated here
    = note: 1000 / 60 = 16.6667; the nearest legal rates are 62.5 Hz and 58.8235 Hz
 
@@ -44,4 +60,4 @@ error[SE0460]: override `needy.masss` matches nothing
   = help: did you mean `needy.mass`?
   = note: overrides address a setting or a state by a dotted path from the root (§13.2, §13.4)
 
-6 errors emitted
+8 errors emitted

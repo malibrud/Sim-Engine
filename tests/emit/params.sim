@@ -1,5 +1,6 @@
 sim Params {
-    root:     params.Params;
+    // SE0410 alone — the binding fails, and is not then also SE0420.
+    root:     params.Params { root_need = 1.0 (m) + 2.0 (s); };
     step:     1 (ms);
     duration: 1 (s);
     settings: "params.settings";

@@ -3,14 +3,20 @@ package params;
 // Stage-4 setting and rate diagnostics: a required setting nobody bound
 // (SE0420), a cycle among derived defaults (SE0421), and a rate that is not an
 // integer divisor of the base step (SE0450).
+//
+// A required setting that IS bound, but to something that fails to evaluate, is
+// reported once for the failure and never again as SE0420: `root_need` from
+// params.sim, `overridden.mass` from params.settings.
 node Params {
     settings {
         total_mass: double(kg) = 1500.0;
+        root_need:  double(-);                    // bound by params.sim, badly
     }
     outputs { y: double(-); }
 
     structure {
         node needy : Needy {};                    // SE0420: `mass` is required
+        node overridden : Needy {};               // bound by params.settings, badly
         node ring  : Ring  {};                    // SE0421
         node slow  : Slow  { rate = 60.0; };      // SE0450: 1000/60 is not integral
 

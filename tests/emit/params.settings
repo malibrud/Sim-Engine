@@ -4,3 +4,6 @@ needy.masss = 400 (kg);
 
 // An override whose value is dimensionally wrong for its target (SE0410).
 total_mass  = 12 (m);
+
+// The same, but the only thing binding a required setting: still just SE0410.
+overridden.mass = 3 (m);
