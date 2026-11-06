@@ -441,6 +441,18 @@ bool Elaborator::eval(const ast::Expr* e, const Source& src, const Env& env, Val
         case K::Call:
             if (!eval_call(e, src, env, out)) return false;
             break;
+
+        // A brace list is consumed by `destructure` at the declaration site and
+        // never becomes a `Value` (§6.2c), so the only way one reaches here is
+        // as an operand or call argument: `1.0 + { 2.0 }`, `sqrt({ 2.0 })`.
+        // Falling out of the switch would leave `out` unset and emit `()` into
+        // the generated code.
+        case K::Aggregate:
+            diag_.error("SE0426", src, e->loc, "a brace list inside an expression",
+                        "an operand here is a scalar",
+                        {note("a brace list initialises a record, field by field, and "
+                              "is never computed with (\xc2\xa7""6.2c)")});
+            return false;
     }
 
     if (!std::isfinite(out.v) && !(e->kind == K::Name && e->text == "inf")) {

@@ -5,7 +5,8 @@
 //   SE0423  wrong number of values in a positional brace list
 //   SE0424  unknown field name
 //   SE0425  a field given twice
-//   SE0426  a brace list where a scalar is declared, and the converse
+//   SE0426  a brace list where a scalar is declared, and the converse, and a
+//           brace list as an operand
 //
 // SE0460 is here too, from recbad.settings: an override that names the record
 // rather than one of its leaves.
@@ -38,6 +39,10 @@ node RecBad {
             // built field by field and never computed.
             record_target = 1.0;
 
+            // SE0426 a third way — a brace list as an operand. It never becomes
+            // a value, so there is nothing for `+` to add.
+            nested_operand = 1.0 + { 2.0 };
+
             // Bound so it is not also reported as SE0420.
             fine = { 1.0, 2.0, 3.0 };
         };
@@ -53,7 +58,8 @@ node Sink {
         twice:         math.Vec3(-);
         scalar_target: double(-);
         record_target: math.Vec3(-);
-        fine:          math.Vec3(-);
+        nested_operand: double(-) = 0.0;   // so a failed binding is not also SE0420
+        fine:         math.Vec3(-);
     }
     outputs { y: double(-); }
     output() { out.y = param.fine.x; }

@@ -53,6 +53,13 @@ struct Value {
     // `v` then holds the enumerator's integer and `code` an expression of the
     // enum's C++ type, which no arithmetic may touch (SE0404).
     const EnumInfo* enm = nullptr;
+
+    // The number, its unit and whether it was written bare; every site that
+    // builds a `Value` from parts then sets `code`, `constant` and `enm` by
+    // name. A constructor rather than a three-field brace list, which compilers
+    // flag (-Wmissing-field-initializers) for leaving the rest to defaults.
+    Value() = default;
+    Value(double v_, Unit unit_, bool bare_) : v(v_), unit(std::move(unit_)), bare(bare_) {}
 };
 
 // A setting whose value arrives from outside the node — a flow-down binding
