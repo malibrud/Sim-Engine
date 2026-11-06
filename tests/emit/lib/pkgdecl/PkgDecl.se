@@ -1,0 +1,15 @@
+package pkgdecl;
+
+// Two nodes of one package, both leaning on the package manifest's shared C++.
+node PkgDecl {
+    inputs  { u: double(-); }
+    outputs { y: double(-); }
+
+    structure {
+        node d : Doubler;
+        node s : Scaled;
+        self.u --> d.u;
+        d.y --> s.u;
+        s.y --> self.y;
+    }
+}

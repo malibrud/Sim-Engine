@@ -226,6 +226,20 @@ FileInfo* Resolver::load_file(const std::string& pkg, const std::string& name,
     for (const std::string& seg : raw_segments(pkg))
         cpp_name_ok(*file->src, seg, file->ast->package.loc, "package segment");
 
+    // §2.6 — a file-level `declarations` block is the package's shared C++,
+    // guarded per package, and only the manifest speaks for the package. In
+    // a node's file it would be a second, unguarded copy of what the node's own
+    // block already does.
+    if (file->ast->sec_declarations.present) {
+        diag_.error("SE0322", *file->src, file->ast->sec_declarations.loc,
+                    "a file-level `declarations` block belongs in `package.se`",
+                    "outside a package manifest",
+                    {note("a manifest's `declarations` is shared by every node of the "
+                          "package, and emitted once per package (§2.6)"),
+                     help("move it into `" + package_dir(pkg) +
+                          "/package.se`, or into this node's own `declarations` (§6.6)")});
+    }
+
     FileInfo* raw = file.get();
     program_.files.push_back(std::move(file));
     by_file_key_[key] = raw;

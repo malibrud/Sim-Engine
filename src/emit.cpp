@@ -618,6 +618,19 @@ void Emitter::records() {
 // ─── `declarations` blocks (§6.6) ────────────────────────────────────────────
 
 void Emitter::declarations() {
+    // §2.6 — every loaded manifest's shared C++ first, so any node's own block
+    // may use it. Guarded by the PACKAGE, which is what lets two nodes of one
+    // package share one helper class in this single translation unit.
+    for (const auto& f : m_.program->files) {
+        if (f->public_name != "package" || !f->ast || !f->ast->sec_declarations.present)
+            continue;
+        std::string guard = "SE_PKG_DECLS_";
+        for (char c : f->package) guard += c == '.' ? '_' : c;
+        o_ << "#ifndef " << guard << "\n#define " << guard << "\n";
+        verbatim(f->ast->declarations, f->path);
+        o_ << "#endif  // " << guard << "\n\n";
+    }
+
     std::set<const NodeInfo*> done;
     for (const Leaf& leaf : m_.leaves) {
         const NodeInfo& node = *leaf.node;

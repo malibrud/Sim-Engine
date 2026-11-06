@@ -1,0 +1,12 @@
+package pkgdecl;
+
+// §2.6 — the package's shared C++. Both nodes of this package call `twice`,
+// and `Scaled`'s own declarations block builds on `kScale`. One definition of
+// each must reach the model's single translation unit, ahead of every node's
+// own block, or the generated code does not compile.
+declarations {
+    namespace pkgdecl_detail {
+    constexpr double kScale = 3.0;
+    inline double twice(double v) { return 2.0 * v; }
+    }
+}

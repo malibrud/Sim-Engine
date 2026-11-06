@@ -459,9 +459,13 @@ struct ModelFile {
     std::vector<TypeDef> types;
     std::vector<EnumDef> enums;
     std::vector<NodeDef> nodes;
-    // A package manifest (`package.se`, §2.6) carries only a file-level build block.
+    // A package manifest (`package.se`, §2.6) carries only a file-level build
+    // block and a file-level `declarations` block: the package's shared C++.
+    // Stage 3 rejects the latter anywhere else (SE0322).
     std::vector<BuildStmt> build;
     SectionMark sec_build;
+    Verbatim declarations;
+    SectionMark sec_declarations;
     // §3.2 — the file's `///` lines, unattached. Only `sec --doc` reads them.
     std::vector<DocLine> doc_lines;
 };

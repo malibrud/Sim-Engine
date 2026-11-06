@@ -1,0 +1,13 @@
+package pkgbad;
+
+// §2.6 — shared C++ belongs in the package manifest, not in a node's file.
+declarations {
+    inline double helper(double v) { return v; }
+}
+
+node PkgBad {
+    inputs  { u: double(-); }
+    outputs { y: double(-); }
+
+    output(u) { out.y = helper(in.u); }
+}

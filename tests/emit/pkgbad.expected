@@ -1,0 +1,9 @@
+﻿error[SE0322]: a file-level `declarations` block belongs in `package.se`
+ --> tests/emit/lib/pkgbad/PkgBad.se:4:1
+  |
+4 | declarations {
+  | ^^^^^^^^^^^^ outside a package manifest
+  = note: a manifest's `declarations` is shared by every node of the package, and emitted once per package (§2.6)
+  = help: move it into `pkgbad/package.se`, or into this node's own `declarations` (§6.6)
+
+1 error emitted

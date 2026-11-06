@@ -1,0 +1,14 @@
+package pkgdecl;
+
+// The other user, whose OWN declarations block reads the package's: that only
+// compiles if the manifest's block is emitted first (§2.6).
+node Scaled {
+    declarations {
+        namespace { constexpr double kScaled = pkgdecl_detail::kScale * 2.0; }
+    }
+
+    inputs  { u: double(-); }
+    outputs { y: double(-); }
+
+    output(u) { out.y = kScaled * pkgdecl_detail::twice(in.u); }
+}

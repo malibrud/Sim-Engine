@@ -888,6 +888,28 @@ std::unique_ptr<ast::ModelFile> Parser::parse_model_file() {
                 advance();
                 if (!parse_build_list(file->build)) recover_to_definition();
             }
+        } else if (at(Tok::KwDeclarations)) {
+            // A package manifest's shared C++ (§2.6). Parsed in any file so that
+            // stage 3, which knows which file is the manifest, can say where it
+            // belongs (SE0322) instead of this being an "expected a definition".
+            const Loc loc = tok_.loc;
+            if (!mark_section(file->sec_declarations, "declarations", loc)) {
+                recover_to_definition();
+            } else {
+                advance();
+                if (!at(Tok::LBrace)) {
+                    err("SE0201", tok_.loc,
+                        std::string("expected `{` to open the `declarations` block, found ") +
+                            describe(tok_.kind),
+                        "expected `{`");
+                    recover_to_definition();
+                } else {
+                    enter_raw();
+                    const bool ok = lexer_.scan_brace_block(file->declarations);
+                    resync();
+                    if (!ok) recover_to_definition();
+                }
+            }
         } else if (at(Tok::KwUse)) {
             err("SE0203", tok_.loc, "`use` declaration after a definition",
                 "move this above the definitions",

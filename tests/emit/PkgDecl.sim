@@ -1,0 +1,8 @@
+// §2.6 — a package manifest's `declarations`, shared by two nodes. See
+// lib/pkgdecl/package.se.
+sim PkgDecl {
+    root: pkgdecl.PkgDecl;
+
+    step:     1 (ms);
+    duration: 2 (ms);
+}

@@ -1,0 +1,9 @@
+package pkgdecl;
+
+// One of two users of the package's shared helper.
+node Doubler {
+    inputs  { u: double(-); }
+    outputs { y: double(-); }
+
+    output(u) { out.y = pkgdecl_detail::twice(in.u); }
+}
