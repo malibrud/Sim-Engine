@@ -1,0 +1,63 @@
+package bufbad;
+
+// §5.1a — every place a buffer is refused, one per helper node.
+
+type Packet { bytes: buffer(8); len: int(-); }    // SE0325: a record field
+
+node Sites {
+    settings { blob: buffer(8); }                 // SE0325: a setting
+    inputs   { p: buffer(8); }                    // SE0324: a reader with a capacity
+    outputs  { q: buffer; }                       // SE0323: storage with none
+    states   { discrete s: buffer(8) = 0; }       // SE0325: a state
+    vars     { v: buffer; w [4]: buffer(8); pk: Packet; }   // SE0323, and SE0433: an extent
+
+    output(p) { }
+    on_step() { }
+}
+
+node Pass {
+    inputs  { p: buffer; }
+    outputs { q: buffer(8); }                     // SE0324: a composite's port holds nothing
+
+    structure {
+        node r : Reader;
+        self.p --> r.p;
+    }
+}
+
+node Reader {
+    inputs  { p: buffer; }
+    outputs { n: int(-); }
+    output(p) { out.n = static_cast<int>(in.p.size()); }
+}
+
+node Maker {
+    outputs { b: buffer(8); x: double(-); }
+    output() { out.x = 0.0; }
+}
+
+node Num {
+    inputs  { u: double(-); }
+    outputs { n: int(-); }
+    output(u) { out.n = 0; }
+}
+
+node BufBad {
+    settings { k: double(-) = 1.0; }
+
+    structure {
+        node sites : Sites;
+        node pass  : Pass;
+        node m     : Maker;
+        node num   : Num;
+        node lit   : Reader;
+        node par   : Reader;
+        node sca   : Reader;
+
+        m.b --> num.u;                            // SE0410: buffer into a number
+        m.x --> sca.p;                            // SE0410: a number into a buffer
+        1.0 --> lit.p;                            // SE0410: a literal is not bytes
+        param.k --> par.p;                        // SE0410: nor is a setting
+        m.b --> pass.p, sites.p;
+    }
+}

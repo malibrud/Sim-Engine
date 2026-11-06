@@ -1,0 +1,23 @@
+// §5.1a — buffer ports and vars: storage with a capacity, readers without,
+// fan-out, a composite pass-through, and the recorded column, which is a
+// buffer's size. See lib/buf/.
+sim Buf {
+    root: buf.Buf;
+
+    step:     1 (ms);
+    duration: 12 (ms);
+
+    record: {
+        file: "buf.csv";
+        signals {
+            src.data;
+            src.var.rx;
+            thru.q;
+            peek.first;
+            peek.cap;
+            tail.n;
+            tail.cap;
+            thru.c.clipped;
+        }
+    }
+}

@@ -73,6 +73,18 @@ std::string drop_last(const ast::Path& p) {
     return s;
 }
 
+// §5.1a — a buffer is opaque bytes, so it has no place where a value must be a
+// number (a setting, a state) or part of a fixed field tree (a record field).
+// True when it reported one.
+bool buffer_refused(Diagnostics& diag, const Source& src, const ast::TypeRef& t,
+                    const char* what, const char* why) {
+    if (!t.is_buffer) return false;
+    diag.error("SE0325", src, t.loc, std::string("a ") + what + " may not be a buffer",
+               "a buffer", {note(why), note("a buffer goes on an input, an output or a var "
+                                            "(\xc2\xa7""5.1a)")});
+    return true;
+}
+
 }  // namespace
 
 // ─── NodeInfo helpers ────────────────────────────────────────────────────────
@@ -458,6 +470,18 @@ bool Resolver::resolve_named_type_ref(const FileInfo& from, const ast::Path& p,
 
 bool Resolver::resolve_type(const FileInfo& file, const ast::TypeRef& ref, Type& out) {
     out.loc = ref.loc;
+    if (ref.is_buffer) {
+        // §5.1a — storage is `buffer<N>`, a reader the view. Which one a site
+        // must be is the caller's rule (SE0323/SE0324), since only it knows
+        // whether the declaration is an output, an input or a var.
+        out.is_record = false;
+        out.buffer = true;
+        out.capacity = ref.capacity;
+        out.scalar = ref.capacity > 0 ? "se_rt::buffer<" + std::to_string(ref.capacity) + ">"
+                                      : "se_rt::buffer_view";
+        out.unit = Unit{};
+        return true;
+    }
     if (ref.is_scalar) {
         out.is_record = false;
         out.scalar = ref.scalar.empty() ? "double" : ref.scalar;
@@ -610,6 +634,10 @@ RecordInfo* Resolver::resolve_record(FileInfo& file, const ast::TypeDef& def,
         Field field;
         field.name = f.name;
         field.loc = f.loc;
+        if (buffer_refused(diag_, *file.src, f.type, "record field",
+                           "a record lowers to a plain struct of numbers with a unit each, "
+                           "and is listed field by field in the manifest (\xc2\xa7""5.2)"))
+            continue;
         resolve_type(file, f.type, field.type);
         info->fields.push_back(std::move(field));
     }
@@ -749,6 +777,10 @@ NodeInfo* Resolver::resolve_node(FileInfo& file, const ast::NodeDef& def,
         si.name = s.name;
         si.loc = s.loc;
         si.default_value = s.default_value.get();
+        if (buffer_refused(diag_, *file.src, s.type, "setting",
+                           "a setting's value is a \xc2\xa7""7 expression, and \xc2\xa7""7 is a "
+                           "language of numbers with dimensions"))
+            continue;
         resolve_type(file, s.type, si.type);
         // §6.2 — `rate` is an ordinary setting the scheduler happens to read.
         if (si.name == "rate") {
@@ -778,6 +810,10 @@ NodeInfo* Resolver::resolve_node(FileInfo& file, const ast::NodeDef& def,
         st.extent = s.extent.get();
         st.extent_loc = s.extent_loc;
         st.loc = s.loc;
+        if (buffer_refused(diag_, *file.src, s.type, "state",
+                           "a state has an initial condition and an override path, both "
+                           "numbers (\xc2\xa7""6.4); keep the bytes in a var"))
+            continue;
         const bool typed = resolve_type(file, s.type, st.type);
         // §5.2 — moved here from the parser once a named type could also be an
         // enum (§5.2a), which a state may be; only resolution knows which.
@@ -840,9 +876,10 @@ NodeInfo* Resolver::resolve_node(FileInfo& file, const ast::NodeDef& def,
     struct {
         const std::vector<ast::FieldDecl>* from;
         std::vector<Field>* to;
-    } const groups[] = {{&def.inputs, &info->inputs},
-                        {&def.outputs, &info->outputs},
-                        {&def.vars, &info->vars}};
+        const char* what;
+    } const groups[] = {{&def.inputs, &info->inputs, "input"},
+                        {&def.outputs, &info->outputs, "output"},
+                        {&def.vars, &info->vars, "var"}};
     for (const auto& g : groups) {
         for (const ast::FieldDecl& f : *g.from) {
             Field field;
@@ -851,6 +888,35 @@ NodeInfo* Resolver::resolve_node(FileInfo& file, const ast::NodeDef& def,
             field.extent = f.extent.get();
             field.extent_loc = f.extent_loc;
             resolve_type(file, f.type, field.type);
+            // §5.1a — a capacity exactly where there is storage: a leaf's
+            // output (the wire's own member, §15.3) and a var. Everything else
+            // only reads, or passes through a composite that evaporates (§15.2).
+            if (f.type.is_buffer) {
+                const bool storage =
+                    g.to == &info->vars || (g.to == &info->outputs && !def.is_composite());
+                const std::string kind = g.to == &info->vars ? "a var"
+                                         : g.to == &info->inputs
+                                             ? std::string("an input")
+                                             : std::string("a composite's output");
+                if (storage && f.type.capacity == 0) {
+                    diag_.error("SE0323", *file.src, f.type.loc,
+                                std::string("buffer ") + g.what + " `" + f.name +
+                                    "` declares no capacity",
+                                "storage needs a size",
+                                {note(std::string("a leaf's output is the wire's storage and a "
+                                                  "var is the node's own, so each holds the "
+                                                  "bytes and says how many it can (\xc2\xa7""5.1a)")),
+                                 help("write `" + f.name + ": buffer(1500);` with the largest "
+                                      "payload it must hold")});
+                } else if (!storage && f.type.capacity > 0) {
+                    diag_.error("SE0324", *file.src, f.type.capacity_loc,
+                                "a capacity on " + kind + " buffer", "a reader holds no bytes",
+                                {note("an input reads the producer's storage, and a "
+                                      "composite's port is a pass-through, so neither has a "
+                                      "size of its own; it accepts any capacity (\xc2\xa7""5.1a)"),
+                                 help("write `" + f.name + ": buffer;`")});
+                }
+            }
             // §6.5 — a var carries an extent on the same terms as a state,
             // and the same element rule with it. The parser has already refused
             // one on a port or a record field (SE0234), so only `vars` reaches
@@ -858,8 +924,9 @@ NodeInfo* Resolver::resolve_node(FileInfo& file, const ast::NodeDef& def,
             if (field.extent && (field.type.is_record || field.type.scalar != "double")) {
                 diag_.error("SE0433", *file.src, f.extent_loc,
                             "an array-shaped var must be `double`",
-                            "declared `" + std::string(field.type.is_record
-                                                           ? "record"
+                            "declared `" + std::string(field.type.is_record ? "record"
+                                                       : field.type.buffer
+                                                           ? buffer_label(field.type)
                                                            : field.type.scalar) +
                                 "`",
                             {note("an array var holds the per-element coefficients an "

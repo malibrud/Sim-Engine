@@ -1,0 +1,54 @@
+﻿# ----------------------------------------------------------------------------
+#  GENERATED — DO NOT EDIT.
+#  Unit manifest for: Buf.hpp
+#  sim: Buf   root: buf.Buf   base step: 0.001 s
+#
+#  Units are checked by the DSL compiler at every declarative site and then
+#  ERASED — the generated C++ is plain `double` throughout. This file is where
+#  the erased information goes. It is a real generator output, not
+#  documentation: it is the contract for anyone writing an external solver,
+#  feeding the root boundary, or overriding a setting from outside the model.
+#
+#  Every value named here is IN THE UNIT SHOWN. `-` means dimensionless.
+# ----------------------------------------------------------------------------
+
+[state.continuous]        # slot | model path | unit  -- the solver's ABI
+          (none)
+
+[state.discrete]          # Sim::Impl::dis; offsets from Sim::Impl::discrete_map()
+          (none)
+
+[signals]                 # Sim::Impl::sig; offsets from Sim::Impl::signal_map()
+          src.data                -           buffer(6)
+          peek.n                  -           int
+          peek.first              -           int
+          peek.cap                -           int
+          thru.c.q                -           buffer(3)
+          thru.c.clipped          -           bool
+          tail.n                  -           int
+          tail.first              -           int
+          tail.cap                -           int
+
+[boundary.in]             # root inputs the host must drive, through Sim::inputs()
+          (none)
+
+[boundary.out]            # root outputs the host may read
+          peek.n                  -
+          tail.n                  -
+
+[settings]                # configurable; value is the elaborated default
+
+[decimation]              # derived from `rate` at configuration
+
+[types]
+
+[recorded]                # columns of buf.csv
+          time                    s
+          src.data                buffer(6)
+          src.var.rx              buffer(6)
+          thru.q                  buffer
+          peek.first              -
+          peek.cap                -
+          tail.n                  -
+          tail.cap                -
+          thru.c.clipped          -

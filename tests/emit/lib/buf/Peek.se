@@ -1,0 +1,13 @@
+package buf;
+
+// §5.1a — a reader. Its input declares no capacity, so it takes any producer.
+node Peek {
+    inputs  { packet: buffer; }
+    outputs { n: int(-); first: int(-); cap: int(-); }
+
+    output(packet) {
+        out.n     = static_cast<int>(in.packet.size());
+        out.first = in.packet.empty() ? -1 : in.packet.data()[0];
+        out.cap   = static_cast<int>(in.packet.capacity());
+    }
+}

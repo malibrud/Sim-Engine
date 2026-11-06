@@ -679,7 +679,8 @@ void Emitter::leaf_class(const NodeInfo& node) {
         Row r;
         r.type = cpp_type(t);
         r.decl = name + init + ";";
-        if (!t.is_record) r.comment = unit_comment(t.unit);
+        if (t.buffer) r.comment = "// " + buffer_label(t);   // §5.1a — no unit
+        else if (!t.is_record) r.comment = unit_comment(t.unit);
         return r;
     };
 
@@ -2155,7 +2156,8 @@ void Emitter::sim_record() {
         if (i) o_ << ",";
         const RecordedSignal& s = m_.record.signals[i];
         o_ << "\n                "
-           << quote(s.path + " [" + (s.enm ? s.enm->fq : s.unit.str()) + "]");
+           << quote(s.path + " [" +
+                    (!s.label.empty() ? s.label : s.enm ? s.enm->fq : s.unit.str()) + "]");
     }
     o_ << "});\n}\n";
 
@@ -2964,6 +2966,7 @@ namespace {
 // What a wire carries, as a reader wants it: a unit for a scalar, the
 // record's own name for a record (§5.3 — the whole record travels).
 std::string topo_type(const Type& ty) {
+    if (ty.buffer) return buffer_label(ty);   // §5.1a — bytes, no unit
     if (!ty.is_record) return ty.unit.str();
     const std::size_t dot = ty.record->fq.rfind('.');
     std::string r = dot == std::string::npos ? ty.record->fq : ty.record->fq.substr(dot + 1);
@@ -3619,6 +3622,10 @@ std::string Emitter::manifest() {
     auto shown_type = [&](const std::string& cpp) {
         for (const EnumInfo* e : m_.program->enum_order)
             if (e->cpp_name == cpp) return e->fq;
+        // §15.6 — a buffer by its DSL spelling, `buffer(1500)`.
+        static const std::string kBuf = "se_rt::buffer<";
+        if (cpp.compare(0, kBuf.size(), kBuf) == 0 && cpp.back() == '>')
+            return "buffer(" + cpp.substr(kBuf.size(), cpp.size() - kBuf.size() - 1) + ")";
         return cpp;
     };
     t << "\n[state.discrete]          # Sim::Impl::dis; offsets from Sim::Impl::discrete_map()\n";
@@ -3720,7 +3727,8 @@ std::string Emitter::manifest() {
         t << "\n[recorded]                # columns of " << m_.record.file << "\n";
         t << col("", 10) << col("time", 24) << "s\n";
         for (const RecordedSignal& s : m_.record.signals)
-            t << col("", 10) << col(s.path, 24) << (s.enm ? s.enm->fq : s.unit.str()) << "\n";
+            t << col("", 10) << col(s.path, 24)
+              << (!s.label.empty() ? s.label : s.enm ? s.enm->fq : s.unit.str()) << "\n";
     }
     return t.str();
 }

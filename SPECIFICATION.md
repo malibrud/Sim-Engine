@@ -2521,14 +2521,15 @@ both in one step — a script, a build system, a future driver — sits above
 | `SE0360` | 3 | A column names no member of the node |
 | `SE0361` | 3 | A column is on the wrong side of the operator |
 | `SE0362` | 3 | An expected column names a method the node does not define |
-| `SE0363` | 3 | A column names a buffer |
+| `SE0363` | 3 | A node with a buffer port has a `tests` section |
 | `SE0470` | 4 | A set reaches a rate-derived setting with no `step` |
 
 A dimension error in a cell or a tolerance is the ordinary `SE0410`.
 
-**A buffer cannot be a column** (`SE0363`): a cell is a §7 expression, and §7
-has no way to spell bytes (§5.1a). A node with buffer ports may still have
-tests; they name its other members.
+**A node with a buffer port cannot carry `tests` yet** (`SE0363`). A test
+program runs the node as the root of a model (below), and a buffer may not be on
+the root (§5.1a, Appendix C 16c); nor could a cell supply one, a cell being a §7
+expression with no way to spell bytes. Both lift together with 16c.
 
 ### 6.14 Documentation
 
@@ -4797,7 +4798,7 @@ of thing wearing the same name.
 | `SE0360` | 3 | A test column names no member of the node |
 | `SE0361` | 3 | A test column is on the wrong side of the operator |
 | `SE0362` | 3 | An expected column names a method the node does not define |
-| `SE0363` | 3 | A test column names a buffer |
+| `SE0363` | 3 | A node with a buffer port has a `tests` section |
 | `SE0402` | 4 | Lossy literal conversion to an integer target |
 | `SE0403` | 4 | Not an enumerator of the finite type the site expects |
 | `SE0404` | 4 | An enumerator where a number is expected, or a number where an enumerator is |
@@ -5282,6 +5283,8 @@ Recorded so that their absence is visibly deliberate.
    A root buffer output could publish a copy; a root buffer input has no
    capacity to size `Sim::Inputs` with, since a reader declares none. Both wait
    for the C API roadmap item, which will settle how a host passes bytes in.
+   Node tests (§6.13) wait with them (`SE0363`): a test program runs its node
+   as the root.
 
 16b. **Instance arrays and generated wiring** — `node stage[N] : Biquad` plus a
    rule for chaining them. This is the one that genuinely costs what §6.4a's

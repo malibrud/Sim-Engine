@@ -1,0 +1,17 @@
+﻿error[SE0445]: buffer port `packet` on the root node `bufroot.BufRoot`
+ --> tests/emit/lib/bufroot/BufRoot.se:6:15
+  |
+6 |     inputs  { packet: buffer; }
+  |               ^^^^^^ the host boundary
+  = note: the root's ports become Sim::Inputs / Sim::Outputs and the manifest's boundary rows, which do not carry bytes yet (§5.1a, Appendix C 16c)
+  = help: keep the buffer inside the model: put the node that produces or consumes it under a composite root
+
+error[SE0445]: buffer port `data` on the root node `bufroot.BufRoot`
+ --> tests/emit/lib/bufroot/BufRoot.se:7:15
+  |
+7 |     outputs { data: buffer(16); }
+  |               ^^^^ the host boundary
+  = note: the root's ports become Sim::Inputs / Sim::Outputs and the manifest's boundary rows, which do not carry bytes yet (§5.1a, Appendix C 16c)
+  = help: keep the buffer inside the model: put the node that produces or consumes it under a composite root
+
+2 errors emitted

@@ -94,10 +94,23 @@ struct Type {
     // themselves be parametric (`Vec3(A*B)` inside a node with `units {A; B;}`),
     // in which case they are bound again when that node is instantiated.
     std::vector<Unit> unit_args;
+    // §5.1a — a buffer is a scalar here for the same reason an enum is: one
+    // member, no fields, carried by value through every path that treats a
+    // scalar as one thing. `scalar` is its C++ spelling, `se_rt::buffer<N>`
+    // for storage and `se_rt::buffer_view` for a reader (capacity 0), and
+    // `unit` is dimensionless, so no wire ever converts one.
+    bool buffer = false;
+    long capacity = 0;
     Loc loc;
 
     const char* cpp() const { return scalar.c_str(); }
 };
+
+// §5.1a — how the DSL spells a buffer type, for diagnostics, the manifest, the
+// topology page and a recorded column's header.
+inline std::string buffer_label(const Type& t) {
+    return t.capacity > 0 ? "buffer(" + std::to_string(t.capacity) + ")" : "buffer";
+}
 
 struct Field {
     std::string name;
@@ -493,6 +506,9 @@ struct RecordedSignal {
     // §13.5 — an enum column is its integer value, headed by the enum's name
     // where a unit would go; the manifest's `[types]` row decodes it.
     const EnumInfo* enm = nullptr;
+    // §13.5 — a buffer column is its size, headed by `buffer(N)` where a unit
+    // would go. Empty for every other column.
+    std::string label;
 };
 
 struct LogConfig {

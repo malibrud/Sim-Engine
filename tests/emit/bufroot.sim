@@ -1,0 +1,5 @@
+sim BufRoot {
+    root:     bufroot.BufRoot;
+    step:     1 (ms);
+    duration: 1 (ms);
+}

@@ -1,0 +1,49 @@
+﻿error[SE0236]: a buffer capacity must be a positive integer literal, found `0`
+ --> tests/err/buffer.se:8:23
+  |
+8 |         zero:  buffer(0);
+  |                       ^ expected a byte count
+  = note: a capacity is part of the signal block's layout, fixed when the code is generated, so it is a literal and never a setting (§5.1a)
+  = note: a buffer has no unit: its argument is how many bytes it holds
+
+error[SE0236]: a buffer capacity must be a positive integer literal, found `1.5`
+ --> tests/err/buffer.se:9:23
+  |
+9 |         frac:  buffer(1.5);
+  |                       ^^^ expected a byte count
+  = note: a capacity is part of the signal block's layout, fixed when the code is generated, so it is a literal and never a setting (§5.1a)
+  = note: a buffer has no unit: its argument is how many bytes it holds
+
+error[SE0236]: a buffer capacity must be a positive integer literal, found an identifier
+  --> tests/err/buffer.se:10:23
+   |
+10 |         unit:  buffer(m);
+   |                       ^ expected a byte count
+   = note: a capacity is part of the signal block's layout, fixed when the code is generated, so it is a literal and never a setting (§5.1a)
+   = note: a buffer has no unit: its argument is how many bytes it holds
+
+error[SE0236]: a buffer capacity must be a positive integer literal, found `-`
+  --> tests/err/buffer.se:11:23
+   |
+11 |         neg:   buffer(-3);
+   |                       ^ expected a byte count
+   = note: a capacity is part of the signal block's layout, fixed when the code is generated, so it is a literal and never a setting (§5.1a)
+   = note: a buffer has no unit: its argument is how many bytes it holds
+
+error[SE0236]: a buffer capacity must be a positive integer literal, found an identifier
+  --> tests/err/buffer.se:12:23
+   |
+12 |         param: buffer(param.n);
+   |                       ^^^^^ expected a byte count
+   = note: a capacity is part of the signal block's layout, fixed when the code is generated, so it is a literal and never a setting (§5.1a)
+   = note: a buffer has no unit: its argument is how many bytes it holds
+
+error[SE0236]: a buffer capacity must be a positive integer literal, found `1e3`
+  --> tests/err/buffer.se:13:23
+   |
+13 |         expo:  buffer(1e3);
+   |                       ^^^ expected a byte count
+   = note: a capacity is part of the signal block's layout, fixed when the code is generated, so it is a literal and never a setting (§5.1a)
+   = note: a buffer has no unit: its argument is how many bytes it holds
+
+6 errors emitted

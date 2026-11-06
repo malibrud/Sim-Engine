@@ -1814,6 +1814,24 @@ bool Elaborator::port_conversion(const Field& from, const Field& to, const Sourc
     scale = 1.0;
     offset = 0.0;
     field_convs.clear();
+    // §5.1a — a buffer goes only into a buffer, and then there is nothing to
+    // convert: it has no unit, and a reader accepts any capacity. Checked first
+    // so a literal or a setting into a buffer input says "buffer", which is what
+    // is wrong, rather than "scalar".
+    if (from.type.buffer || to.type.buffer) {
+        if (from.type.buffer && to.type.buffer) return true;
+        auto name = [](const Type& t) {
+            return t.buffer      ? "`" + buffer_label(t) + "`"
+                   : t.is_record ? std::string("a record")
+                   : t.enm       ? "`" + t.enm->fq + "`"
+                                 : "`" + t.scalar + "(" + t.unit.str() + ")`";
+        };
+        diag_.error("SE0410", src, loc, "a buffer can be wired only to a buffer",
+                    name(from.type) + " -> " + name(to.type),
+                    {note("a buffer is opaque bytes with a size: it is not a number, and "
+                          "a literal or a setting cannot stand for one (\xc2\xa7""5.1a)")});
+        return false;
+    }
     if (from.type.is_record != to.type.is_record) {
         diag_.error("SE0410", src, loc, "a record and a scalar cannot be wired together",
                     std::string(from.type.is_record ? "record -> scalar"
@@ -2130,9 +2148,11 @@ void Elaborator::collect_wires(const NodeInfo* def, const std::string& path, Mod
             // alone lets `port_conversion` report it (`SE0410`).
             //
             // Nor when it is an enum (§5.2a): a literal endpoint is a number,
-            // never an enumerator, and the same check reports it.
+            // never an enumerator, and the same check reports it. Nor a buffer
+            // (§5.1a), for the same reason.
             Field eff = sf;
-            if (w.source.is_literal && !w.source.unit && !df.type.is_record && !df.type.enm)
+            if (w.source.is_literal && !w.source.unit && !df.type.is_record && !df.type.enm &&
+                !df.type.buffer)
                 eff.type = df.type;
 
             Hop hop;
@@ -2271,6 +2291,25 @@ void Elaborator::resolve_inputs(Model& m) {
 }
 
 void Elaborator::resolve_boundary(const NodeInfo* root, Model& m) {
+    // §5.1a — the root's ports are the host's typed boundary, which has no
+    // settled shape for bytes yet (Appendix C 16c).
+    bool root_buffer = false;
+    for (const std::vector<Field>* ports : {&root->inputs, &root->outputs})
+        for (const Field& f : *ports) {
+            if (!f.type.buffer) continue;
+            root_buffer = true;
+            diag_.error("SE0445", *root->file->src, f.loc,
+                        "buffer port `" + f.name + "` on the root node `" + root->fq + "`",
+                        "the host boundary",
+                        {note("the root's ports become Sim::Inputs / Sim::Outputs and the "
+                              "manifest's boundary rows, which do not carry bytes yet "
+                              "(\xc2\xa7""5.1a, Appendix C 16c)"),
+                         help("keep the buffer inside the model: put the node that "
+                              "produces or consumes it under a composite root")});
+            failed_ = true;
+        }
+    if (root_buffer) return;
+
     for (const Field& f : root->inputs) {
         // The root's inputs become the fields of `Sim::Signals::In`, so the
         // host writes `sim.sig.in.axle_torque` and the manifest addresses the
@@ -2568,6 +2607,13 @@ void Elaborator::resolve_record(const ast::RecordBlock& block, const Source& src
                 s.expr = (sc == 1.0 && of == 0.0)
                              ? base
                              : "(" + base + ") * " + cpp_number(sc) + " + " + cpp_number(of);
+                // §13.5 — a buffer's column is its size. A buffer wire never
+                // converts, so the identity above is the only form that reaches
+                // here.
+                if (scalar.buffer) {
+                    s.expr = base + ".size()";
+                    s.label = buffer_label(scalar);
+                }
             }
             m.record.signals.push_back(std::move(s));
             continue;
@@ -2768,6 +2814,10 @@ void Elaborator::resolve_record(const ast::RecordBlock& block, const Source& src
             }
             s.unit = t.unit;
             s.enm = t.enm;
+            if (t.buffer) {   // §13.5 — its size, headed by its type
+                s.expr += ".size()";
+                s.label = buffer_label(t);
+            }
         }
         m.record.signals.push_back(std::move(s));
     }

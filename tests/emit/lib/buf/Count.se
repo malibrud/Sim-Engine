@@ -1,0 +1,18 @@
+package buf;
+
+// §5.1a — a buffer producer. On step k it stages k bytes (k, k+1, ...), up to
+// its capacity, in a var, and output() publishes them: the registered shape a
+// device reader has, since on_step() may not write an output.
+node Count {
+    outputs { data: buffer(6); }
+    vars    { rx: buffer(6); k: int(-); }
+
+    on_step() {
+        std::uint8_t bytes[8];
+        for (int i = 0; i < 8; ++i) bytes[i] = static_cast<std::uint8_t>(var.k + i);
+        var.rx.assign(bytes, static_cast<std::size_t>(var.k % 9));
+        var.k = var.k + 1;
+    }
+
+    output() { out.data = var.rx; }
+}

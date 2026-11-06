@@ -103,6 +103,12 @@ struct TypeRef {
     // so unlike a node's (§6.2a) these are bound at every REFERENCE.
     std::vector<UnitPtr> unit_args;
     Loc unit_args_loc;
+    // §5.1a — `buffer` / `buffer(N)`. Rides the scalar shape (`is_scalar`,
+    // dimensionless) since it is one member with no fields; `capacity` is 0
+    // when the declaration is bare, which is what a reader writes.
+    bool is_buffer = false;
+    long capacity = 0;
+    Loc capacity_loc;
     Loc loc;
 };
 

@@ -1,0 +1,12 @@
+// §5.1a — storage states a capacity, a reader is bare, and `buffer` is
+// contextual: it is a type name only as a one-segment type.
+package tests;
+
+node Buffer {
+    inputs  { packet: buffer; buffer: double(-); }
+    outputs { data: buffer(1500); n: int(-); }
+    vars    { rx: buffer(65507); }
+
+    on_step() { }
+    output(packet) { out.data = var.rx; out.n = static_cast<int>(in.packet.size()); }
+}

@@ -1,0 +1,15 @@
+package buf;
+
+// §5.1a — a composite's buffer ports are bare on both sides: it holds nothing,
+// it only passes a wire through.
+node Thru {
+    inputs  { p: buffer; }
+    outputs { q: buffer; clipped: bool; }
+
+    structure {
+        node c : Clip;
+        self.p --> c.p;
+        c.q --> self.q;
+        c.clipped --> self.clipped;
+    }
+}

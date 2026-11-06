@@ -317,6 +317,21 @@ bool TestGen::run(const std::string& fq, const Source& req_src, Loc req_loc) {
                           "composite has none (\xc2\xa7""6.13)")});
         return false;
     }
+    // §6.13 — the test program runs this node as the ROOT, and a buffer may not
+    // be on the root (§5.1a, SE0445); nor could a §7 cell spell one.
+    for (const std::vector<Field>* ports : {&info_->inputs, &info_->outputs})
+        for (const Field& f : *ports) {
+            if (!f.type.buffer) continue;
+            diag_.error("SE0363", *src_, def.sec_tests.loc,
+                        "`" + def.name + "` has a buffer port, `" + f.name +
+                            "`, so it cannot carry tests yet",
+                        "a test program runs this node as the root",
+                        {note("a buffer may not be on the root, and a cell has no way to "
+                              "spell bytes (\xc2\xa7""5.1a, Appendix C 16c)"),
+                         help("test the node's logic through a helper with no buffer "
+                              "ports, or exercise it in a model")});
+            return false;
+        }
     if (!bind_units(tests)) return false;
 
     // ── The synthesised model: the node under test as the root. ────────────

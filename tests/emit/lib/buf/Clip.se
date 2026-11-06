@@ -1,0 +1,13 @@
+package buf;
+
+// §5.1a — a reader that is also a producer, of a SMALLER capacity than its
+// source: storage into storage goes through `assign`, which says when it
+// truncates.
+node Clip {
+    inputs  { p: buffer; }
+    outputs { q: buffer(3); clipped: bool; }
+
+    output(p) {
+        out.clipped = !out.q.assign(in.p);
+    }
+}

@@ -1,0 +1,10 @@
+package bufroot;
+
+// §5.1a — a buffer may not be on the root: its ports are the host's boundary,
+// which does not carry bytes yet (Appendix C 16c).
+node BufRoot {
+    inputs  { packet: buffer; }
+    outputs { data: buffer(16); }
+
+    output(packet) { out.data.assign(in.packet); }
+}

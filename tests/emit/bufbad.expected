@@ -1,0 +1,93 @@
+﻿error[SE0325]: a setting may not be a buffer
+ --> tests/emit/lib/bufbad/BufBad.se:8:22
+  |
+8 |     settings { blob: buffer(8); }                 // SE0325: a setting
+  |                      ^^^^^^ a buffer
+  = note: a setting's value is a §7 expression, and §7 is a language of numbers with dimensions
+  = note: a buffer goes on an input, an output or a var (§5.1a)
+
+error[SE0325]: a state may not be a buffer
+  --> tests/emit/lib/bufbad/BufBad.se:11:28
+   |
+11 |     states   { discrete s: buffer(8) = 0; }       // SE0325: a state
+   |                            ^^^^^^ a buffer
+   = note: a state has an initial condition and an override path, both numbers (§6.4); keep the bytes in a var
+   = note: a buffer goes on an input, an output or a var (§5.1a)
+
+error[SE0324]: a capacity on an input buffer
+ --> tests/emit/lib/bufbad/BufBad.se:9:26
+  |
+9 |     inputs   { p: buffer(8); }                    // SE0324: a reader with a capacity
+  |                          ^ a reader holds no bytes
+  = note: an input reads the producer's storage, and a composite's port is a pass-through, so neither has a size of its own; it accepts any capacity (§5.1a)
+  = help: write `p: buffer;`
+
+error[SE0323]: buffer output `q` declares no capacity
+  --> tests/emit/lib/bufbad/BufBad.se:10:19
+   |
+10 |     outputs  { q: buffer; }                       // SE0323: storage with none
+   |                   ^^^^^^ storage needs a size
+   = note: a leaf's output is the wire's storage and a var is the node's own, so each holds the bytes and says how many it can (§5.1a)
+   = help: write `q: buffer(1500);` with the largest payload it must hold
+
+error[SE0323]: buffer var `v` declares no capacity
+  --> tests/emit/lib/bufbad/BufBad.se:12:19
+   |
+12 |     vars     { v: buffer; w [4]: buffer(8); pk: Packet; }   // SE0323, and SE0433: an extent
+   |                   ^^^^^^ storage needs a size
+   = note: a leaf's output is the wire's storage and a var is the node's own, so each holds the bytes and says how many it can (§5.1a)
+   = help: write `v: buffer(1500);` with the largest payload it must hold
+
+error[SE0433]: an array-shaped var must be `double`
+  --> tests/emit/lib/bufbad/BufBad.se:12:29
+   |
+12 |     vars     { v: buffer; w [4]: buffer(8); pk: Packet; }   // SE0323, and SE0433: an extent
+   |                             ^^^ declared `buffer(8)`
+   = note: an array var holds the per-element coefficients an array state is filtered by (§6.5)
+   = help: drop the extent, or make the element type `double`
+
+error[SE0325]: a record field may not be a buffer
+ --> tests/emit/lib/bufbad/BufBad.se:5:22
+  |
+5 | type Packet { bytes: buffer(8); len: int(-); }    // SE0325: a record field
+  |                      ^^^^^^ a buffer
+  = note: a record lowers to a plain struct of numbers with a unit each, and is listed field by field in the manifest (§5.2)
+  = note: a buffer goes on an input, an output or a var (§5.1a)
+
+error[SE0324]: a capacity on a composite's output buffer
+  --> tests/emit/lib/bufbad/BufBad.se:20:25
+   |
+20 |     outputs { q: buffer(8); }                     // SE0324: a composite's port holds nothing
+   |                         ^ a reader holds no bytes
+   = note: an input reads the producer's storage, and a composite's port is a pass-through, so neither has a size of its own; it accepts any capacity (§5.1a)
+   = help: write `q: buffer;`
+
+error[SE0410]: a buffer can be wired only to a buffer
+  --> tests/emit/lib/bufbad/BufBad.se:57:17
+   |
+57 |         m.b --> num.u;                            // SE0410: buffer into a number
+   |                 ^^^^^ `buffer(8)` -> `double(-)`
+   = note: a buffer is opaque bytes with a size: it is not a number, and a literal or a setting cannot stand for one (§5.1a)
+
+error[SE0410]: a buffer can be wired only to a buffer
+  --> tests/emit/lib/bufbad/BufBad.se:58:17
+   |
+58 |         m.x --> sca.p;                            // SE0410: a number into a buffer
+   |                 ^^^^^ `double(-)` -> `buffer`
+   = note: a buffer is opaque bytes with a size: it is not a number, and a literal or a setting cannot stand for one (§5.1a)
+
+error[SE0410]: a buffer can be wired only to a buffer
+  --> tests/emit/lib/bufbad/BufBad.se:59:17
+   |
+59 |         1.0 --> lit.p;                            // SE0410: a literal is not bytes
+   |                 ^^^^^ `double(-)` -> `buffer`
+   = note: a buffer is opaque bytes with a size: it is not a number, and a literal or a setting cannot stand for one (§5.1a)
+
+error[SE0410]: a buffer can be wired only to a buffer
+  --> tests/emit/lib/bufbad/BufBad.se:60:21
+   |
+60 |         param.k --> par.p;                        // SE0410: nor is a setting
+   |                     ^^^^^ `double(-)` -> `buffer`
+   = note: a buffer is opaque bytes with a size: it is not a number, and a literal or a setting cannot stand for one (§5.1a)
+
+12 errors emitted

@@ -1,0 +1,16 @@
+package nt;
+
+// SE0363 — a test program runs its node as the root, and a buffer may not be on
+// the root (§5.1a), so a node with a buffer port cannot carry tests yet.
+node BufTest {
+    inputs  { packet: buffer; }
+    outputs { n: int(-); }
+
+    output(packet) { out.n = static_cast<int>(in.packet.size()); }
+
+    tests {
+        set "an empty packet is size zero", in.packet = out.n {
+            0, 0, "empty";
+        }
+    }
+}

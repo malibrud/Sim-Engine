@@ -381,6 +381,82 @@ using state_ref = value_ref<double>;
 using state_arr = array_ref<double>;
 
 )SERT"
+    R"SERT(// ─── Buffers (section 5.1a) ───────────────────────────────────────────────
+//
+// Opaque bytes plus a size. A leaf's buffer OUTPUT and a buffer VAR are
+// storage, `buffer<N>`; every buffer INPUT is a `buffer_view` onto some
+// producer's storage, which is why a reader accepts any capacity. The three
+// read members are spelled the same on both, so a body reads `in.packet` and
+// `var.rx` alike.
+//
+// The size comes first so that a host reading the signal block through
+// signal_map() finds the length at the slot's own offset without knowing N.
+// An aggregate, so `buffer<N> data{};` zeroes it like every other member.
+struct buffer_view;
+
+template <std::size_t N>
+struct buffer {
+    static_assert(N > 0, "a buffer capacity is a positive byte count");
+    std::int32_t size_;
+    std::uint8_t data_[N];
+
+    const std::uint8_t* data() const { return data_; }
+    std::uint8_t* data() { return data_; }
+    std::size_t size() const { return static_cast<std::size_t>(size_); }
+    static constexpr std::size_t capacity() { return N; }
+    bool empty() const { return size_ == 0; }
+
+    // Clamped to the capacity: the bytes past the old size are whatever the
+    // caller writes into data() next.
+    void resize(std::size_t n) { size_ = static_cast<std::int32_t>(n < N ? n : N); }
+    void clear() { size_ = 0; }
+
+    // Copies min(n, N) bytes, and says whether that was all of them. Never
+    // truncates silently.
+    bool assign(const void* p, std::size_t n) {
+        const std::size_t k = n < N ? n : N;
+        if (k) std::memcpy(data_, p, k);
+        size_ = static_cast<std::int32_t>(k);
+        return k == n;
+    }
+    inline bool assign(const buffer_view& v);
+
+    // Copying one buffer to another copies the bytes that are THERE, not the
+    // capacity: an output pass copies a staged datagram into `out` every
+    // tick, and a 64-byte payload in a 64 KiB buffer should cost 64 bytes.
+    buffer() = default;
+    buffer(const buffer& o) { *this = o; }
+    buffer& operator=(const buffer& o) {
+        size_ = o.size_;
+        if (size_ > 0) std::memcpy(data_, o.data_, static_cast<std::size_t>(size_));
+        return *this;
+    }
+};
+
+// What a reader holds: a pointer into the producer's storage, the size, the
+// capacity. Never owns, never copies the bytes (section 15.3).
+struct buffer_view {
+    buffer_view() = default;
+    template <std::size_t N>
+    buffer_view(const buffer<N>& b) : p_(b.data_), n_(b.size()), cap_(N) {}   // implicit, by design
+
+    const std::uint8_t* data() const { return p_; }
+    std::size_t size() const { return n_; }
+    std::size_t capacity() const { return cap_; }
+    bool empty() const { return n_ == 0; }
+
+private:
+    const std::uint8_t* p_ = nullptr;
+    std::size_t n_ = 0;
+    std::size_t cap_ = 0;
+};
+
+template <std::size_t N>
+inline bool buffer<N>::assign(const buffer_view& v) {
+    return assign(v.data(), v.size());
+}
+
+)SERT"
     R"SERT(// ─── Block descriptors (section 15.6) ────────────────────────────────────────
 //
 // A generated model exposes its signal and discrete-state blocks as one
@@ -394,7 +470,8 @@ struct Slot {
     const char* path;     // model path, as section 13.2 addresses it
     std::size_t offset;   // bytes from the start of the block
     std::size_t size;     // bytes
-    const char* type;     // "double", "int", "bool", "float"
+    const char* type;     // "double", "int", "bool", "float", an enum's C++
+                          // name, or "se_rt::buffer<N>" (size first, section 5.1a)
     const char* unit;     // the declared unit; "-" is dimensionless
 };
 

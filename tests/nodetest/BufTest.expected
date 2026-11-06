@@ -1,0 +1,9 @@
+﻿error[SE0363]: `BufTest` has a buffer port, `packet`, so it cannot carry tests yet
+  --> tests/nodetest/lib/nt/BufTest.se:11:5
+   |
+11 |     tests {
+   |     ^^^^^ a test program runs this node as the root
+   = note: a buffer may not be on the root, and a cell has no way to spell bytes (§5.1a, Appendix C 16c)
+   = help: test the node's logic through a helper with no buffer ports, or exercise it in a model
+
+1 error emitted

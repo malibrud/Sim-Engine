@@ -130,33 +130,36 @@ foreach ($f in (Get-ChildItem -Path (Join-Path $root 'tests\err') -File | Sort-O
     if ($exts -contains $f.Extension) { Run-Case "tests/err/$($f.Name)" $true }
 }
 
-# SPECIFICATION 6.13 -- the stage-3 column errors, which only `sec --test`
+# SPECIFICATION 6.13 -- the stage-3 test errors, which only `sec --test`
 # reaches. Every set in Cols.se is wrong in exactly one way; all of them must be
-# reported, and nothing may be written.
-$colsOut = Join-Path $root 'build\test\cols'
-if (Test-Path $colsOut) { Remove-Item -Recurse -Force $colsOut }
-$colsActual = (& $sec --no-color --no-default-roots --max-errors=0 --test -I 'tests/nodetest/lib' `
-                   -o ($colsOut.Replace('\', '/')) 'tests/nodetest/lib/nt/Cols.se' 2>&1 |
-               Out-String) -replace "`r`n", "`n"
-$colsCode = $LASTEXITCODE
-$colsExpected = Join-Path $root 'tests\nodetest\Cols.expected'
-if ($Update) {
-    Set-Content -Path $colsExpected -Value $colsActual -NoNewline -Encoding utf8
-    Write-Host "update tests/nodetest/Cols.expected"
-    $script:updated++
-} else {
-    $colsWant = ''
-    if (Test-Path $colsExpected) {
-        $colsWant = (Get-Content -Raw -Encoding UTF8 $colsExpected) -replace "`r`n", "`n"
-    }
-    if ($colsCode -eq 1 -and -not (Test-Path $colsOut) -and $colsWant -eq $colsActual) {
-        Write-Host "ok   tests/nodetest/lib/nt/Cols.se : column errors" -ForegroundColor Green
-        $script:pass++
+# reported, and nothing may be written. BufTest.se is a node with a buffer
+# port, which cannot carry tests at all (SE0363, SPECIFICATION 5.1a).
+foreach ($nt in @('Cols', 'BufTest')) {
+    $colsOut = Join-Path $root ('build\test\' + $nt.ToLower())
+    if (Test-Path $colsOut) { Remove-Item -Recurse -Force $colsOut }
+    $colsActual = (& $sec --no-color --no-default-roots --max-errors=0 --test -I 'tests/nodetest/lib' `
+                       -o ($colsOut.Replace('\', '/')) "tests/nodetest/lib/nt/$nt.se" 2>&1 |
+                   Out-String) -replace "`r`n", "`n"
+    $colsCode = $LASTEXITCODE
+    $colsExpected = Join-Path $root "tests\nodetest\$nt.expected"
+    if ($Update) {
+        Set-Content -Path $colsExpected -Value $colsActual -NoNewline -Encoding utf8
+        Write-Host "update tests/nodetest/$nt.expected"
+        $script:updated++
     } else {
-        Write-Host ("FAIL tests/nodetest/lib/nt/Cols.se : column errors, exit " + $colsCode) `
-            -ForegroundColor Red
-        Write-Host $colsActual
-        $script:fail++
+        $colsWant = ''
+        if (Test-Path $colsExpected) {
+            $colsWant = (Get-Content -Raw -Encoding UTF8 $colsExpected) -replace "`r`n", "`n"
+        }
+        if ($colsCode -eq 1 -and -not (Test-Path $colsOut) -and $colsWant -eq $colsActual) {
+            Write-Host "ok   tests/nodetest/lib/nt/$nt.se : test errors" -ForegroundColor Green
+            $script:pass++
+        } else {
+            Write-Host ("FAIL tests/nodetest/lib/nt/$nt.se : test errors, exit " + $colsCode) `
+                -ForegroundColor Red
+            Write-Host $colsActual
+            $script:fail++
+        }
     }
 }
 
@@ -1755,6 +1758,54 @@ if (-not $cl) {
             $script:pass++
         } else {
             Write-Host ("FAIL build/emit/Enums : " + $why) -ForegroundColor Red
+            $script:fail++
+        }
+    }
+
+    # SPECIFICATION 5.1a -- buffers. On step k, src stages min(k mod 9, 6) bytes
+    # k, k+1, ... in a buffer(6) var, and output() copies the var to its output,
+    # so the output lags the var by one row (registered, as a device reader is).
+    # peek reads it directly and sees capacity 6; thru clips it to 3 through a
+    # composite whose ports declare no capacity, and tail sees capacity 3. Every
+    # buffer column is a size.
+    if ($emitDirs.ContainsKey('Buf')) {
+        $bDir = $emitDirs['Buf']
+        Push-Location $bDir
+        & '.\build\release\bin\Buf.exe' 2>&1 | Out-Null
+        $ran = ($LASTEXITCODE -eq 0)
+        Pop-Location
+        $csv = Join-Path $bDir 'buf.csv'
+        $why = 'did not run'
+        if ($ran -and (Test-Path $csv)) {
+            $why = ''
+            $lines = @(Get-Content $csv)
+            $wantHead = 'time (s),src.data [buffer(6)],src.var.rx [buffer(6)],thru.q [buffer],' +
+                        'peek.first [-],peek.cap [-],tail.n [-],tail.cap [-],thru.c.clipped [-]'
+            if ($lines[0] -ne $wantHead) { $why = 'header is ' + $lines[0] }
+            if (-not $why -and $lines.Count -ne 14) { $why = 'expected 13 rows, got ' + ($lines.Count - 1) }
+            for ($r = 0; -not $why -and $r -lt 13; $r++) {
+                $v = [Math]::Min($r % 9, 6)
+                $d = 0
+                if ($r -gt 0) { $d = [Math]::Min(($r - 1) % 9, 6) }
+                $first = -1
+                if ($d -gt 0) { $first = $r - 1 }
+                $clip = 0
+                if ($d -gt 3) { $clip = 1 }
+                $want = @($d, $v, [Math]::Min($d, 3), $first, 6, [Math]::Min($d, 3), 3, $clip)
+                $c = $lines[$r + 1] -split ','
+                for ($j = 0; -not $why -and $j -lt $want.Count; $j++) {
+                    if ([int]$c[$j + 1] -ne $want[$j]) {
+                        $why = "row $r column $($j + 1) reads " + $c[$j + 1] + ", want " + $want[$j]
+                    }
+                }
+            }
+        }
+        if (-not $why) {
+            Write-Host ("ok   build/emit/Buf : buffers copy their size, fan out, clip through a " +
+                        "composite, and record as sizes") -ForegroundColor Green
+            $script:pass++
+        } else {
+            Write-Host ("FAIL build/emit/Buf : " + $why) -ForegroundColor Red
             $script:fail++
         }
     }

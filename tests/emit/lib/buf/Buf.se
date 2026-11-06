@@ -1,0 +1,19 @@
+package buf;
+
+// §5.1a — one producer fanned out to two readers, one of them through a
+// composite that clips the bytes to three.
+node Buf {
+    outputs { n: int(-); n_clip: int(-); }
+
+    structure {
+        node src  : Count;
+        node peek : Peek;
+        node thru : Thru;
+        node tail : Peek;
+
+        src.data --> peek.packet, thru.p;
+        thru.q --> tail.packet;
+        peek.n --> self.n;
+        tail.n --> self.n_clip;
+    }
+}

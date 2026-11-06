@@ -1,0 +1,18 @@
+// SE0236 — a buffer's capacity is a positive integer literal (§5.1a): part of
+// the signal block's layout, so never a setting, a unit or an expression.
+package tests;
+
+node Bad {
+    settings { n: int(-) = 4; }
+    outputs  {
+        zero:  buffer(0);
+        frac:  buffer(1.5);
+        unit:  buffer(m);
+        neg:   buffer(-3);
+        param: buffer(param.n);
+        expo:  buffer(1e3);
+        ok:    buffer(64);
+    }
+
+    output() { }
+}
