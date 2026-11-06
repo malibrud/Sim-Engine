@@ -1,0 +1,115 @@
+// A non-blocking UDP receiver: the latest datagram on a port, as a buffer.
+//
+// Bound to `port` on every interface. Each step, `on_step()` drains whatever
+// has queued up since the last one, up to `max_drain` datagrams, and keeps only
+// the LATEST: a model reading a stream of state (a pose, a setpoint, a sensor
+// frame) wants the freshest value and never a backlog. `count` says how many
+// were taken, so `count > 1` in a recording is exactly where datagrams were
+// dropped. A protocol in which every message matters wants a queue, which is a
+// different node.
+//
+// REGISTERED, as a device reader must be. A socket is a `native`, so it is read
+// only in `on_step()` (§8.4), which cannot write an output; the datagram is
+// staged in a var and `output()` publishes it at the next tick. That is one
+// step of latency, and it makes this node a sort root.
+//
+// OUTPUTS LATCH. On a step with nothing new, `data` still holds the last
+// datagram and only `status` changes, to `NO_DATA`. A decoder downstream can
+// therefore be pure and stateless: it decodes whatever `data` holds, and every
+// signal it produces holds its last value for free. `status == RECEIVED` is the
+// one-step "fresh" edge for anything that cares. `age` is the sim time since
+// the last datagram was taken, measured from the start of the run until there
+// has been one. Sim time, not wall time, so a recorded run is reproducible.
+//
+// A FAILED BIND ENDS THE RUN. A sender that is absent never makes a bind fail
+// (that is `NO_DATA` and a growing `age`), so the failures left are the ones a
+// person has to fix: the port is in use, often by another copy of the same
+// model, or not permitted. `init()` aborts naming the port and the system's
+// reason.
+//
+// Binding every interface makes the operating system treat the program as a
+// server. On Windows that shows the firewall's "allow access" prompt the first
+// time each executable runs; loopback traffic is delivered whatever is chosen
+// there.
+//
+// The data output is copied from the staging var each time `output()` runs,
+// and a node with no state and no `rate` runs it in every output pass. The
+// copy is the datagram's size, not the capacity, so it is small for small
+// datagrams; give the instance a `rate` to hold it between its own ticks if it
+// is not.
+package se.net;
+
+node UdpReceiver {
+    settings {
+        port:      int(-);           // 1..65535
+        max_drain: int(-) = 64;      // datagrams taken per step, at most
+    }
+
+    outputs {
+        data:   buffer(1500);        // the latest datagram; 1500 bytes is a
+                                     // typical Ethernet MTU
+        status: RxStatus;
+        count:  int(-);              // datagrams taken this step
+        age:    double(s);           // since the latest was taken
+    }
+
+    vars {
+        rx:     buffer(1500);
+        st:     RxStatus;
+        n:      int(-);
+        t_last: double(s);
+    }
+
+    native {
+        sock: se_net_detail::UdpSocket;
+    }
+
+    init() {
+        if (!sim.require(param.port >= 1 && param.port <= 65535, "1 <= port <= 65535",
+                         static_cast<double>(param.port)))
+            return;
+        if (!sock.open(param.port)) {
+            log.error("cannot receive on UDP port {}: {}", param.port, sock.error_text());
+            sim.abort(se_rt::format("UDP port {} is not available: {}", param.port,
+                                    sock.error_text()));
+            return;
+        }
+        var.st = RxStatus::NO_DATA;
+        var.t_last = sim.time();
+        log.info("receiving on UDP port {}", param.port);
+    }
+
+    on_step() {
+        const RxStatus was = var.st;
+        RxStatus st = RxStatus::NO_DATA;
+        int taken = 0;
+        // Straight into the staging buffer: a later datagram overwrites an
+        // earlier one, which is what keeping the latest means. A failed or
+        // empty receive writes nothing, so the last datagram survives it.
+        for (int i = 0; i < param.max_drain; ++i) {
+            std::size_t got = 0;
+            const se_net_detail::Recv r =
+                sock.receive(var.rx.data(), var.rx.capacity(), got);
+            if (r == se_net_detail::Recv::WouldBlock) break;
+            if (r == se_net_detail::Recv::Error) {
+                st = RxStatus::ERROR;
+                break;
+            }
+            var.rx.resize(got);
+            ++taken;
+            st = r == se_net_detail::Recv::Truncated ? RxStatus::TRUNCATED : RxStatus::RECEIVED;
+        }
+        if (taken > 0) var.t_last = sim.time();
+        if (st == RxStatus::ERROR && was != RxStatus::ERROR)
+            log.warn("receive failed on UDP port {}: {}", param.port, sock.error_text());
+        var.st = st;
+        var.n = taken;
+    }
+
+    output() {
+        out.data   = var.rx;
+        out.status = var.st;
+        out.count  = var.n;
+        out.age    = sim.time() - var.t_last;
+    }
+}

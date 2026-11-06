@@ -1,0 +1,226 @@
+// Networking: nodes that move bytes between a model and the outside world.
+//
+// Everything here is I/O, so everything here is confined the way §8.4 confines
+// I/O: a socket is a `native`, reachable only from `init()`, `on_step()` and
+// `final()`, and what crosses into the model's wires is a `buffer` (§5.1a) a
+// pure `output()` can publish. Decoding those bytes into typed signals is the
+// job of a leaf that knows the protocol; this package does not guess at one.
+//
+// This manifest is the package's shared C++ (§2.6): the one socket wrapper
+// every node here uses, emitted once into any model that loads the package.
+package se.net;
+
+build {
+    link "ws2_32" when windows;
+}
+
+declarations {
+    #if defined(_WIN32)
+    #  ifndef WIN32_LEAN_AND_MEAN
+    #    define WIN32_LEAN_AND_MEAN
+    #  endif
+    #  ifndef NOMINMAX
+    #    define NOMINMAX
+    #  endif
+    #  include <winsock2.h>
+    #  include <ws2tcpip.h>
+    #else
+    #  include <arpa/inet.h>
+    #  include <netinet/in.h>
+    #  include <sys/socket.h>
+    #  include <sys/uio.h>
+    #  include <fcntl.h>
+    #  include <unistd.h>
+    #  include <cerrno>
+    #endif
+    #include <cstddef>
+    #include <cstdint>
+    #include <cstring>
+    #include <string>
+
+    // The platform headers define `ERROR` (wingdi.h, via windows.h) and
+    // `NO_DATA` (winsock2.h's h_errno codes) as macros, and both are
+    // enumerators of `se.net.RxStatus`. Nothing in this package uses the
+    // macros, and every body after this point names the enumerators.
+    #ifdef ERROR
+    #  undef ERROR
+    #endif
+    #ifdef NO_DATA
+    #  undef NO_DATA
+    #endif
+
+    namespace se_net_detail {
+
+    #if defined(_WIN32)
+    using native_socket = SOCKET;
+    const native_socket kNoSocket = INVALID_SOCKET;
+    #else
+    using native_socket = int;
+    const native_socket kNoSocket = -1;
+    #endif
+
+    // What one non-blocking receive came back with.
+    enum class Recv { Datagram, Truncated, WouldBlock, Error };
+
+    // A non-blocking IPv4 UDP socket bound to one port on every interface.
+    //
+    // RAII on purpose: `final()` does not run for a node whose `init()` did
+    // not complete (§8.1), so a node that aborts in `init()` after opening
+    // this must still release it, and the destructor is what does.
+    //
+    // Winsock's start-up is reference-counted by Windows itself, so each open
+    // socket pairs one WSAStartup with one WSACleanup and needs no counter of
+    // its own.
+    class UdpSocket {
+    public:
+        UdpSocket() = default;
+        ~UdpSocket() { close(); }
+        UdpSocket(const UdpSocket&) = delete;
+        UdpSocket& operator=(const UdpSocket&) = delete;
+
+        bool is_open() const { return s_ != kNoSocket; }
+        const std::string& error_text() const { return err_; }
+
+        // Binds `port` on every interface and makes the socket non-blocking.
+        // No SO_REUSEADDR: a second receiver on the same port is a mistake,
+        // and failing to bind is how it is found.
+        bool open(int port) {
+            close();
+    #if defined(_WIN32)
+            WSADATA wsa;
+            const int started = WSAStartup(MAKEWORD(2, 2), &wsa);
+            if (started != 0) return fail("WSAStartup", started);
+            wsa_ = true;
+    #endif
+            s_ = ::socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+            if (s_ == kNoSocket) return fail("socket", last_error());
+    #if defined(_WIN32)
+            // Without this, an ICMP port-unreachable caused by some earlier
+            // send on this socket surfaces as WSAECONNRESET on a later
+            // receive. A receive-only socket has nothing to learn from it.
+            BOOL report = FALSE;
+            DWORD returned = 0;
+            WSAIoctl(s_, _WSAIOW(IOC_VENDOR, 12) /* SIO_UDP_CONNRESET */, &report,
+                     sizeof report, nullptr, 0, &returned, nullptr, nullptr);
+            u_long nonblocking = 1;
+            if (ioctlsocket(s_, FIONBIO, &nonblocking) != 0)
+                return fail("ioctlsocket(FIONBIO)", last_error());
+    #else
+            const int flags = ::fcntl(s_, F_GETFL, 0);
+            if (flags < 0 || ::fcntl(s_, F_SETFL, flags | O_NONBLOCK) < 0)
+                return fail("fcntl(O_NONBLOCK)", last_error());
+    #endif
+            sockaddr_in addr;
+            std::memset(&addr, 0, sizeof addr);
+            addr.sin_family = AF_INET;
+            addr.sin_port = htons(static_cast<std::uint16_t>(port));
+            addr.sin_addr.s_addr = htonl(INADDR_ANY);
+            if (::bind(s_, reinterpret_cast<const sockaddr*>(&addr), sizeof addr) != 0)
+                return fail("bind", last_error());
+            err_.clear();
+            return true;
+        }
+
+        // One datagram into `buf`, at most `cap` bytes of it. `n` is how many
+        // landed. Never blocks.
+        Recv receive(void* buf, std::size_t cap, std::size_t& n) {
+            n = 0;
+            if (!is_open()) return Recv::Error;
+    #if defined(_WIN32)
+            const int r = ::recvfrom(s_, static_cast<char*>(buf), static_cast<int>(cap), 0,
+                                     nullptr, nullptr);
+            if (r >= 0) {
+                n = static_cast<std::size_t>(r);
+                return Recv::Datagram;
+            }
+            const int e = WSAGetLastError();
+            if (e == WSAEWOULDBLOCK) return Recv::WouldBlock;
+            if (e == WSAEMSGSIZE) {   // the first `cap` bytes landed; the rest is gone
+                n = cap;
+                return Recv::Truncated;
+            }
+            describe("recvfrom", e);
+            return Recv::Error;
+    #else
+            for (;;) {
+                iovec iov;
+                iov.iov_base = buf;
+                iov.iov_len = cap;
+                msghdr msg;
+                std::memset(&msg, 0, sizeof msg);
+                msg.msg_iov = &iov;
+                msg.msg_iovlen = 1;
+                const ssize_t r = ::recvmsg(s_, &msg, 0);
+                if (r >= 0) {
+                    n = static_cast<std::size_t>(r);
+                    return (msg.msg_flags & MSG_TRUNC) ? Recv::Truncated : Recv::Datagram;
+                }
+                const int e = errno;
+                if (e == EINTR) continue;
+                if (e == EAGAIN || e == EWOULDBLOCK) return Recv::WouldBlock;
+                describe("recvmsg", e);
+                return Recv::Error;
+            }
+    #endif
+        }
+
+        void close() {
+            if (s_ != kNoSocket) {
+    #if defined(_WIN32)
+                ::closesocket(s_);
+    #else
+                ::close(s_);
+    #endif
+                s_ = kNoSocket;
+            }
+    #if defined(_WIN32)
+            if (wsa_) {
+                WSACleanup();
+                wsa_ = false;
+            }
+    #endif
+        }
+
+    private:
+        native_socket s_ = kNoSocket;
+        std::string err_;
+    #if defined(_WIN32)
+        bool wsa_ = false;
+    #endif
+
+        static int last_error() {
+    #if defined(_WIN32)
+            return WSAGetLastError();
+    #else
+            return errno;
+    #endif
+        }
+
+        void describe(const char* what, int code) {
+            std::string text;
+    #if defined(_WIN32)
+            char* msg = nullptr;
+            const DWORD len = FormatMessageA(
+                FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM |
+                    FORMAT_MESSAGE_IGNORE_INSERTS,
+                nullptr, static_cast<DWORD>(code), 0, reinterpret_cast<char*>(&msg), 0, nullptr);
+            if (len && msg) text.assign(msg, len);
+            if (msg) LocalFree(msg);
+    #else
+            text = std::strerror(code);
+    #endif
+            while (!text.empty() && (text.back() == '\n' || text.back() == '\r' ||
+                                     text.back() == ' ' || text.back() == '.'))
+                text.pop_back();
+            err_ = std::string(what) + ": " + text + " (" + std::to_string(code) + ")";
+        }
+
+        bool fail(const char* what, int code) {
+            describe(what, code);
+            close();
+            return false;
+        }
+    };
+
+    }  // namespace se_net_detail
+}

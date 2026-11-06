@@ -1,0 +1,20 @@
+// What a receiver saw on its latest step.
+//
+// Only what a non-blocking receive can actually observe. There is no `CLOSED`:
+// UDP has no connection, so a sender that went away looks exactly like a
+// sender with nothing to say, and the receiver reports that as `NO_DATA` while
+// its `age` output grows. A consumer that needs "the link is down" thresholds
+// `age`.
+//
+//   NO_DATA     nothing arrived this step; the data output still holds the
+//               last datagram
+//   RECEIVED    at least one datagram arrived, and the last one fit. A
+//               zero-length datagram is RECEIVED with size 0, not a close
+//   TRUNCATED   the last datagram was larger than the receiver's capacity;
+//               the data output holds its first `capacity` bytes, and is
+//               therefore not the whole message
+//   ERROR       the receive failed; the log names the reason once, when the
+//               status first becomes ERROR
+package se.net;
+
+finite RxStatus { NO_DATA, RECEIVED, TRUNCATED, ERROR }

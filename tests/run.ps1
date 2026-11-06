@@ -645,6 +645,8 @@ $smokeSettings = @{
     'se.sig.ct.Differentiator3'     = 'wc = 1.0(rad/s);'
     'se.sig.dt.LowPass2'            = 'wn = 1.0(rad/s);'
     'se.sig.src.Ramp'               = 'slope = 1.0(m/s);'
+    # Compiled and linked, never run: running it would bind the port.
+    'se.net.UdpReceiver'            = 'port = 47001;'
 }
 
 # Sec. 6.3: an unconnected input is an error, there is no implicit zero, so
