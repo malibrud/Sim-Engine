@@ -2876,7 +2876,8 @@ why.** `sim.time()` is legal in every method (§10.5): the hazard here is a side
 effect repeated at states the trajectory never visits, and a read has no side
 effect to repeat. Evaluating y = g(t,x,u) four times is not a problem — it is
 what a Runge-Kutta stage IS, and the language already hands those methods `x`
-and `u` at exactly those trial states.
+and `u` at exactly those trial states — and the helpers they call `x` too
+(§11.4).
 
 `sim.check_*` (§10.6) is legal in every method for the same reason `log.trace`
 is: it is observational. It fires four times per step when a contract is
@@ -3524,6 +3525,26 @@ then brace-match (§11.2). Consequently:
 The text is copied as-is, so a helper's own purity is the author's
 responsibility. A non-`const` helper called from `output()` fails to compile,
 which is the intended outcome.
+
+**A helper sees the node as its caller does, at that moment.** It is a member,
+so what it reads through `this` is what the calling method reads, and this is
+guaranteed rather than incidental:
+
+- `state` is the **trial state** when the caller runs at a solver stage —
+  `derivative()` always, `output()` in a node that is not held — and the
+  step's state otherwise. Only continuous states have a trial value; discrete
+  and finite ones read the tick's, as they do for the caller. `state` is a
+  view into `x`, not a parameter, and every solver puts each stage's trial
+  state into `x` (§15.5).
+- `sim.time()` is the stage's instant, as it is for the caller (§10.5).
+- `param` and `var` are what they always are: a stage moves neither.
+- `in`, `out`, `der`, `next` and the other out-parameters are the caller's
+  arguments, not members, so a helper sees them only when they are passed.
+  That is what keeps §8.3a sound: a helper can read no input its caller's
+  list did not declare.
+
+So a helper that computes from `state` needs no argument for it, and gives the
+same answer at a stage as the same expression written inline in the caller.
 
 ---
 
@@ -4239,6 +4260,15 @@ when the model has finite states) is a complete checkpoint of the model.**
   is no second copy to desynchronise. A solver that owns its own vector (CVODE,
   odeint) does one `memcpy` each way per evaluation: the proxies buy a clean
   *layout*, not zero copying.
+- **A stage's trial state is in `x`, and that is an obligation.** Every solver
+  evaluates a stage by writing its trial state into `x` — the built-in ones
+  assign `x[i] = x0[i] + …` before each stage, an owning solver copies in — so
+  that `state` is never a snapshot. `derivative()` and `output()` could be
+  handed the state as an argument, but a helper they call cannot: it is a
+  member that reads `state` through `this`, its body is verbatim, and the
+  generator could never redirect it (§11.4). A lowering that passed `x` as a
+  parameter and left the member at the step's state would leave every helper
+  reading the wrong instant, silently.
 - **`adjust` is a second view of `x`, not a fourth block.** §6.4b's aliasing is
   exactly this: `Adj` holds the same `state_ref`s that `State` holds for the
   node's continuous states, bound to the same slots of the same array. Like
