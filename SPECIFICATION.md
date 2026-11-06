@@ -254,8 +254,9 @@ imports it back. Resolution is whole-program (stage 3), not single-pass.
 
 A file named `package.se` in a package directory is a **package manifest**. It
 declares no node, type or finite type; it may contain only a `package` declaration, `use`
-declarations, and a `build` block (§12). Its purpose is to let a package act as
-a **dependency bundle** — a named collection of build primitives that any model
+declarations, a `build` block (§12), and a `declarations` block (§6.6). Its
+purpose is to let a package act as a **dependency bundle** — a named collection
+of build primitives, and of C++ shared by the package's nodes, that any model
 can pull in by depending on the package.
 
 ```
@@ -272,6 +273,29 @@ build {
 ```
 
 `package.se` is the only `.se` file exempt from §2.3.
+
+**A manifest's `declarations` block is the package's shared C++.** A helper class
+two nodes of one package both need — a socket wrapper, a protocol codec — cannot
+live in either node's own `declarations` (§6.6): each block is guarded by its
+node, so two copies of one class would both land in the model's single
+translation unit and collide. The manifest's block is guarded by the *package*
+instead, and is emitted once, ahead of every node's `declarations`, in any model
+that loads the package. That is the same trigger as the manifest's build
+primitives — the manifest is read when any file of its package is — so a
+package's link flags and its shared C++ always arrive together. A file-level
+`declarations` block anywhere but a `package.se` is `SE0322`.
+
+```
+// <root>/se/net/package.se
+package se.net;
+
+build { link "ws2_32" when windows; }
+
+declarations {
+    #include <cstdint>
+    namespace se_net_detail { class UdpSocket { /* … */ }; }
+}
+```
 
 ---
 
@@ -364,6 +388,8 @@ includes:
   contextual inside `sim`;
 - annotation names and their keys (`diagram`, `collapsed`, `expanded`) —
   recognised only after an `@` (§6.15);
+- the type name `buffer` — recognised as a one-segment type, as the scalar
+  type names are (§5.1a);
 - the accessor prefixes (`param`, `in`, `out`, `state`, `der`, `next`,
   `adjust`, `var`) and the builtin namespaces (`log`, `sim`) — these live in
   **C++ scope inside verbatim bodies**, not in the DSL's token stream, so they
@@ -673,6 +699,88 @@ only, and the language has one rule to state instead of a rule and an exception.
 it an array of that scalar type (§6.4, §6.5). The scalar type set is unchanged;
 an extent is a property of the declaration, not a new type. Ports, settings,
 record fields and natives may not carry one (`SE0234`).
+
+One builtin type is not on this list because it is not a scalar: `buffer`, a
+run of raw bytes with a length (§5.1a). It is not an array either, and that is
+the point of making it its own type.
+
+### 5.1a Buffers
+
+A **buffer** is opaque bytes plus a size. It exists for the values a model
+carries without understanding them — a received datagram, a frame on its way to
+a device — where the bytes mean something only to the C++ that encodes or
+decodes them.
+
+```
+outputs { data:   buffer(1500); }   // storage: up to 1500 bytes
+inputs  { packet: buffer; }         // a reader: any capacity
+vars    { rx:     buffer(1500); }
+```
+
+**It is a buffer, not an array, and the language keeps the two apart.** An array
+state (§6.4a) has elements the DSL knows about: each has the declared unit, an
+index path (`bw.w1[3]`), an initial condition. A buffer has none of that. There
+is no element type, no unit, no index, no element-wise conversion and no literal;
+only C++ looks inside. Its argument is therefore not an extent in brackets but
+the type's own argument in the slot every type has (§5.1), and it is a capacity
+rather than a unit.
+
+- **The capacity is an integer literal, and only storage states one.** A
+  buffer that *holds* bytes — a leaf's output, a var — declares how many it can
+  hold: `buffer(1500)`. A buffer that only *reads* or *passes through* — any
+  input, either port of a composite — is written bare, `buffer`, exactly as
+  `bool` is written with no unit. A missing capacity on storage is `SE0323`; a
+  capacity on a reader is `SE0324`; a capacity that is not a positive integer
+  literal is `SE0236`. There is no capacity setting: a capacity is part of the
+  signal block's layout, which is fixed when the code is generated (§15.5), and
+  a configuration-time override (§6.2b) could otherwise resize a struct that
+  has already been compiled.
+- **The value carries its size.** `0 <= size <= capacity`, and the size travels
+  with the bytes on one wire, so the two cannot be wired apart. A zero-size
+  buffer is a value like any other.
+- **A reader accepts any capacity.** A `buffer` input wired from a
+  `buffer(1500)` and from a `buffer(64)` is the same input. Nothing is ever
+  truncated by a wire: a reader sees exactly the bytes the producer holds, and
+  checks `size()` itself if it needs a minimum.
+- **Where it may appear:** inputs, outputs and vars. Not a setting — §7 is a
+  language of numbers with dimensions, and a buffer is neither — not a state,
+  and not a record field (`SE0325`). A var buffer may not carry an extent
+  (`SE0433`).
+- **A wire carries a buffer only into a buffer.** A buffer into a scalar or a
+  record port, or either into a buffer, is the port-type mismatch `SE0410`. A
+  literal or a setting is a number, so neither may drive a buffer input
+  (`SE0410`).
+- **Not on the root.** The root's ports are the host's boundary (§15.6), and a
+  buffer there has no settled shape for a host to read or write yet. A buffer
+  port on the root node is `SE0445`; see Appendix C.
+- **`buffer` is contextual**, recognised as a one-segment type name exactly as
+  `double` is, and usable as an ordinary identifier everywhere else.
+
+**In C++** a storage buffer is `se_rt::buffer<N>` and a reader is
+`se_rt::buffer_view`. Both have the same three members, so a body reads
+`in.packet.data()`, `in.packet.size()`, `in.packet.capacity()` and
+`var.rx.size()` the same way:
+
+```cpp
+template <std::size_t N> struct buffer {
+    std::int32_t size_;          // first, so a reader of the signal block can
+    std::uint8_t data_[N];       // find the size without knowing N
+    const std::uint8_t* data() const;  std::uint8_t* data();
+    std::size_t size() const;          static constexpr std::size_t capacity();
+    void resize(std::size_t n);        // clamped to N
+    bool assign(const void* p, std::size_t n);   // false if it had to truncate
+    bool assign(const buffer_view& v);
+};
+struct buffer_view {             // pointer, size, capacity — never owns
+    const std::uint8_t* data() const;  std::size_t size() const;
+    std::size_t capacity() const;
+};
+```
+
+Copying one `buffer<N>` to another copies `size()` bytes, not `N`. A
+`buffer<N>` converts to a `buffer_view` implicitly, which is the whole of how a
+wire reaches a reader (§15.3). `assign` is the only way to put a view's bytes
+into storage, and it says when it truncates rather than doing so quietly.
 
 ### 5.2 Record types
 
@@ -1278,6 +1386,12 @@ an output's from `output()`.
   A port lives in the signal block, whose offsets come from `offsetof` on a
   generated struct (§15.5); a runtime-sized member would destroy that. A bundle
   of N signals crosses a wire as N ports or as a record. See Appendix C.
+- **A port may be a buffer** (§5.1a). An output declares its capacity,
+  `data: buffer(1500);`, because the producer's `Out` member is the wire's
+  storage (§15.3); an input does not, `packet: buffer;`, because it only reads.
+  The capacity is a literal, so the member has a fixed size and the signal
+  block keeps its `offsetof` layout — which is why a buffer is allowed here
+  when an extent is not.
 
 ### 6.4 `states`
 
@@ -1724,6 +1838,9 @@ outside the solver vector and outside the override channel.
 - A `var` needs no default; it is zero-initialised and is expected to be computed
   in `init()`.
 - Records are permitted as `vars`.
+- **A `var` may be a buffer**, with a capacity (§5.1a). It is the usual staging
+  area for one: a body that reads a device in `on_step()` cannot write an
+  output there, so it fills `var.rx` and `output()` copies it to `out`.
 - **A `var` may carry an extent**, on the same terms as a state (§6.4a): a §7
   expression evaluated at configuration, dimensionless, a non-negative integer.
   This is what holds the per-element coefficients an array state is filtered by,
@@ -1764,6 +1881,10 @@ instantiated. This is the home for `#include`s, free functions, file-local
 constants, and helper types.
 
 A node with a `declarations` block is a leaf (§6.1).
+
+C++ that several nodes of one package share belongs in the package manifest's
+`declarations` block instead (§2.6), which is guarded once per package and
+emitted ahead of every node's block.
 
 ### 6.7 `native`
 
@@ -2400,9 +2521,14 @@ both in one step — a script, a build system, a future driver — sits above
 | `SE0360` | 3 | A column names no member of the node |
 | `SE0361` | 3 | A column is on the wrong side of the operator |
 | `SE0362` | 3 | An expected column names a method the node does not define |
+| `SE0363` | 3 | A column names a buffer |
 | `SE0470` | 4 | A set reaches a rate-derived setting with no `step` |
 
 A dimension error in a cell or a tolerance is the ordinary `SE0410`.
+
+**A buffer cannot be a column** (`SE0363`): a cell is a §7 expression, and §7
+has no way to spell bytes (§5.1a). A node with buffer ports may still have
+tests; they name its other members.
 
 ### 6.14 Documentation
 
@@ -3863,6 +3989,10 @@ record: {
   the rest of it reads this column too — and the manifest's `[types]` row of
   the same name (§15.6) maps each value back to its name. A protocol code
   therefore appears in the file exactly as the device reports it. A `bool` records as 0 or 1.
+- **A buffer is recorded as its size.** Its bytes are opaque (§5.1a) and a
+  table of numbers has nowhere honest to put them, so the column is the one
+  thing about a buffer that *is* a number, headed by the type where a unit
+  would go: `rx.data [buffer(1500)]`, or `[buffer]` for a reader's port.
 - **An element of an array state is recorded by index** — `bw.state.w1[3]` — and
   the column is named that way. As with an override (§13.4), an index past the
   configured extent is a configuration failure, not a compile error; and since
@@ -4055,6 +4185,15 @@ and lands in the view's initialiser: a scalar as `sig.src.y * 0.001`, a record a
 a brace initialiser applying each field's own factor,
 `Vec3{(sig.src.v.x * 0.001), (sig.src.v.y * 0.001), (sig.src.v.z * 0.001)}`.
 Nothing else in the generated code ever needs conversion machinery.
+
+**A buffer is the one input that is not copied.** Its view is
+`se_rt::buffer_view` (§5.1a) — a pointer into the producer's `Out` member, plus
+the size and capacity — built from `sig.rx.data` by an implicit conversion, so
+the call site reads `dec.output({sig.rx.data}, sig.dec)` like any other. There
+is nothing to convert, a buffer having no unit, and copying up to a datagram per
+reader per call would buy nothing. The reference is sound for the same reason
+the signal block is: every reader runs after its producer in the output pass
+(§8.5), and the storage outlives the call.
 
 The cost is a struct copy per record input per call — three doubles for a `Vec3`
 — where an earlier lowering passed `const WheelState&`. That reference is what
@@ -4418,6 +4557,16 @@ its type column carries the type's qualified name and its unit column `-`, and a
 recorded column of it (§13.5) is decoded through this row. Its `[settings]`
 value is the enumerator's name, which is also what `dump_settings` writes.
 
+**A buffer's `[signals]` row is one row**, unit `-` and type `buffer(N)`; its
+`signal_map()` entry is one slot whose size is the whole `se_rt::buffer<N>`,
+size field first (§5.1a), so a host reading the signal block finds the length
+at the slot's offset without knowing N.
+
+```
+[signals]
+          rx.data               -           buffer(1500)
+```
+
 Paths are **root-relative** (§13.2): the `root:` entry names a definition, not an
 instance, so there is no prefix for the root itself.
 
@@ -4579,6 +4728,7 @@ of thing wearing the same name.
 | `SE0233` | 2 | A `native` member may not carry a unit |
 | `SE0234` | 2 | An extent is not permitted on this declaration (port, setting, record field, `native`) |
 | `SE0235` | 2 | Malformed array extent |
+| `SE0236` | 2 | A buffer capacity that is not a positive integer literal |
 | `SE0240` | 2 | Helper function has no body |
 | `SE0241` | 2 | `init` takes no parameters |
 | `SE0242` | 2 | `final` takes at most one parameter |
@@ -4620,6 +4770,10 @@ of thing wearing the same name.
 | `SE0319` | 3 | A finite type declares no enumerators |
 | `SE0320` | 3 | Node has both code and a `structure` block |
 | `SE0321` | 3 | `collapsed` or `expanded` on a leaf, or on an instance of one |
+| `SE0322` | 3 | A file-level `declarations` block outside `package.se` |
+| `SE0323` | 3 | A buffer with no capacity where it is storage (a leaf's output, a var) |
+| `SE0324` | 3 | A buffer capacity on a reader (an input, a composite's port) |
+| `SE0325` | 3 | A buffer setting, state or record field |
 | `SE0330` | 3 | Duplicate member name in a node |
 | `SE0331` | 3 | Member name shadows a generated accessor |
 | `SE0332` | 3 | A name the generated C++ spells verbatim is a C++ keyword |
@@ -4643,6 +4797,7 @@ of thing wearing the same name.
 | `SE0360` | 3 | A test column names no member of the node |
 | `SE0361` | 3 | A test column is on the wrong side of the operator |
 | `SE0362` | 3 | An expected column names a method the node does not define |
+| `SE0363` | 3 | A test column names a buffer |
 | `SE0402` | 4 | Lossy literal conversion to an integer target |
 | `SE0403` | 4 | Not an enumerator of the finite type the site expects |
 | `SE0404` | 4 | An enumerator where a number is expected, or a number where an enumerator is |
@@ -4672,6 +4827,7 @@ of thing wearing the same name.
 | `SE0441` | 4 | Unknown or duplicated setting binding |
 | `SE0442` | 4 | Fan-in: two sources into one input |
 | `SE0443` | 4 | Wire direction is invalid |
+| `SE0445` | 4 | A buffer port on the root node |
 | `SE0450` | 4 | Rate is not an integer divisor of the base rate |
 | `SE0451` | 4 | `sync` is not an integer multiple of `step` |
 | `SE0460` | 4 | Override target is ambiguous, or is an output |
@@ -4709,6 +4865,8 @@ alternation. Terminals are quoted. `VERBATIM_BLOCK`, `VERBATIM_SIGNATURE`, and
 (* ─── model file ─────────────────────────────────────────────────────── *)
 
 model_file      = package_decl { use_decl } { definition } EOF ;
+(* §2.6 — a package manifest, `package.se`, holds no definition. *)
+manifest_file   = package_decl { use_decl } { build_sec | declarations_sec } EOF ;
 
 package_decl    = "package" qualified_name ";" ;
 use_decl        = "use" qualified_name ";" ;
@@ -4731,8 +4889,10 @@ enumerator      = IDENT [ "=" [ "-" ] INT ] ;
 
 (* One production for every declaration, scalar or record. A one-segment path
    naming a closed scalar type (5.1) takes its unit as the argument: one for
-   `double`/`float`/`int`, none for `bool`. *)
-type_ref        = qualified_name [ "(" unit_expr { "," unit_expr } ")" ] ;
+   `double`/`float`/`int`, none for `bool`. The one-segment path `buffer`
+   takes no unit; its optional argument is a capacity (5.1a). *)
+type_ref        = qualified_name [ "(" unit_expr { "," unit_expr } ")" ]
+                | "buffer" [ "(" INT ")" ] ;
 
 (* ─── nodes ──────────────────────────────────────────────────────────── *)
 
@@ -5112,7 +5272,16 @@ Recorded so that their absence is visibly deliberate.
    crosses a wire only as N ports or as a fixed record. Array *states* and *vars*
    arrived without it (§6.4a) because neither is in the signal block. If taken
    up, the question to answer first is whether `sig` splits the way `dis` did —
-   a struct for fixed ports plus a flat block for array ones.
+   a struct for fixed ports plus a flat block for array ones. The buffer
+   (§5.1a) does not answer it: a buffer's capacity is a literal, so its member
+   has a fixed size and needs no such split, and a buffer is opaque bytes, not
+   an array of signals the DSL can describe.
+
+16c. **A buffer on the root** (§5.1a, `SE0445`). The root's ports are the
+   host's typed `Sim::Inputs` / `Sim::Outputs` and the manifest's boundary rows.
+   A root buffer output could publish a copy; a root buffer input has no
+   capacity to size `Sim::Inputs` with, since a reader declares none. Both wait
+   for the C API roadmap item, which will settle how a host passes bytes in.
 
 16b. **Instance arrays and generated wiring** — `node stage[N] : Biquad` plus a
    rule for chaining them. This is the one that genuinely costs what §6.4a's
