@@ -19,9 +19,9 @@
 //
 //  3 and 4 are about Sim::Impl, which the public header leaves incomplete, so
 //  this program #includes Drivetrain.cpp and is compiled on its own: the white
-//  box and the public interface in one translation unit. There is no settings
-//  loader in the public interface yet (§14.1), so the rate override reaches
-//  into Impl for its pin.
+//  box and the public interface in one translation unit. The rate override
+//  arrives through the settings loader (§14.1), as it would in a shipped
+//  binary; the loader's own checks are in settings_host.cpp.
 //
 //  It also drives the root boundary, which the example host does not: the sim
 //  file has no syntax for supplying `axle_torque`, so a batch run leaves it at
@@ -59,10 +59,9 @@ int main() {
         static drivetrain::Sim::Impl retuned;
         check(retuned.tc_decim == 5, "tc elaborates to 200 Hz on a 1 kHz base");
 
-        retuned.tc.param.rate = 500.0;
-        retuned.se_pin_[3] = true;
-        retuned.resolve_settings();
-        check(retuned.config_error().empty(), "500 Hz is an integer divisor of 1 kHz");
+        check(retuned.load_settings("tc.rate = 500 (Hz);", "host"),
+              "500 Hz is an integer divisor of 1 kHz");
+        check(retuned.config_error().empty(), "and leaves no configuration error");
         check(retuned.tc_decim == 2, "the decimation followed the rate override");
 
         std::uint64_t off_sample = 0, total = 0;
@@ -122,6 +121,9 @@ int main() {
     check(sim.settings().wheel_inertia == 0.95, "settings() start at the .sim's values");
     check(sim.init(), "init() starts the run");
     check(sim.time() == 0.0, "time starts at zero");
+    check(!sim.load_settings("whl.radius = 0.3 (m);"), "a load after init() is refused (§6.2b)");
+    check(std::string(sim.error()).find("after init()") != std::string::npos,
+          "and error() says configuration is over");
 
     double cut_at_last_change = 0.0;
     std::uint64_t changes_off_sample = 0, changes_total = 0, clock_slips = 0;

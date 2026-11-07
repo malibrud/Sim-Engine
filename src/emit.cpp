@@ -3,7 +3,9 @@
 // ─────────────────────────────────────────────────────────────────────────────
 #include "emit.hpp"
 
+#include <algorithm>
 #include <array>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -413,6 +415,22 @@ private:
     void sim_record();
     void sim_run();
     void sim_maps();
+
+    // §14.1 — every path a settings source may bind, in the order of the
+    // generated `setting_rows()` table: the settings first, indexed exactly as
+    // `m_.settings` is, so a setting's row number IS its pin; then each scalar
+    // state's initial value; then each array state, bound by element.
+    struct LoadRow {
+        enum class Kind { Setting, Initial, Element };
+        Kind kind = Kind::Setting;
+        std::string path;
+        std::size_t setting = 0;           // Setting: index into m_.settings
+        const Leaf* leaf = nullptr;        // Initial, Element
+        const StateSlot* state = nullptr;  // Initial, Element
+    };
+    std::vector<LoadRow> load_rows() const;
+    static std::string ic_member(const Leaf& leaf, const StateSlot& st);
+    void sim_settings_source();
 
     // The expression a consumer reads for one of its inputs (§15.3).
     std::string input_expr(const Leaf& leaf, const std::string& port) const;
@@ -1409,6 +1427,60 @@ void Emitter::sim_members() {
     // resolve_settings() runs from the constructor, where there is no run yet
     // to fail; init() turns this into sim.fail() before any node starts.
     o_ << "\n    std::string   se_cfg_error_;\n";
+
+    // §13.4 / §14.1 — the initial conditions are data rather than literals in
+    // apply_initial_conditions(), so a settings source loaded into a compiled
+    // model can move them. Each starts as what elaboration computed, sim-file
+    // overrides included.
+    {
+        const std::vector<LoadRow> rows = load_rows();
+        std::vector<Row> ics;
+        for (const LoadRow& r : rows) {
+            if (r.kind != LoadRow::Kind::Initial) continue;
+            Row x;
+            x.type = r.state->enm ? r.state->enm->cpp_name : r.state->scalar;
+            x.decl = ic_member(*r.leaf, *r.state) + " = " +
+                     literal(r.state->initial, r.state->scalar, r.state->enm) + ";";
+            x.comment = "// " + r.state->unit.str();
+            ics.push_back(x);
+        }
+        if (!ics.empty()) {
+            std::size_t wty = 0, wd = 0;
+            for (const Row& x : ics) {
+                wty = std::max(wty, x.type.size());
+                wd = std::max(wd, x.decl.size());
+            }
+            o_ << "\n    // The initial conditions (§13.4), as data so a settings source can\n";
+            o_ << "    // move them (§14.1). apply_initial_conditions() writes them in.\n";
+            o_ << "    struct InitialConditions {\n";
+            for (const Row& x : ics)
+                o_ << "        " << pad(x.type, wty) << " " << col(x.decl, wd + 2) << x.comment
+                   << "\n";
+            o_ << "    } se_ic_;\n";
+        }
+        bool any_element = false;
+        for (const LoadRow& r : rows) any_element = any_element || r.kind == LoadRow::Kind::Element;
+        if (any_element) {
+            o_ << "    // An array state's initial conditions beyond its uniform default, one\n";
+            o_ << "    // element each: {row in setting_rows(), index, value}.\n";
+            o_ << "    std::vector<se_rt::Assignment> se_ic_elements_{";
+            bool first = true;
+            for (std::size_t i = 0; i < rows.size(); ++i) {
+                if (rows[i].kind != LoadRow::Kind::Element) continue;
+                for (const StateSlot::ElementIC& ic : rows[i].state->element_ic) {
+                    o_ << (first ? "\n" : ",\n") << "        {" << i << ", " << ic.index << ", "
+                       << dbl(ic.value) << "}";
+                    first = false;
+                }
+            }
+            o_ << (first ? "};\n" : "};\n");
+        } else {
+            o_ << "    std::vector<se_rt::Assignment> se_ic_elements_;   // no array states\n";
+        }
+    }
+    o_ << "    std::string se_load_error_;   // a refused settings source; it stands (§14.1)\n";
+    o_ << "    std::string se_dump_;         // what dump_settings() last returned\n";
+    o_ << "    bool        se_started_ = false;\n";
     o_ << "\n    double        se_time_ = 0.0;\n";
     o_ << "    std::uint64_t se_tick_ = 0;\n";
     o_ << "    std::size_t   se_inited_ = 0;\n";
@@ -1450,6 +1522,23 @@ void Emitter::sim_members() {
     o_ << "    std::string accept_settings();\n";
     o_ << "    void publish_settings();\n";
     o_ << "    void publish_outputs();\n";
+    o_ << "\n    // §14.1 — a settings source, in and out. setting_rows() describes every\n";
+    o_ << "    // path a source may bind; assign() and value_of() move one row's value.\n";
+    o_ << "    static const se_rt::SettingRow* setting_rows(std::size_t& count);\n";
+    o_ << "    bool        load_settings(const char* text, const char* origin);\n";
+    o_ << "    const char* dump_settings();\n";
+    o_ << "    std::string settle();\n";
+    o_ << "    void        assign(const se_rt::Assignment& a);\n";
+    o_ << "    double      value_of(std::size_t row) const;\n";
+    {
+        bool any_element = false;
+        for (const LoadRow& r : load_rows())
+            any_element = any_element || r.kind == LoadRow::Kind::Element;
+        if (any_element) {
+            o_ << "    std::size_t element_extent(std::size_t row) const;\n";
+            o_ << "    double*     element_base(std::size_t row);\n";
+        }
+    }
     o_ << "\n    void resolve_settings();\n";
     o_ << "\n    void bind();\n";
     o_ << "    void apply_initial_conditions();\n";
@@ -1649,6 +1738,23 @@ void Emitter::sim_configure() {
     sim_configure_slots();
     sim_configure_indices();
 
+    bool any_element = false;
+    for (const LoadRow& r : load_rows())
+        any_element = any_element || r.kind == LoadRow::Kind::Element;
+    if (any_element) {
+        o_ << "\n    // §13.4 / §14.1 — the element initial conditions, wherever they came\n";
+        o_ << "    // from, against the extents just computed.\n";
+        o_ << "    for (const se_rt::Assignment& a : se_ic_elements_) {\n";
+        o_ << "        const std::size_t n = element_extent(a.row);\n";
+        o_ << "        if (a.index >= n && se_cfg_error_.empty()) {\n";
+        o_ << "            std::size_t count = 0;\n";
+        o_ << "            const std::string path = std::string(setting_rows(count)[a.row].path) +\n";
+        o_ << "                                     \"[\" + std::to_string(a.index) + \"]\";\n";
+        o_ << "            se_cfg_error_ = se_rt::index_error(path.c_str(), n);\n";
+        o_ << "        }\n";
+        o_ << "    }\n";
+    }
+
     o_ << "\n    // A rebind is not defined (§15.5a), but a RE-configure invalidates\n";
     o_ << "    // the buffers it sized, so the flags go back down and init() says so.\n";
     o_ << "    se_bound_x_ = false;\n";
@@ -1802,9 +1908,10 @@ void Emitter::sim_binders() {
 void Emitter::sim_elaborate() {
     // Settings now arrive through the leaf member initializers, so there is no
     // elaborate() left to emit. What remains is the declarative ICs.
-    o_ << "\n// Declarative state defaults (§6.4). External IC overrides folded in\n";
-    o_ << "// here too — the single override channel, which is what a discrete state\n";
-    o_ << "// buys over a var. A continuous write lands in x through the proxy.\n";
+    o_ << "\n// Declarative state defaults (§6.4), as se_ic_ holds them: every override\n";
+    o_ << "// folded in, from the sim file or a loaded settings source (§14.1) — the\n";
+    o_ << "// single override channel, which is what a discrete state buys over a var.\n";
+    o_ << "// A continuous write lands in x through the proxy.\n";
     o_ << "void Sim::Impl::apply_initial_conditions() {\n";
     std::size_t w = 0;
     bool any_discrete = false, any_finite = false;
@@ -1829,28 +1936,20 @@ void Emitter::sim_elaborate() {
                    << " // " << s.unit.str() << "\n";
                 continue;
             }
-            o_ << "    " << pad(base, w) << " = "
-               << pad(literal(s.initial, s.scalar, s.enm) + ";", 10) << " // " << s.unit.str()
-               << "\n";
+            o_ << "    " << pad(base, w) << " = se_ic_." << ic_member(leaf, s) << ";\n";
         }
-    // §13.4 — element ICs from a settings source, after the uniform default
-    // they refine. The index was checked at configuration and init() refuses to
-    // run while a configuration error stands, so nothing is guarded here.
+    // §13.4 — element ICs, from the sim file or a loaded source, after the
+    // uniform default they refine. Each index was checked at configuration and
+    // init() refuses to run while a configuration error stands, so nothing is
+    // guarded here.
     bool any_element = false;
-    for (const Leaf& leaf : m_.leaves)
-        for (const StateSlot& s : leaf.states)
-            for (const StateSlot::ElementIC& ic : s.element_ic) {
-                if (!any_element) {
-                    o_ << "\n    // §13.4 — per-element initial conditions.\n";
-                    any_element = true;
-                }
-                const std::string path =
-                    (leaf.path.empty() ? s.name : leaf.path + "." + s.name) + "[" +
-                    std::to_string(ic.index) + "]";
-                const std::string block = is_cont(s) ? "x[se_x_off_[" : "dis_arr[se_da_off_[";
-                o_ << "    " << block << s.off << "] + " << ic.index << "] = "
-                   << literal(ic.value, s.scalar, s.enm) << ";   // " << path << "\n";
-            }
+    for (const LoadRow& r : load_rows())
+        any_element = any_element || r.kind == LoadRow::Kind::Element;
+    if (any_element) {
+        o_ << "\n    // §13.4 — per-element initial conditions.\n";
+        o_ << "    for (const se_rt::Assignment& a : se_ic_elements_)\n";
+        o_ << "        element_base(a.row)[a.index] = a.value;\n";
+    }
     if (any_discrete)
         o_ << "    nxt = dis;   // so the first `dis = nxt` is a no-op\n";
     if (any_finite)
@@ -2290,17 +2389,21 @@ void Emitter::sim_run() {
 
     o_ << "\nconst char* Sim::Impl::error() const {\n";
     o_ << "    const std::string& m = se_rt::control().message();\n";
-    o_ << "    return m.empty() ? se_cfg_error_.c_str() : m.c_str();\n";
+    o_ << "    if (!m.empty()) return m.c_str();\n";
+    o_ << "    return se_load_error_.empty() ? se_cfg_error_.c_str() : se_load_error_.c_str();\n";
     o_ << "}\n";
 
     // ── start ────────────────────────────────────────────────────────────────
     o_ << "\n// Sim::init(): the run configuration from the .sim, the host's settings,\n";
     o_ << "// everything derived from them (§6.2b), then every node's init().\n";
     o_ << "bool Sim::Impl::start() {\n";
+    o_ << "    se_started_ = true;\n";
     o_ << "    configure_run();\n";
     o_ << "    const std::string refused = accept_settings();\n";
     o_ << (m_.dynamic_states ? "    configure();\n" : "    resolve_settings();\n");
     o_ << "    if (!refused.empty() && se_cfg_error_.empty()) se_cfg_error_ = refused;\n";
+    o_ << "    // §14.1 — a refused settings source stands, and came first.\n";
+    o_ << "    if (!se_load_error_.empty()) se_cfg_error_ = se_load_error_;\n";
     o_ << "    publish_settings();\n";
     if (m_.dynamic_states) {
         // §15.5a — the buffers are the host's, and here the host is Sim.
@@ -2437,9 +2540,287 @@ void Emitter::sim_class() {
     sim_record();
     sim_run();
     sim_public_glue();
+    sim_settings_source();
     sim_maps();
     sim_facade();
     if (!ns.empty()) o_ << "\n}  // namespace " << ns << "\n";
+}
+
+// ─── Settings sources (§14.1) ────────────────────────────────────────────────
+
+std::string Emitter::ic_member(const Leaf& leaf, const StateSlot& st) {
+    return (leaf.ident.empty() ? std::string() : leaf.ident + "_") + st.name;
+}
+
+std::vector<Emitter::LoadRow> Emitter::load_rows() const {
+    std::vector<LoadRow> rows;
+    for (std::size_t i = 0; i < m_.settings.size(); ++i) {
+        LoadRow r;
+        r.kind = LoadRow::Kind::Setting;
+        r.path = m_.settings[i].path;
+        r.setting = i;
+        rows.push_back(r);
+    }
+    for (const bool element : {false, true})
+        for (const Leaf& leaf : m_.leaves)
+            for (const StateSlot& st : leaf.states) {
+                if (st.extent.present != element) continue;
+                LoadRow r;
+                r.kind = element ? LoadRow::Kind::Element : LoadRow::Kind::Initial;
+                r.path = leaf.path.empty() ? st.name : leaf.path + "." + st.name;
+                r.leaf = &leaf;
+                r.state = &st;
+                rows.push_back(r);
+            }
+    return rows;
+}
+
+// The model's half of §14.1. The runtime reads a source and checks every
+// binding against setting_rows(); what is generated here is the table, and the
+// two switches that move one row's value in and out of the member holding it.
+void Emitter::sim_settings_source() {
+    const std::vector<LoadRow> rows = load_rows();
+    bool any_element = false;
+    for (const LoadRow& r : rows) any_element = any_element || r.kind == LoadRow::Kind::Element;
+
+    auto member = [&](const LoadRow& r) -> std::string {
+        if (r.kind == LoadRow::Kind::Setting) {
+            const SettingSlot& s = m_.settings[r.setting];
+            return param_base(s.owner) + "." + s.name;
+        }
+        return "se_ic_." + ic_member(*r.leaf, *r.state);
+    };
+    auto scalar_of = [&](const LoadRow& r) -> std::string {
+        return r.kind == LoadRow::Kind::Setting ? m_.settings[r.setting].scalar : r.state->scalar;
+    };
+    auto enum_of = [&](const LoadRow& r) -> const EnumInfo* {
+        return r.kind == LoadRow::Kind::Setting ? m_.settings[r.setting].enm : r.state->enm;
+    };
+    auto unit_of = [&](const LoadRow& r) -> const Unit& {
+        return r.kind == LoadRow::Kind::Setting ? m_.settings[r.setting].unit : r.state->unit;
+    };
+
+    // ── the table ────────────────────────────────────────────────────────────
+    o_ << "\n// §14.1 — every path a settings source may bind, with what the loader\n";
+    o_ << "// checks it against: its type, and the dimension and scale behind its unit\n";
+    o_ << "// string (§15.6). Settings come first, in configuration order, so a\n";
+    o_ << "// setting's row is also its pin.\n";
+    o_ << "const se_rt::SettingRow* Sim::Impl::setting_rows(std::size_t& count) {\n";
+    if (rows.empty()) {
+        o_ << "    count = 0;   // nothing here a source could bind\n";
+        o_ << "    return nullptr;\n}\n";
+    } else {
+        std::vector<const EnumInfo*> enums;
+        for (const LoadRow& r : rows)
+            if (const EnumInfo* e = enum_of(r))
+                if (std::find(enums.begin(), enums.end(), e) == enums.end()) enums.push_back(e);
+        // A private finite type's name carries its file's (`fsm.Finite#Ctl`),
+        // so anything that is not an identifier character becomes `_`.
+        auto table = [&](const EnumInfo* e) {
+            std::string id = "kEnum_";
+            for (char c : e->fq)
+                id += std::isalnum(static_cast<unsigned char>(c)) ? c : '_';
+            return id;
+        };
+        for (const EnumInfo* e : enums) {
+            o_ << "    static const se_rt::Enumerator " << table(e) << "[] = {";
+            for (std::size_t k = 0; k < e->values.size(); ++k)
+                o_ << (k ? ", " : "") << "{" << quote(e->values[k].name) << ", "
+                   << e->values[k].value << "}";
+            o_ << "};\n";
+        }
+        // One row's fields as text first, so the columns can be aligned: the
+        // table is read by people as well as by the loader.
+        std::vector<std::vector<std::string>> cells;
+        for (const LoadRow& r : rows) {
+            const Unit& u = unit_of(r);
+            const EnumInfo* e = enum_of(r);
+            std::vector<std::string> c;
+            c.push_back("{" + quote(r.path) + ",");
+            c.push_back(r.kind == LoadRow::Kind::Setting   ? "K::Setting,"
+                        : r.kind == LoadRow::Kind::Initial ? "K::Initial,"
+                                                           : "K::Element,");
+            c.push_back(quote(e ? e->fq : scalar_of(r)) + ",");
+            c.push_back(quote(u.str()) + ",");
+            std::string dim = "{";
+            for (int k = 0; k < kBaseDims; ++k) {
+                const Rat q = u.dim[k];
+                dim += (k ? ", " : "") +
+                       (q.d == 1 ? std::to_string(q.n)
+                                 : dbl(static_cast<double>(q.n) / static_cast<double>(q.d)));
+            }
+            c.push_back(dim + "},");
+            c.push_back(dbl(u.scale) + ",");
+            c.push_back(dbl(u.offset) + ",");
+            c.push_back(e ? table(e) + ", " + std::to_string(e->values.size()) + ","
+                          : std::string("nullptr, 0,"));
+            const bool structural =
+                r.kind == LoadRow::Kind::Setting && m_.settings[r.setting].structural;
+            c.push_back(std::string(structural ? "true" : "false") + "},");
+            cells.push_back(c);
+        }
+        std::vector<std::size_t> w(cells.front().size(), 0);
+        for (const auto& c : cells)
+            for (std::size_t k = 0; k < c.size(); ++k) w[k] = std::max(w[k], c[k].size());
+        o_ << "    using K = se_rt::RowKind;\n";
+        o_ << "    static const se_rt::SettingRow rows[] = {\n";
+        o_ << "        // path, kind, type, unit, {m kg s A K mol cd rad}, scale, offset,\n";
+        o_ << "        // enumerators, structural\n";
+        for (const auto& c : cells) {
+            o_ << "        ";
+            for (std::size_t k = 0; k < c.size(); ++k)
+                o_ << (k + 1 < c.size() ? pad(c[k], w[k] + 1) : c[k]);
+            o_ << "\n";
+        }
+        o_ << "    };\n";
+        o_ << "    count = sizeof rows / sizeof rows[0];\n";
+        o_ << "    return rows;\n}\n";
+    }
+
+    // ── one row's value, in ──────────────────────────────────────────────────
+    o_ << "\n// One checked binding into the member it names. A setting is pinned, so\n";
+    o_ << "// resolve_settings() leaves it where the source put it (§13.3).\n";
+    o_ << "void Sim::Impl::assign(const se_rt::Assignment& a) {\n";
+    if (any_element) {
+        o_ << "    std::size_t count = 0;\n";
+        o_ << "    if (setting_rows(count)[a.row].kind == se_rt::RowKind::Element) {\n";
+        o_ << "        for (se_rt::Assignment& e : se_ic_elements_)\n";
+        o_ << "            if (e.row == a.row && e.index == a.index) {\n";
+        o_ << "                e.value = a.value;   // a later writer (§13.3)\n";
+        o_ << "                return;\n";
+        o_ << "            }\n";
+        o_ << "        se_ic_elements_.push_back(a);\n";
+        o_ << "        return;\n";
+        o_ << "    }\n";
+    }
+    bool any_scalar = false;
+    for (const LoadRow& r : rows) any_scalar = any_scalar || r.kind != LoadRow::Kind::Element;
+    if (!any_scalar) {
+        o_ << "    (void)a;\n}\n";
+    } else {
+        o_ << "    const double v = a.value;\n";
+        o_ << "    switch (a.row) {\n";
+        for (std::size_t i = 0; i < rows.size(); ++i) {
+            const LoadRow& r = rows[i];
+            if (r.kind == LoadRow::Kind::Element) continue;
+            const std::string sc = scalar_of(r);
+            const EnumInfo* e = enum_of(r);
+            const std::string rhs = e                 ? "static_cast<" + e->cpp_name +
+                                                            ">(static_cast<int>(v))"
+                                    : sc == "double" ? std::string("v")
+                                    : sc == "bool"   ? std::string("v != 0.0")
+                                                     : "static_cast<" + sc + ">(v)";
+            o_ << "        case " << i << ": " << member(r) << " = " << rhs << ";";
+            if (r.kind == LoadRow::Kind::Setting) o_ << " se_pin_[" << i << "] = true;";
+            o_ << " break;\n";
+        }
+        o_ << "        default: break;\n";
+        o_ << "    }\n}\n";
+    }
+
+    // ── one row's value, out ─────────────────────────────────────────────────
+    o_ << "\n// One row's current value, as a double: what dump_settings() writes.\n";
+    o_ << "double Sim::Impl::value_of(std::size_t row) const {\n";
+    if (!any_scalar) {
+        o_ << "    (void)row;\n    return 0.0;\n}\n";
+    } else {
+        o_ << "    switch (row) {\n";
+        for (std::size_t i = 0; i < rows.size(); ++i) {
+            const LoadRow& r = rows[i];
+            if (r.kind == LoadRow::Kind::Element) continue;
+            const std::string sc = scalar_of(r);
+            const std::string m = member(r);
+            const std::string v = enum_of(r)        ? "static_cast<double>(static_cast<int>(" + m + "))"
+                                  : sc == "double" ? m
+                                                   : "static_cast<double>(" + m + ")";
+            o_ << "        case " << i << ": return " << v << ";\n";
+        }
+        o_ << "        default: return 0.0;\n";
+        o_ << "    }\n}\n";
+    }
+
+    // ── an array state's run, for its element ICs ────────────────────────────
+    if (any_element) {
+        auto run = [&](const LoadRow& r, bool base) {
+            const bool cont = is_cont(*r.state);
+            const std::string idx = std::to_string(r.state->off);
+            if (base) return std::string(cont ? "x + se_x_off_[" : "dis_arr + se_da_off_[") + idx + "]";
+            return std::string(cont ? "se_x_len_[" : "se_da_len_[") + idx + "]";
+        };
+        o_ << "\n// An array state's extent and first element, by row (§6.4a).\n";
+        o_ << "std::size_t Sim::Impl::element_extent(std::size_t row) const {\n";
+        o_ << "    switch (row) {\n";
+        for (std::size_t i = 0; i < rows.size(); ++i)
+            if (rows[i].kind == LoadRow::Kind::Element)
+                o_ << "        case " << i << ": return " << run(rows[i], false) << ";   // "
+                   << rows[i].path << "\n";
+        o_ << "        default: return 0;\n";
+        o_ << "    }\n}\n";
+        o_ << "\ndouble* Sim::Impl::element_base(std::size_t row) {\n";
+        o_ << "    switch (row) {\n";
+        for (std::size_t i = 0; i < rows.size(); ++i)
+            if (rows[i].kind == LoadRow::Kind::Element)
+                o_ << "        case " << i << ": return " << run(rows[i], true) << ";   // "
+                   << rows[i].path << "\n";
+        o_ << "        default: return nullptr;\n";
+        o_ << "    }\n}\n";
+    }
+
+    const char* settle = m_.dynamic_states ? "configure();" : "resolve_settings();";
+
+    // ── load ─────────────────────────────────────────────────────────────────
+    o_ << "\n// §14.1 — a settings source, all of it or none of it. Every binding is\n";
+    o_ << "// checked before any is applied; a refusal stands, and init() will not run.\n";
+    o_ << "bool Sim::Impl::load_settings(const char* text, const char* origin) {\n";
+    o_ << "    if (se_started_) {\n";
+    o_ << "        se_load_error_ = \"settings cannot be loaded after init(): configuration \"\n";
+    o_ << "                         \"is over (§6.2b)\";\n";
+    o_ << "        return false;\n";
+    o_ << "    }\n";
+    o_ << "    if (!se_load_error_.empty()) return false;   // an earlier refusal stands\n";
+    o_ << "    std::size_t n = 0;\n";
+    o_ << "    const se_rt::SettingRow* rows = setting_rows(n);\n";
+    o_ << "    se_rt::SourceReader reader(text, origin);\n";
+    o_ << "    std::vector<se_rt::Assignment> got;\n";
+    o_ << "    if (!reader.check(rows, n, got)) {\n";
+    o_ << "        se_load_error_ = reader.error();\n";
+    o_ << "        return false;\n";
+    o_ << "    }\n";
+    o_ << "    // The host's edits through settings() first, so this source is the\n";
+    o_ << "    // later writer (§13.3).\n";
+    o_ << "    const std::string refused = accept_settings();\n";
+    o_ << "    for (const se_rt::Assignment& a : got) assign(a);\n";
+    o_ << "    settle();\n";
+    o_ << "    if (!refused.empty()) se_load_error_ = refused;\n";
+    o_ << "    return se_load_error_.empty() && se_cfg_error_.empty();\n";
+    o_ << "}\n";
+
+    // ── settle ───────────────────────────────────────────────────────────────
+    o_ << "\n// §6.2b step 3 onwards, then the root settings back out to settings().\n";
+    o_ << "std::string Sim::Impl::settle() {\n";
+    o_ << "    " << settle << "\n";
+    o_ << "    publish_settings();\n";
+    o_ << "    return se_cfg_error_;\n";
+    o_ << "}\n";
+
+    // ── dump ─────────────────────────────────────────────────────────────────
+    o_ << "\n// §14.1 — every setting and initial condition as a §14 source, which\n";
+    o_ << "// load_settings() reads back. Before init() it first takes the host's\n";
+    o_ << "// pending edits, so the dump is what init() would run with.\n";
+    o_ << "const char* Sim::Impl::dump_settings() {\n";
+    o_ << "    if (!se_started_) {\n";
+    o_ << "        const std::string refused = accept_settings();\n";
+    o_ << "        settle();\n";
+    o_ << "        if (!refused.empty() && se_load_error_.empty()) se_load_error_ = refused;\n";
+    o_ << "    }\n";
+    o_ << "    std::size_t n = 0;\n";
+    o_ << "    const se_rt::SettingRow* rows = setting_rows(n);\n";
+    o_ << "    std::vector<double> values(n, 0.0);\n";
+    o_ << "    for (std::size_t r = 0; r < n; ++r) values[r] = value_of(r);\n";
+    o_ << "    se_dump_ = se_rt::dump_source(" << quote(m_.name)
+       << ", rows, n, values.data(), se_ic_elements_);\n";
+    o_ << "    return se_dump_.c_str();\n";
+    o_ << "}\n";
 }
 
 // The public interface, each call one line onto Sim::Impl. Nothing here has any
@@ -2451,6 +2832,10 @@ void Emitter::sim_facade() {
     o_ << "Sim::Sim(Sim&&) noexcept = default;\n";
     o_ << "Sim& Sim::operator=(Sim&&) noexcept = default;\n\n";
     o_ << "Sim::Settings&      Sim::settings()         { return impl_->se_settings_; }\n";
+    o_ << "bool                Sim::load_settings(const char* text, const char* origin) {\n";
+    o_ << "    return impl_->load_settings(text, origin);\n";
+    o_ << "}\n";
+    o_ << "const char*         Sim::dump_settings()    { return impl_->dump_settings(); }\n";
     o_ << "bool                Sim::init()             { return impl_->start(); }\n";
     o_ << "const char*         Sim::error() const      { return impl_->error(); }\n";
     o_ << "Sim::Inputs&        Sim::inputs()           { return impl_->sig.in; }\n";
@@ -2694,7 +3079,16 @@ void Emitter::public_class() {
     o_ << "    Sim& operator=(Sim&&) noexcept;\n\n";
 
     o_ << "    // ---- 1. configure: before init() " << std::string(40, '-') << "\n";
-    o_ << "    Settings& settings();\n\n";
+    o_ << "    Settings& settings();\n";
+    o_ << "    //  A §14 settings source, as text: `front.left.mass = 340 (kg);`. It may\n";
+    o_ << "    //  reach any setting or initial condition, not only the root's, and a\n";
+    o_ << "    //  value's unit is checked and converted. All or nothing: false if any\n";
+    o_ << "    //  line was refused, and error() says which and why. A refusal stands,\n";
+    o_ << "    //  so init() will not run.\n";
+    o_ << "    bool        load_settings(const char* text, const char* origin = \"settings\");\n";
+    o_ << "    //  Every setting and initial condition as a §14 source, which\n";
+    o_ << "    //  load_settings() reads back. Valid until the next call.\n";
+    o_ << "    const char* dump_settings();\n\n";
 
     o_ << "    // ---- 2. start " << std::string(58, '-') << "\n";
     o_ << "    //  Applies settings(), sets every initial condition and runs every\n";
@@ -2879,8 +3273,46 @@ std::string Emitter::main_cpp() {
     t << "//  same four things; copy this file to start one.\n";
     t << "// " << std::string(76, '-') << "\n";
     t << "#include " << quote(hdr_) << "\n\n";
-    t << "#include <cstdio>\n\n";
-    t << "int main() {\n";
+    t << "#include <cstdio>\n#include <fstream>\n#include <iterator>\n#include <string>\n\n";
+
+    {
+        // The --set example is a real path of this model, at its real value.
+        std::string eg = "PATH = VALUE";
+        for (const SettingSlot& s : m_.settings) {
+            if (s.structural) continue;
+            eg = s.path + " = " + shown(s.value, s.scalar, s.enm);
+            if (!s.enm && s.unit.str() != "-") eg += " (" + s.unit.str() + ")";
+            break;
+        }
+        // One C string literal per line, each ending in an escaped newline.
+        auto line = [](const std::string& s) {
+            std::string q = quote(s);
+            q.insert(q.size() - 1, "\\n");
+            return q;
+        };
+        t << "static const char* const usage =\n";
+        t << "    " << line("usage: " + m_.name +
+                            " [--settings FILE]... [--set PATH=VALUE]... [--dump-settings]")
+          << "\n";
+        t << "    " << line("  --settings FILE    load a .settings file (section 14); "
+                            "repeatable, in order")
+          << "\n";
+        t << "    " << line("  --set PATH=VALUE   load one binding, as --set \"" + eg + "\"")
+          << "\n";
+        t << "    " << line("  --dump-settings    print every setting and initial condition, "
+                            "and stop")
+          << ";\n\n";
+    }
+
+    t << "// The whole file, or false.\n";
+    t << "static bool read_file(const char* path, std::string& out) {\n";
+    t << "    std::ifstream f(path, std::ios::binary);\n";
+    t << "    if (!f) return false;\n";
+    t << "    out.assign(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());\n";
+    t << "    return true;\n";
+    t << "}\n\n";
+
+    t << "int main(int argc, char** argv) {\n";
     t << "    " << sim_t << " sim;\n\n";
 
     t << "    // 1. Configure. Every setting already holds the value " << m_.name << ".sim\n";
@@ -2895,10 +3327,42 @@ std::string Emitter::main_cpp() {
     if (example)
         t << " For example:\n    //        sim.settings()." << example->name << " = "
           << literal(example->value, example->scalar, example->enm) << ";   // "
-          << example->unit.str()
-          << "\n\n";
+          << example->unit.str() << "\n";
     else
-        t << "\n\n";
+        t << "\n";
+    t << "    //    A settings source reaches any setting or initial condition by path,\n";
+    t << "    //    and here it comes from the command line (section 14.1).\n";
+    t << "    bool dump = false;\n";
+    t << "    for (int i = 1; i < argc; ++i) {\n";
+    t << "        const std::string arg = argv[i];\n";
+    t << "        std::string text;\n";
+    t << "        const char* origin = nullptr;\n";
+    t << "        if (arg == \"--settings\" && i + 1 < argc) {\n";
+    t << "            origin = argv[++i];\n";
+    t << "            if (!read_file(origin, text)) {\n";
+    t << "                std::fprintf(stderr, \"" << who << ": cannot read %s\\n\", origin);\n";
+    t << "                return 2;\n";
+    t << "            }\n";
+    t << "        } else if (arg == \"--set\" && i + 1 < argc) {\n";
+    t << "            origin = \"--set\";\n";
+    t << "            text = argv[++i];\n";
+    t << "            if (text.empty() || text.back() != ';') text += ';';\n";
+    t << "        } else if (arg == \"--dump-settings\") {\n";
+    t << "            dump = true;\n";
+    t << "            continue;\n";
+    t << "        } else {\n";
+    t << "            std::fputs(usage, arg == \"--help\" ? stdout : stderr);\n";
+    t << "            return arg == \"--help\" ? 0 : 2;\n";
+    t << "        }\n";
+    t << "        if (!sim.load_settings(text.c_str(), origin)) {\n";
+    t << "            std::fprintf(stderr, \"" << who << ": %s\\n\", sim.error());\n";
+    t << "            return 2;\n";
+    t << "        }\n";
+    t << "    }\n";
+    t << "    if (dump) {\n";
+    t << "        std::fputs(sim.dump_settings(), stdout);\n";
+    t << "        return 0;\n";
+    t << "    }\n\n";
 
     t << "    // 2. Start.\n";
     t << "    if (!sim.init()) {\n";
@@ -3790,7 +4254,7 @@ std::string Emitter::build_script(Script kind, const std::string& exe_main, bool
         t << "#  build.ps1 — GENERATED by sec for " << name << ". The reference build (§12.4).\n";
         t << "#\n";
         t << "#      .\\build.ps1 [run|exe|lib|test|clean|all] [-Config release|debug]\n";
-        t << "#                  [-Sanitize | -NoSanitize] [-StaticCrt]\n";
+        t << "#                  [-Sanitize | -NoSanitize] [-StaticCrt] [exe arguments]\n";
         t << "#\n";
         t << "#      run    build the exe, then run it here" << (unity ? "" : ", as " + m_.name + ".sim describes") << "\n";
         t << "#      exe    build\\<config>\\bin\\" << name << ".exe\n";
@@ -3808,14 +4272,21 @@ std::string Emitter::build_script(Script kind, const std::string& exe_main, bool
         t << "#  Every build is a full one; nothing is tracked between runs. If `cl` is\n";
         t << "#  not on PATH, the script finds Visual Studio and loads its environment.\n";
         t << "# " << std::string(74, '-') << "\n";
+        // Only the mode is positional, so whatever follows it reaches $ExeArgs
+        // rather than being taken for -Config.
+        t << "[CmdletBinding(PositionalBinding = $false)]\n";
         t << "param(\n";
+        t << "    [Parameter(Position = 0)]\n";
         t << "    [ValidateSet('run', 'exe', 'lib', 'test', 'clean', 'all')]\n";
         t << "    [string]$Mode = 'run',\n";
         t << "    [ValidateSet('release', 'debug')]\n";
         t << "    [string]$Config = '',\n";
         t << "    [switch]$Sanitize,\n";
         t << "    [switch]$NoSanitize,\n";
-        t << "    [switch]$StaticCrt\n";
+        t << "    [switch]$StaticCrt,\n";
+        t << "    # Everything else goes to the exe, in run and test (§12.4).\n";
+        t << "    [Parameter(ValueFromRemainingArguments = $true)]\n";
+        t << "    [string[]]$ExeArgs\n";
         t << ")\n\n";
         t << "$name = " << ps_arg(name) << "\n\n";
 
@@ -3929,10 +4400,10 @@ std::string Emitter::build_script(Script kind, const std::string& exe_main, bool
         t << "    } elseif ($Mode -eq 'all') {\n";
         t << "        if (-not (Build-Lib)) { $code = 1 }\n";
         t << "    } elseif ($Mode -eq 'run') {\n";
-        t << "        & \".\\$out\\bin\\$name.exe\"\n";
+        t << "        & \".\\$out\\bin\\$name.exe\" @ExeArgs\n";
         t << "        $code = $LASTEXITCODE\n";
         t << "    } elseif ($Mode -eq 'test') {\n";
-        t << "        & \".\\$out\\bin\\$name.exe\"\n";
+        t << "        & \".\\$out\\bin\\$name.exe\" @ExeArgs\n";
         t << "        $code = $LASTEXITCODE\n";
         t << "        $how = if ($asan) { ' (AddressSanitizer)' } else { '' }\n";
         t << "        if ($code -eq 0) { Write-Host \"test: passed$how\" } "
@@ -3968,11 +4439,13 @@ std::string Emitter::build_script(Script kind, const std::string& exe_main, bool
     t << "#  build.sh — GENERATED by sec for " << name << ". The reference build (§12.4).\n";
     t << "#\n";
     t << "#      ./build.sh [run|exe|lib|test|clean|all] [--config release|debug]\n";
-    t << "#                 [--sanitize | --no-sanitize] [--static-crt]\n";
+    t << "#                 [--sanitize | --no-sanitize] [--static-crt] [exe arguments]\n";
     t << "#\n";
     t << "#  The same modes as build.ps1, into build/<config>/{bin,lib,include};\n";
     t << "#  test sanitizes (address, undefined) unless --no-sanitize, or unless the\n";
-    t << "#  compiler cannot. CXX picks the compiler; the default is c++.\n";
+    t << "#  compiler cannot. CXX picks the compiler; the default is c++. In run and\n";
+    t << "#  test, the first argument this script does not know, and every one after\n";
+    t << "#  it, goes to the exe.\n";
     t << "# " << std::string(74, '-') << "\n";
     t << "set -e\n";
     t << "cd \"$(dirname \"$0\")\"\n\n";
@@ -3985,7 +4458,8 @@ std::string Emitter::build_script(Script kind, const std::string& exe_main, bool
     t << "        --sanitize) sanitize=yes ;;\n";
     t << "        --no-sanitize) sanitize=no ;;\n";
     t << "        --static-crt) static_crt=1 ;;\n";
-    t << "        *) echo \"build: unknown argument '$1'\" >&2; exit 2 ;;\n";
+    t << "        *) if [ \"$mode\" = run ] || [ \"$mode\" = test ]; then break; fi\n";
+    t << "           echo \"build: unknown argument '$1'\" >&2; exit 2 ;;\n";
     t << "    esac\n";
     t << "    shift\n";
     t << "done\n\n";
@@ -4032,11 +4506,11 @@ std::string Emitter::build_script(Script kind, const std::string& exe_main, bool
     t << "    exe) build_exe ;;\n";
     t << "    lib) build_lib ;;\n";
     t << "    all) build_exe; build_lib ;;\n";
-    t << "    run) build_exe; exec \"./$out/bin/$name\" ;;\n";
+    t << "    run) build_exe; exec \"./$out/bin/$name\" \"$@\" ;;\n";
     t << "    test)\n";
     t << "        build_exe\n";
     t << "        how=; if [ $asan = 1 ]; then how=\" (AddressSanitizer)\"; fi\n";
-    t << "        if \"./$out/bin/$name\"; then echo \"test: passed$how\"; "
+    t << "        if \"./$out/bin/$name\" \"$@\"; then echo \"test: passed$how\"; "
          "else code=$?; echo \"test: FAILED$how, exit $code\"; exit 1; fi ;;\n";
     t << "esac\n";
     return t.str();

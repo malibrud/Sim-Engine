@@ -126,6 +126,9 @@ Unit unit_pow(const Unit& a, Rat e);
 bool lookup_unit_symbol(std::string_view sym, Unit& out);
 // Near matches for the `SE0414` diagnostic — `(sec)` should point at `(s)`.
 std::vector<std::string> near_unit_symbols(std::string_view sym);
+// §14.1 — Appendix A and the prefixes as the runtime's `symbols[]` and
+// `prefixes[]` initialisers, so a compiled model knows exactly these units.
+std::string unit_table_cpp();
 
 // ─── Evaluation of a parsed unit expression ──────────────────────────────────
 

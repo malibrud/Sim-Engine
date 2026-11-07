@@ -1,0 +1,18 @@
+// Finite: every setting and initial condition, as configured (section 14.1).
+
+// settings
+cl.accel     = 50 (rad/s^2);
+cl.tol       = 3 (rad/s);
+pi.kp        = 2;
+pi.ki        = 4;
+pi.engage_at = 0.995 (s);
+
+// initial conditions
+cl.w_clutch  = 0 (rad/s);
+cl.locked    = 0;
+gb.gear      = 1;
+integ.y      = 0;
+pi.integ     = 0;
+pi.ctl       = MANUAL;
+tx.range     = DRIVE;
+tx.gear      = 1;

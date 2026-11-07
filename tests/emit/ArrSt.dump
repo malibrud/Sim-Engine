@@ -1,0 +1,10 @@
+// ArrSt: every setting and initial condition, as configured (section 14.1).
+
+// settings
+n     = 3;
+k0    = 1 (1/s);
+
+// initial conditions
+total = 0;
+tick  = 0;
+x[1]  = 2;

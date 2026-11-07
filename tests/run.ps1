@@ -2017,6 +2017,92 @@ if (-not $cl) {
         }
     }
 
+    # SPEC 14.1 -- the generated exe takes a settings source from its command
+    # line. Run AFTER the closed-form check above, because it rewrites
+    # arrst.csv. Doubling k0 doubles every decay rate, and an element IC
+    # loaded at run time lands beside the one the .settings file gave:
+    #
+    #   x[0] = exp(-2 t)     x[1] = 2 exp(-4 t)     x[2] = 4 exp(-6 t)
+    #
+    # x[2] is the one that matters: no file in the suite moves it, so it reads
+    # exp(-6 t) only if the --set reached the right slot of the right block.
+    if ($emitDirs.ContainsKey('ArrSt')) {
+        $asDir = $emitDirs['ArrSt']
+        Push-Location $asDir
+        & '.\build\release\bin\ArrSt.exe' --set 'k0 = 2 (1/s)' --set 'x[2] = 4' 2>&1 | Out-Null
+        $ran = ($LASTEXITCODE -eq 0)
+        Pop-Location
+        $worst = 0.0
+        $csv = Join-Path $asDir 'arrst.csv'
+        if ($ran -and (Test-Path $csv)) {
+            foreach ($line in (Get-Content $csv | Select-Object -Skip 1)) {
+                if (-not $line) { continue }
+                $c = $line -split ','
+                $t = [double]$c[0]
+                $errs = @([Math]::Abs([double]$c[1] - [Math]::Exp(-2.0 * $t)),
+                          [Math]::Abs([double]$c[2] - 2.0 * [Math]::Exp(-4.0 * $t)),
+                          [Math]::Abs([double]$c[3] - 4.0 * [Math]::Exp(-6.0 * $t)))
+                foreach ($err in $errs) { if ($err -gt $worst) { $worst = $err } }
+            }
+        } else {
+            $worst = [double]::PositiveInfinity
+        }
+        if ($worst -lt 1e-6) {
+            Write-Host ("ok   build/emit/ArrSt --set : a run-time setting and element IC move the run, max error " +
+                        $worst.ToString('E2')) -ForegroundColor Green
+            $script:pass++
+        } else {
+            Write-Host ("FAIL build/emit/ArrSt --set : max error " + $worst) -ForegroundColor Red
+            $script:fail++
+        }
+    }
+
+    # SPEC 14.1 -- what each model reports it would run with. The recorded
+    # files are written by hand (an -Update run does not compile), and each is
+    # a model's whole configuration surface: a row that appears, vanishes or
+    # changes unit here is a change to what a settings file may say.
+    foreach ($d in @(@{ name = 'drivetrain'; exe = 'Drivetrain'; file = 'Drivetrain.dump' },
+                     @{ name = 'ArrSt';      exe = 'ArrSt';      file = 'ArrSt.dump' },
+                     @{ name = 'Finite';     exe = 'Finite';     file = 'Finite.dump' })) {
+        if (-not $emitDirs.ContainsKey($d.name)) { continue }
+        Push-Location $emitDirs[$d.name]
+        $dump = ((& (".\build\release\bin\" + $d.exe + ".exe") --dump-settings) -join "`n") + "`n"
+        Pop-Location
+        Compare-Text ("build/emit/" + $d.name + " --dump-settings") `
+                     (Join-Path $root ("tests\emit\" + $d.file)) $dump
+    }
+
+    # A refused source stops the exe before it runs, with the reason. One case
+    # per kind of refusal that only a compiled model can find: an index past
+    # an extent configuration computed, and an enumerator the type lacks.
+    $refusals = @(
+        @{ name = 'ArrSt';  exe = 'ArrSt';  arg = 'x[7] = 1';
+           want = 'ArrSt: x[7] is past the configured extent (3 elements)' },
+        @{ name = 'ArrSt';  exe = 'ArrSt';  arg = 'n = 2.5';
+           want = 'ArrSt: --set:1: n: lossy conversion to an `int` target: the value is 2.5' },
+        @{ name = 'Finite'; exe = 'Finite'; arg = 'tx.range = PARK';
+           want = 'Finite: --set:1: tx.range: `PARK` is not an enumerator of fsm.Finite#Range; it has DRIVE, NEUTRAL' }
+    )
+    foreach ($r in $refusals) {
+        if (-not $emitDirs.ContainsKey($r.name)) { continue }
+        Push-Location $emitDirs[$r.name]
+        # ToString() per line: PowerShell 5.1 wraps a native stderr line in an
+        # ErrorRecord, and Out-String would print the wrapper too.
+        $said = ((& (".\build\release\bin\" + $r.exe + ".exe") --set $r.arg 2>&1 |
+                  ForEach-Object { $_.ToString() }) -join "`n").Trim()
+        $code = $LASTEXITCODE
+        Pop-Location
+        if ($code -eq 2 -and $said -eq $r.want) {
+            Write-Host ("ok   build/emit/" + $r.name + " --set '" + $r.arg + "' : refused, exit 2") -ForegroundColor Green
+            $script:pass++
+        } else {
+            Write-Host ("FAIL build/emit/" + $r.name + " --set '" + $r.arg + "' : exit $code") -ForegroundColor Red
+            Write-Host ("    want: " + $r.want) -ForegroundColor DarkGray
+            Write-Host ("    got : " + $said) -ForegroundColor Yellow
+            $script:fail++
+        }
+    }
+
     # BwChk is the array-state feature against the case it was added for: an
     # Nth-order Butterworth as a cascade of second-order sections in ONE leaf
     # (SPEC 6.4a). The assertion is the magnitude response, which the bilinear
@@ -2365,6 +2451,33 @@ if (-not $cl) {
         } else {
             Write-Host "FAIL tests/emit/host.cpp" -ForegroundColor Red
             if (-not $built) { Write-Host $out }
+            $script:fail++
+        }
+    }
+
+    # tests/emit/settings_host.cpp is the settings loader (SPEC 14.1) against
+    # the same model: conversion, every kind of refusal, all-or-nothing, a
+    # refusal that stands, layering with settings(), and the dump round trip.
+    if ($emitDirs.ContainsKey('drivetrain')) {
+        $hostDir = $emitDirs['drivetrain']
+        Copy-Item (Join-Path $root 'tests\emit\settings_host.cpp') $hostDir -Force
+        Push-Location $hostDir
+        $out = (& cl /nologo /std:c++20 /EHsc /W4 /permissive- /utf-8 /O2 /MD `
+                    /D_CRT_SECURE_NO_WARNINGS /Fe:settings_host.exe settings_host.cpp 2>&1 | Out-String)
+        $built = ($LASTEXITCODE -eq 0 -and $out -notmatch 'warning')
+        $said = ''
+        $ran = $false
+        if ($built) {
+            $said = (& '.\settings_host.exe' 2>&1 | Out-String)
+            $ran = ($LASTEXITCODE -eq 0)
+        }
+        Pop-Location
+        if ($built -and $ran) {
+            Write-Host "ok   tests/emit/settings_host.cpp : the run-time settings loader" -ForegroundColor Green
+            $script:pass++
+        } else {
+            Write-Host "FAIL tests/emit/settings_host.cpp" -ForegroundColor Red
+            if (-not $built) { Write-Host $out } else { Write-Host $said }
             $script:fail++
         }
     }

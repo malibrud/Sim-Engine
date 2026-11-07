@@ -17,6 +17,7 @@
 //  their runtimes are identical and cannot collide when they are not.
 // ─────────────────────────────────────────────────────────────────────────────
 #include "emit.hpp"
+#include "units.hpp"
 
 #include <cstdint>
 #include <cstdio>
@@ -37,6 +38,7 @@ const char kRuntime[] =
 //      sim.stop/abort section 10.2 — the only way a run ends early
 //      the recorder   section 13.5 — quantitative, an aligned numeric table
 //      the frame      section 9.4  — free-run the batch, then spin
+//      settings       section 14.1 — units, and reading and dumping a source
 //
 //  The generator emits `se_rt::Log log{...}` into the preamble of the methods
 //  where logging is legal and simply does not emit it elsewhere, which is how
@@ -57,6 +59,7 @@ const char kRuntime[] =
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <deque>
 #include <sstream>
@@ -976,6 +979,580 @@ inline Realtime& realtime() {
     return r;
 }
 
+)SERT"
+    R"SERT(// ─── Units at configuration (section 14.1) ──────────────────────────────────
+//
+// A settings source reaches a compiled model after units have been erased
+// (section 15.6), so the loader carries what it needs to check and convert a
+// value's unit: the unit symbols, and a parser for section 4.1's grammar. The
+// table inside unit_symbol() is not written by hand. `sec` fills it in from
+// its own table when it writes this runtime, so any unit `sec` accepts, the
+// model accepts, and the conversions agree to the last bit.
+
+struct UnitSymbol {
+    const char* sym;
+    signed char dim[8];   // m kg s A K mol cd rad
+    double scale;         // SI = value * scale + offset
+    double offset;
+};
+
+struct UnitPrefix {
+    const char* sym;
+    double scale;
+};
+
+// A unit as the loader uses it. The exponents are doubles because section
+// 4.1 allows rational ones, `m^(1/2)`, so they are compared with a tolerance.
+struct Unit {
+    double dim[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+    double scale = 1.0;
+    double offset = 0.0;
+};
+
+// An exact symbol first, then the longest prefix on an exact symbol, so `min`
+// is the minute, `Pa` the pascal and `mg` a milligram. A prefixed offset unit
+// (`mdegC`) is not a unit at all.
+inline bool unit_symbol(const std::string& s, Unit& out) {
+@UNIT_TABLE@
+    auto take = [&](const UnitSymbol& d, double prefix) {
+        for (int i = 0; i < 8; ++i) out.dim[i] = d.dim[i];
+        out.scale = d.scale * prefix;
+        out.offset = d.offset;
+    };
+    for (const UnitSymbol& d : symbols)
+        if (s == d.sym) {
+            take(d, 1.0);
+            return true;
+        }
+    for (const UnitPrefix& p : prefixes) {
+        const std::size_t n = std::strlen(p.sym);
+        if (s.size() <= n || s.compare(0, n, p.sym) != 0) continue;
+        for (const UnitSymbol& d : symbols)
+            if (d.offset == 0.0 && s.compare(n, std::string::npos, d.sym) == 0) {
+                take(d, p.scale);
+                return true;
+            }
+    }
+    return false;
+}
+
+// Section 4.1's grammar, over the text between a value's parentheses:
+//
+//     unit   := '-' | term { ('*' | '/') term }
+//     term   := factor [ '^' ( int | '(' int [ '/' int ] ')' ) ]
+//     factor := '1' | symbol | '%' | '(' unit ')'
+//
+// An offset unit (degC, degF) is legal only on its own, as it is at
+// elaboration: `degC/s` cannot say whether it means a temperature or a
+// difference of two.
+class UnitParser {
+public:
+    explicit UnitParser(const std::string& text) : s_(text) {}
+
+    bool parse(Unit& out) {
+        if (!expr(out)) return false;
+        skip();
+        if (i_ != s_.size()) return fail("unexpected `" + s_.substr(i_, 1) + "`");
+        if (!offset_sym_.empty() && compound_)
+            return fail("offset unit `" + offset_sym_ +
+                        "` in a compound unit; it is only legal on its own");
+        return true;
+    }
+    const std::string& error() const { return err_; }
+
+private:
+    void skip() {
+        while (i_ < s_.size() && (s_[i_] == ' ' || s_[i_] == '\t')) ++i_;
+    }
+    char peek() {
+        skip();
+        return i_ < s_.size() ? s_[i_] : '\0';
+    }
+    bool fail(const std::string& m) {
+        if (err_.empty()) err_ = m;
+        return false;
+    }
+
+    bool expr(Unit& u) {
+        // `(-)`, dimensionless: alone, or alone inside parentheses.
+        if (peek() == '-') {
+            const std::size_t at = i_++;
+            const char next = peek();
+            if (next == '\0' || next == ')') {
+                u = Unit{};
+                return true;
+            }
+            i_ = at;
+        }
+        if (!term(u)) return false;
+        for (char op = peek(); op == '*' || op == '/'; op = peek()) {
+            ++i_;
+            compound_ = true;
+            Unit r;
+            if (!term(r)) return false;
+            const double sign = op == '*' ? 1.0 : -1.0;
+            for (int k = 0; k < 8; ++k) u.dim[k] += sign * r.dim[k];
+            u.scale = op == '*' ? u.scale * r.scale : u.scale / r.scale;
+            u.offset = 0.0;
+        }
+        return true;
+    }
+
+    bool term(Unit& u) {
+        if (!factor(u)) return false;
+        if (peek() != '^') return true;
+        ++i_;
+        compound_ = true;
+        long num = 1, den = 1;
+        if (peek() == '(') {
+            ++i_;
+            if (!integer(num)) return false;
+            if (peek() == '/') {
+                ++i_;
+                if (!integer(den)) return false;
+                if (den == 0) return fail("a unit exponent has a zero denominator");
+            }
+            if (peek() != ')') return fail("expected `)` to close the exponent");
+            ++i_;
+        } else if (!integer(num)) {
+            return false;
+        }
+        const double e = static_cast<double>(num) / static_cast<double>(den);
+        for (int k = 0; k < 8; ++k) u.dim[k] *= e;
+        u.scale = std::pow(u.scale, e);
+        u.offset = 0.0;
+        return true;
+    }
+
+    bool integer(long& out) {
+        bool neg = false;
+        if (peek() == '-') {
+            neg = true;
+            ++i_;
+        }
+        skip();
+        const std::size_t at = i_;
+        while (i_ < s_.size() && s_[i_] >= '0' && s_[i_] <= '9') ++i_;
+        if (i_ == at) return fail("a unit exponent must be an integer");
+        out = std::strtol(s_.substr(at, i_ - at).c_str(), nullptr, 10);
+        if (neg) out = -out;
+        return true;
+    }
+
+    static bool ident_char(char c, bool first) {
+        return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_' ||
+               (!first && c >= '0' && c <= '9');
+    }
+
+    bool factor(Unit& u) {
+        const char c = peek();
+        if (c == '(') {
+            ++i_;
+            if (!expr(u)) return false;
+            if (peek() != ')') return fail("expected `)` to close the nested unit");
+            ++i_;
+            return true;
+        }
+        if (c == '1' && (i_ + 1 >= s_.size() || !(s_[i_ + 1] >= '0' && s_[i_ + 1] <= '9'))) {
+            ++i_;
+            u = Unit{};
+            return true;
+        }
+        std::string sym;
+        if (c == '%') {
+            ++i_;
+            sym = "%";
+        } else if (ident_char(c, true)) {
+            const std::size_t at = i_;
+            while (i_ < s_.size() && ident_char(s_[i_], i_ == at)) ++i_;
+            sym = s_.substr(at, i_ - at);
+        } else {
+            return fail(c ? std::string("expected a unit symbol, found `") + c + "`"
+                          : std::string("expected a unit symbol"));
+        }
+        if (!unit_symbol(sym, u)) return fail("unknown unit symbol `" + sym + "`");
+        if (u.offset != 0.0) offset_sym_ = sym;
+        return true;
+    }
+
+    std::string s_;
+    std::size_t i_ = 0;
+    std::string err_;
+    std::string offset_sym_;
+    bool compound_ = false;
+};
+
+// Section 4.2 with section 4.5's angle rule, exactly as `sec` applies it: the
+// angle exponent is ignored where the VALUE's length exponent is positive
+// (`rad*m` is a length), and counts everywhere else (`rad/s` is not `Hz`).
+inline bool unit_compatible(const Unit& value, const Unit& target) {
+    auto same = [](double a, double b) { return std::fabs(a - b) < 1e-9; };
+    for (int k = 0; k < 7; ++k)
+        if (!same(value.dim[k], target.dim[k])) return false;
+    if (value.dim[0] > 1e-9) return true;
+    return same(value.dim[7], target.dim[7]);
+}
+
+inline double unit_convert(double v, const Unit& from, const Unit& to) {
+    if (from.scale == to.scale && from.offset == to.offset) return v;
+    return (v * from.scale + from.offset - to.offset) / to.scale;
+}
+
+)SERT"
+    R"SERT(// ─── Settings sources (section 14) ───────────────────────────────────────────
+//
+// The model's half of section 14.1. A generated Sim describes every path a
+// source may bind with one SettingRow, and these functions do the rest:
+// read the text, check each binding against its row, and write a dump back
+// out. The generated side only moves numbers in and out of its members.
+
+struct Enumerator {
+    const char* name;
+    long value;
+};
+
+enum class RowKind : unsigned char {
+    Setting,   // a setting, at any depth; one leaf of a record setting
+    Initial,   // a scalar state's initial value (section 13.4)
+    Element,   // an array state, bound one element at a time
+};
+
+struct SettingRow {
+    const char* path;
+    RowKind kind;
+    const char* type;        // "double", "float", "int", "bool", or a finite type
+    const char* unit;        // canonical, as the manifest spells it; "-" for none
+    double dim[8];
+    double scale;
+    double offset;
+    const Enumerator* enumerators;   // a finite type's, in declaration order
+    std::size_t n_enumerators;
+    bool structural;         // fixed at generation (section 6.2); refused on load
+};
+
+// One checked binding, in the target's canonical unit. An enumerator is its
+// value; a bool is 0 or 1.
+struct Assignment {
+    std::size_t row;
+    std::size_t index;       // an Element row's element; 0 otherwise
+    double value;
+};
+
+// One binding as the loader reads it: a number with an optional unit, or a
+// bare name for an enumerator. Section 14.1 accepts nothing more at run time,
+// and the reader says so rather than evaluating a section-7 expression.
+class SourceReader {
+public:
+    SourceReader(const char* text, const char* origin)
+        : s_(text ? text : ""), origin_(origin && *origin ? origin : "settings") {}
+
+    // All or nothing: false at the first fault, with error() naming it.
+    bool check(const SettingRow* rows, std::size_t n, std::vector<Assignment>& out) {
+        out.clear();
+        std::vector<Assignment> got;
+        for (;;) {
+            if (!blank()) return false;
+            if (i_ >= s_.size()) break;
+            Assignment a{};
+            if (!binding(rows, n, a)) return false;
+            got.push_back(a);
+        }
+        out.swap(got);
+        return true;
+    }
+    const std::string& error() const { return err_; }
+
+private:
+    // A fault is reported on the line its binding starts on, so a missing `;`
+    // is blamed on the value that lacks it and not on the line after.
+    bool fail(const std::string& path, const std::string& m) {
+        err_ = origin_ + ":" + std::to_string(at_line_) + ": " +
+               (path.empty() ? "" : path + ": ") + m;
+        return false;
+    }
+
+    // Whitespace and section 3.2's comments, counting lines.
+    bool blank() {
+        while (i_ < s_.size()) {
+            const char c = s_[i_];
+            if (c == '\n') {
+                ++line_;
+                ++i_;
+            } else if (c == ' ' || c == '\t' || c == '\r') {
+                ++i_;
+            } else if (s_.compare(i_, 2, "//") == 0) {
+                while (i_ < s_.size() && s_[i_] != '\n') ++i_;
+            } else if (s_.compare(i_, 2, "/*") == 0) {
+                const int opened = line_;
+                const std::size_t end = s_.find("*/", i_ + 2);
+                if (end == std::string::npos) {
+                    at_line_ = opened;
+                    return fail("", "unterminated block comment");
+                }
+                for (std::size_t k = i_; k < end; ++k)
+                    if (s_[k] == '\n') ++line_;
+                i_ = end + 2;
+            } else {
+                break;
+            }
+        }
+        return true;
+    }
+
+    static bool ident_char(char c, bool first) {
+        return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_' ||
+               (!first && c >= '0' && c <= '9');
+    }
+    static bool digit(char c) { return c >= '0' && c <= '9'; }
+
+    bool ident(std::string& out) {
+        const std::size_t at = i_;
+        while (i_ < s_.size() && ident_char(s_[i_], i_ == at)) ++i_;
+        out = s_.substr(at, i_ - at);
+        return !out.empty();
+    }
+
+    // Section 3.5: digits [ '.' digits ] [ exponent ], or '.' digits [ exponent ].
+    bool number(double& out) {
+        const std::size_t at = i_;
+        while (i_ < s_.size() && digit(s_[i_])) ++i_;
+        const bool whole = i_ > at;
+        bool frac = false;
+        if (i_ < s_.size() && s_[i_] == '.') {
+            ++i_;
+            while (i_ < s_.size() && digit(s_[i_])) {
+                ++i_;
+                frac = true;
+            }
+        }
+        if (!whole && !frac) return false;
+        if (i_ < s_.size() && (s_[i_] == 'e' || s_[i_] == 'E')) {
+            std::size_t k = i_ + 1;
+            if (k < s_.size() && (s_[k] == '+' || s_[k] == '-')) ++k;
+            if (k < s_.size() && digit(s_[k])) {
+                i_ = k;
+                while (i_ < s_.size() && digit(s_[i_])) ++i_;
+            }
+        }
+        out = std::strtod(s_.substr(at, i_ - at).c_str(), nullptr);
+        return true;
+    }
+
+    bool binding(const SettingRow* rows, std::size_t n, Assignment& a) {
+        // path := identifier { '.' identifier } [ '[' integer ']' ]
+        at_line_ = line_;
+        std::string path, seg;
+        if (!ident(seg)) return fail("", "expected a path");
+        path = seg;
+        while (i_ < s_.size() && s_[i_] == '.') {
+            ++i_;
+            if (!ident(seg)) return fail(path, "expected a name after `.`");
+            path += "." + seg;
+        }
+        bool indexed = false;
+        std::size_t index = 0;
+        std::string shown = path;
+        if (i_ < s_.size() && s_[i_] == '[') {
+            ++i_;
+            const std::size_t at = i_;
+            while (i_ < s_.size() && digit(s_[i_])) ++i_;
+            if (i_ == at || i_ >= s_.size() || s_[i_] != ']')
+                return fail(path, "an element index is a non-negative integer, `[3]`");
+            index = static_cast<std::size_t>(std::strtoull(s_.substr(at, i_ - at).c_str(),
+                                                           nullptr, 10));
+            ++i_;
+            indexed = true;
+            shown = path + "[" + std::to_string(index) + "]";
+        }
+
+        if (!blank()) return false;
+        if (i_ >= s_.size() || s_[i_] != '=') return fail(shown, "expected `=` after the path");
+        ++i_;
+        if (!blank()) return false;
+
+        // value := [ '-' | '+' ] number [ '(' unit ')' ] | enumerator
+        bool is_name = false, has_unit = false;
+        std::string name, unit;
+        double v = 0.0;
+        if (i_ < s_.size() && ident_char(s_[i_], true)) {
+            ident(name);
+            is_name = true;
+        } else {
+            double sign = 1.0;
+            if (i_ < s_.size() && (s_[i_] == '-' || s_[i_] == '+')) {
+                sign = s_[i_] == '-' ? -1.0 : 1.0;
+                ++i_;
+                if (!blank()) return false;
+            }
+            if (!number(v)) return fail(shown, "expected a number or an enumerator");
+            v *= sign;
+        }
+        if (!blank()) return false;
+        if (i_ < s_.size() && s_[i_] == '(') {
+            if (is_name) return fail(shown, "an enumerator takes no unit");
+            int depth = 0;
+            const std::size_t at = i_;
+            for (; i_ < s_.size(); ++i_) {
+                if (s_[i_] == '(') ++depth;
+                if (s_[i_] == ')' && --depth == 0) break;
+                if (s_[i_] == '\n' || s_[i_] == ';') break;
+            }
+            if (i_ >= s_.size() || s_[i_] != ')') return fail(shown, "expected `)` to close the unit");
+            unit = s_.substr(at + 1, i_ - at - 1);
+            ++i_;
+            has_unit = true;
+            if (!blank()) return false;
+        }
+        if (i_ >= s_.size() || s_[i_] != ';') {
+            if (i_ < s_.size() && line_ == at_line_)
+                return fail(shown, "a compiled model accepts a number with an optional unit, "
+                                   "or an enumerator, and not an expression (section 14.1)");
+            return fail(shown, "expected `;` after the value");
+        }
+        ++i_;
+
+        // The target.
+        const SettingRow* row = nullptr;
+        for (std::size_t r = 0; r < n; ++r)
+            if (path == rows[r].path) {
+                row = &rows[r];
+                a.row = r;
+                break;
+            }
+        if (!row) {
+            const std::string prefix = path + ".";
+            // A record setting or an instance: a path with rows beneath it.
+            for (std::size_t r = 0; r < n; ++r)
+                if (std::strncmp(rows[r].path, prefix.c_str(), prefix.size()) == 0)
+                    return fail(shown, std::string("not a single setting or state; a record or "
+                                                   "an instance is set one leaf at a time, as `") +
+                                           rows[r].path + "`");
+            return fail(shown, "not a setting or a state of this model (an output is computed, "
+                               "and cannot be set)");
+        }
+        if (row->kind == RowKind::Element && !indexed)
+            return fail(shown, "an array state is set one element at a time, as `" + path + "[0]`");
+        if (row->kind != RowKind::Element && indexed)
+            return fail(shown, "not an array state, so it takes no index");
+        if (row->structural)
+            return fail(shown, "structural: it was fixed when the model was generated (section 6.2)");
+        a.index = index;
+
+        // The value.
+        if (row->enumerators) {
+            if (!is_name)
+                return fail(shown, std::string("expected an enumerator of ") + row->type +
+                                       "; a finite type converts to nothing (section 5.2a)");
+            for (std::size_t k = 0; k < row->n_enumerators; ++k)
+                if (name == row->enumerators[k].name) {
+                    a.value = static_cast<double>(row->enumerators[k].value);
+                    return true;
+                }
+            std::string list;
+            for (std::size_t k = 0; k < row->n_enumerators; ++k)
+                list += (k ? ", " : "") + std::string(row->enumerators[k].name);
+            return fail(shown, "`" + name + "` is not an enumerator of " + row->type +
+                                   "; it has " + list);
+        }
+        if (is_name)
+            return fail(shown, "a compiled model accepts a number with an optional unit, and "
+                               "not a name or an expression (section 14.1)");
+        if (has_unit) {
+            Unit from, to;
+            UnitParser p(unit);
+            if (!p.parse(from)) return fail(shown, p.error());
+            for (int k = 0; k < 8; ++k) to.dim[k] = row->dim[k];
+            to.scale = row->scale;
+            to.offset = row->offset;
+            std::string written = unit;
+            while (!written.empty() && written.front() == ' ') written.erase(0, 1);
+            while (!written.empty() && written.back() == ' ') written.pop_back();
+            if (!unit_compatible(from, to))
+                return fail(shown, "incompatible units: (" + written + ") where (" + row->unit +
+                                       ") is declared");
+            v = unit_convert(v, from, to);
+        }
+        if (std::strcmp(row->type, "int") == 0) {
+            const double r = std::floor(v + 0.5);
+            if (std::fabs(v - r) > 1e-9) {
+                std::ostringstream o;
+                o << "lossy conversion to an `int` target: the value is " << v;
+                return fail(shown, o.str());
+            }
+            v = r;
+        } else if (std::strcmp(row->type, "bool") == 0) {
+            v = v != 0.0 ? 1.0 : 0.0;
+        }
+        a.value = v;
+        return true;
+    }
+
+    std::string s_;
+    std::string origin_;
+    std::size_t i_ = 0;
+    int line_ = 1;
+    int at_line_ = 1;
+    std::string err_;
+};
+
+// The shortest decimal that reads back as the same double, as a source writes
+// it: `340`, `0.08`, `1e-06`.
+inline std::string source_number(double v) {
+    char buf[40];
+    for (int p = 15; p <= 17; ++p) {
+        std::snprintf(buf, sizeof buf, "%.*g", p, v);
+        if (std::strtod(buf, nullptr) == v) break;
+    }
+    return buf;
+}
+
+// Section 14.1's dump. `values[r]` is row r's current value for a Setting or
+// Initial row and is unused for an Element row, whose bound elements arrive
+// in `elements` instead: an array's uniform default has no path to write.
+inline std::string dump_source(const char* title, const SettingRow* rows, std::size_t n,
+                               const double* values, const std::vector<Assignment>& elements) {
+    struct Line {
+        std::string path, value;
+        bool structural;
+    };
+    auto text = [&](const SettingRow& r, double v) {
+        if (r.enumerators) {
+            for (std::size_t k = 0; k < r.n_enumerators; ++k)
+                if (static_cast<double>(r.enumerators[k].value) == v) return std::string(r.enumerators[k].name);
+        }
+        std::string s = source_number(v);
+        if (std::strcmp(r.unit, "-") != 0 && !r.enumerators) s += std::string(" (") + r.unit + ")";
+        return s;
+    };
+    std::vector<Line> settings, initial;
+    for (std::size_t r = 0; r < n; ++r) {
+        if (rows[r].kind == RowKind::Element) continue;
+        Line l{rows[r].path, text(rows[r], values[r]), rows[r].structural};
+        (rows[r].kind == RowKind::Setting ? settings : initial).push_back(l);
+    }
+    for (const Assignment& e : elements)
+        initial.push_back(Line{std::string(rows[e.row].path) + "[" + std::to_string(e.index) + "]",
+                               text(rows[e.row], e.value), false});
+    std::size_t w = 0;
+    for (const Line& l : settings) w = l.path.size() > w ? l.path.size() : w;
+    for (const Line& l : initial) w = l.path.size() > w ? l.path.size() : w;
+
+    std::string out = std::string("// ") + title +
+                      ": every setting and initial condition, as configured (section 14.1).\n";
+    auto section = [&](const char* head, const std::vector<Line>& ls) {
+        if (ls.empty()) return;
+        out += std::string("\n// ") + head + "\n";
+        for (const Line& l : ls) {
+            std::string row = l.path + std::string(w - l.path.size(), ' ') + " = " + l.value + ";";
+            if (l.structural) row = "// " + row + "   structural: fixed when the model was generated";
+            out += row + "\n";
+        }
+    };
+    section("settings", settings);
+    section("initial conditions", initial);
+    return out;
+}
+
 }  // inline namespace @VER@
 }  // namespace se_rt
 
@@ -990,6 +1567,11 @@ inline Realtime& realtime() {
 const std::string& se_runtime_hpp() {
     static const std::string text = [] {
         std::string t = kRuntime;
+        // §14.1 — the unit table goes in BEFORE the hash, so a change to
+        // Appendix A moves the tag exactly as an edit to the text would.
+        const std::string units = "@UNIT_TABLE@";
+        const std::size_t u = t.find(units);
+        if (u != std::string::npos) t.replace(u, units.size(), unit_table_cpp());
         std::uint32_t h = 2166136261u;
         for (const unsigned char c : t) {
             h ^= c;

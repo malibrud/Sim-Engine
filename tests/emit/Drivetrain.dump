@@ -1,0 +1,13 @@
+// Drivetrain: every setting and initial condition, as configured (section 14.1).
+
+// settings
+wheel_inertia = 0.95 (kg*m^2);
+whl.inertia   = 1.05 (kg*m^2);
+whl.radius    = 0.315 (m);
+tc.rate       = 200 (Hz);
+tc.slip_limit = 0.08;
+tc.gain       = 400 (N*m);
+
+// initial conditions
+whl.omega     = 5 (rad/s);
+tc.cut        = 0 (N*m);

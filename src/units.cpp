@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 
 namespace se {
@@ -398,6 +399,31 @@ bool lookup_unit_symbol(std::string_view sym, Unit& out) {
         }
     }
     return false;
+}
+
+// §14.1 — the compiled model's copy of the two tables above, as C++ brace
+// rows. A loader that knew fewer symbols than `sec` would refuse a settings
+// file `sec` accepts, so the copy is written from these arrays rather than
+// kept by hand beside them. `%.17g` because a scale like 2π/60 must arrive as
+// the same double the compiler converted with.
+std::string unit_table_cpp() {
+    auto num = [](double v) {
+        char b[40];
+        std::snprintf(b, sizeof b, "%.17g", v);
+        return std::string(b);
+    };
+    std::string t = "    static const UnitSymbol symbols[] = {\n";
+    for (const SymbolDef& d : kSymbols) {
+        t += "        {\"" + std::string(d.sym) + "\", {";
+        for (int i = 0; i < kBaseDims; ++i) t += (i ? ", " : "") + std::to_string(d.dim[i]);
+        t += "}, " + num(d.scale) + ", " + num(d.offset) + "},\n";
+    }
+    t += "    };\n";
+    t += "    static const UnitPrefix prefixes[] = {\n";
+    for (const PrefixDef& p : kPrefixes)
+        t += "        {\"" + std::string(p.sym) + "\", " + num(p.scale) + "},\n";
+    t += "    };\n";
+    return t;
 }
 
 std::vector<std::string> near_unit_symbols(std::string_view sym) {
