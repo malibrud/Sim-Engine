@@ -1454,7 +1454,8 @@ differs is when they move and what that does to the schedule.
   state.
 - **The declared default is the initial condition.** There is no separate
   `initial` section — ICs ride the one override channel (§13.4). `init()` is the
-  escape hatch for a computed or equilibrium IC.
+  escape hatch for a computed or equilibrium IC. It runs after every override
+  has been applied, so it starts from the IC the run was configured with.
 - Discrete and finite states earn their place over `vars` precisely via that IC
   channel: a declarative default plus a sim-file override, which `vars` never
   had.
@@ -3903,9 +3904,18 @@ bw.w1[3]            =    0 (-);     // one element of an array state (§6.4a)
 dev.link            = CONNECTED;    // a finite state's, by enumerator (§7.2a)
 ```
 
-Layering: declared state default → `init()` code → external override. A
-`finite` state's initial value rides the channel exactly as a `discrete` one's
-does, and one of finite type is written as a bare enumerator.
+Layering: declared state default → external override → `init()` code. **Every
+override is in place before any `init()` runs** — settings and initial
+conditions alike — because configuration is over by then (§6.2b). `init()` may
+do real work: allocate, open a socket, size a buffer, solve for an equilibrium.
+It does that work once, against the configuration the run will actually use, and
+so it reads an overridden IC as the value it starts from and may refine it. A
+state that `init()` writes regardless of its value is computed, not configured:
+an override of it is accepted and then replaced, and a node that wants that
+quantity to be tunable exposes the input to the computation as a setting
+(`se.sig.src.Prbs` computes `reg` from `seed`). A `finite` state's initial value
+rides the channel exactly as a `discrete` one's does, and one of finite type is
+written as a bare enumerator.
 
 **A record setting is addressed one leaf at a time** (§6.2c), and never as a
 whole (`SE0460`):

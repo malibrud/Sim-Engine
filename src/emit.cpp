@@ -2300,6 +2300,8 @@ void Emitter::sim_run() {
             o_ << "        return;\n    }\n";
         }
     }
+    o_ << "    // §13.4 — every IC override is in place before the first node init(),\n";
+    o_ << "    // so each init() starts from the IC this run was configured with.\n";
     o_ << "    apply_initial_conditions();\n";
     o_ << "    se_tick_ = 0;\n    se_time_ = 0.0;\n    se_done_ = false;\n";
     o_ << "    se_run_ = se_rt::RunState{0.0, step_seconds, 0};   // §10.5\n";
