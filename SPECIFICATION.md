@@ -1235,7 +1235,9 @@ against the target's recorded dimension (§15.6) by the loader, which is the sam
 check applied to a value that arrives later.
 
 **A configuration that fails does not start a run.** Five things can be wrong
-here — a dimension that disagrees with §15.6, a `rate` that violates §9.2's
+here — a settings source that cannot be applied (§14.1: a path the model does
+not have, a dimension that disagrees with §15.6, a right-hand side the loader
+does not accept), a `rate` that violates §9.2's
 divisor rule, an array extent that is not a non-negative integer, an element
 path (`bw.w1[3]`) that is out of range for the extent step 4 computed, and a
 host buffer whose size disagrees with what step 4 reported. None can be raised
@@ -3740,15 +3742,18 @@ external build tool:
   sources, named for the sim unless `--stem` says otherwise:
   - `<name>.hpp` declares `class Sim`: the ROOT node's settings, inputs and
     outputs as typed structs (with the record types they use), and the calls a
-    host makes in order — `settings()`, `init()`, `inputs()` / `tick()` /
-    `outputs()` / `done()`, `finish()`. The model itself is `Sim::Impl`,
+    host makes in order — `settings()` / `load_settings()` /
+    `dump_settings()` (§14.1), `init()`, `inputs()` / `tick()` / `outputs()` /
+    `done()`, `finish()`. The model itself is `Sim::Impl`,
     incomplete in the header, so a host depends on no layout it cannot see.
   - `<name>.cpp` holds everything behind it: the engine runtime, the node
     classes, `Sim::Impl` and the schedule. It is ONE translation unit — the
     whole model — which keeps the unity-build property that matters: the
     model's flat call sequence is compiled in one piece.
   - `main.cpp` is an example host that uses the header alone. It is what the
-    `run` and `exe` modes build, and `--no-main` suppresses it.
+    `run` and `exe` modes build, and `--no-main` suppresses it. It takes a
+    settings source from its command line (§14.1), and `run` and `test` pass
+    any arguments after the script's own through to it.
 - **Two scripts, one set of modes.** `build.ps1` for Windows and `build.sh` for
   a POSIX shell. They differ in quoting and in how an exit code is read, and
   take the same modes: `run` (build the exe and run it as the `.sim`
@@ -4127,7 +4132,67 @@ inventory of what a model exposes, which no external document has to be kept in
 sync with.
 
 Structural settings (§6.2) appear in a dump, marked, and are **rejected on load**:
-they are shape, and shape was fixed when the binary was generated.
+they are shape, and shape was fixed when the binary was generated. The mark is a
+comment — the row is written commented out, with the reason beside it — so a
+dump stays loadable and the round trip above holds for a model that has one.
+
+#### The operations on a generated `Sim`
+
+The three operations are members of the generated `Sim` (§15.5), beside
+`settings()`, and like it they belong to configuration — after construction,
+before `init()`:
+
+```cpp
+bool        load_settings(const char* text, const char* origin = "settings");
+const char* dump_settings();
+// resolve_settings is not a separate call: load_settings ends with it.
+```
+
+- **A load is all or nothing.** Every binding is parsed, resolved to a path and
+  checked against its target before any is applied; if one fails, none is.
+  `load_settings` returns false and `error()` names the origin, the line, the
+  path and the reason, worded as `sec` words the same fault:
+  `heavy.settings:3: front.left.mass: incompatible units: (m) where (kg) is
+  declared`.
+- **A failed load stops the run.** The failure is a configuration failure
+  (§6.2b): it stands until the model is destroyed, and `init()` refuses to
+  proceed while it does. A host that ignores the return value therefore cannot
+  run a configuration it did not ask for.
+- **A load after `init()` is refused**, for the reason §6.2b gives: settings are
+  constant once a run has begun.
+- **Loads layer.** Each binding pins its target, and a later load — or a later
+  edit through `settings()` — is a later writer (§13.3). A load ends by
+  re-resolving (§6.2b step 3), so what `settings()` and `dump_settings` show
+  afterwards includes every derived value.
+- **What a load may bind** is what §13.3 and §13.4 say an override may target —
+  a setting at any depth, one leaf of a record setting, a scalar state's initial
+  value, or one element of an array state — and nothing else. An output, a
+  whole record, a whole array, and a path the model does not have are each
+  rejected by name.
+- **A bound value is converted, not only checked.** A suffix compatible with
+  the target (§4.2, with §4.5's angle rule) is converted to the target's
+  canonical unit, so `0.34 (t)` at a `kg` setting is 340, and `20 (degC)` at a
+  `K` one is 293.15. The compiled model knows every unit symbol `sec` knows
+  (Appendix A): the table it carries is generated from the same one.
+- **`int` and `bool` targets take a number**, under elaboration's rules: a
+  value that is not an integer is rejected at an `int` target, as `SE0402`
+  rejects it (§3.5), and §7 has no boolean literal, so a `bool` setting is
+  written `0` or `1` here as it is everywhere else.
+
+`dump_settings` returns text owned by the model, valid until the next call. It
+writes the settings, in configuration order, then the initial conditions:
+every scalar state's, and each array-state element that a source bound. Numbers
+are written to round-trip exactly; units are the canonical ones (§15.6);
+enumerators are written by name.
+
+A generated `main.cpp` (§12.4) is a host of this interface, and takes the same
+text from its command line:
+
+| | |
+|---|---|
+| `--settings FILE` | load a §14 file; repeatable, in order |
+| `--set PATH=VALUE` | load one binding, `PATH = VALUE;`; repeatable, in order |
+| `--dump-settings` | after any loads, print `dump_settings()` and exit without running |
 
 ---
 
