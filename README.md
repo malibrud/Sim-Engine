@@ -65,8 +65,7 @@ and the node code written directly in C++.
   the gaps and open questions deliberately left in it.
 - **The generated interface is mid-redesign.** It is being built out in phases,
   listed under [Roadmap](#roadmap). Among the pieces that do not exist yet:
-  loading settings into a compiled model, choosing recorded signals at run time,
-  and a C interface / DLL build.
+  choosing recorded signals at run time, and a C interface / DLL build.
 - **Run control is process-global.** A finished run cannot be restarted in the
   same process, and two models in one process share a stop flag. This is the
   next thing to be fixed.
@@ -314,10 +313,21 @@ Build the model as a library (`build.ps1 lib`). Then compile this against
 [tests/emit/host.cpp](tests/emit/host.cpp) is a fuller host that the test
 suite compiles and runs.
 
-Behind the header, the model's whole data surface is three blocks:
+`settings()` reaches the root node's settings. `load_settings()` takes the same
+text as a `.settings` file and reaches any setting or initial condition by path,
+with units checked and converted, and `dump_settings()` writes the whole
+configuration back out in that form. The generated executable offers the same
+through `--settings FILE`, `--set PATH=VALUE` and `--dump-settings`.
+
+**[What a generated model does](docs/generated-model.md)** describes precisely how
+settings and initial conditions are finalized, what is called on every tick and in
+what order, and what each call can see.
+
+Behind the header, the model's whole data surface is four blocks:
 - `x`: continuous state, the solver's interface;
 - `sig`: every wire value and the root inputs;
-- `dis`: every discrete state.
+- `dis`: every discrete state;
+- `fin`: every finite state.
 
 Together they are a complete checkpoint. Tables built with `offsetof` give each
 slot's path, offset, type and unit. These are internals today; a public way to
@@ -469,9 +479,9 @@ In rough order. Each step is decided on its own, so this list changes.
 2. **Per-instance run control.** Each model gets its own stop flag, contract
    checks and clocks, so a program can run a model more than once, or run
    several models.
-3. **Settings at run time.** `load_settings` / `dump_settings` in the compiled
+3. ~~**Settings at run time.** `load_settings` / `dump_settings` in the compiled
    model (§14.1), and an application with `--settings`, `--set` and
-   `--dump-settings`.
+   `--dump-settings`.~~ Done.
 4. **Recording at run time.** Choose the recorded signals without regenerating:
    `--record`, `--list-signals`.
 5. **A C interface and a `dynamic` build.** A DLL / shared object callable by

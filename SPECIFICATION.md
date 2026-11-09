@@ -1220,7 +1220,7 @@ node having executed.
 
 **Configuration failures are not `SE` diagnostics.** Every `SE` code names a
 compile stage (§16.4) and carries a source span; these arise in a shipped binary
-with no source in reach, and the last three of the five are not detectable at
+with no source in reach, and the last three of the four are not detectable at
 compile time at all. They are reported by the model against a *path*, in the
 mechanism §14 defines for a rejected settings source, and the catalogue in §16.4
 deliberately does not cover them.
