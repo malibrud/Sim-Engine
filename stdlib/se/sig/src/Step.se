@@ -12,10 +12,10 @@
 // past, by overriding the state through the IC channel — is what `t_step` is
 // for and says more plainly.
 //
-// The switch still lands on a sample instant: this node declares a `rate`, so
-// its output is zero-order held and `sim.time()` reads that instant rather
-// than the solver's minor step. A continuous consumer therefore sees the edge
-// quantised to this node's step, and feeding an RK4 plant from anything in
+// The switch still lands on a tick: `held` makes this node's output zero-order
+// held (§9.3), so `sim.time()` reads the tick instant rather than the solver's
+// minor step. A continuous consumer therefore sees the edge quantised to the
+// step, and feeding an RK4 plant from anything in
 // `se.sig.src` hands it a staircase. That is the trade this package makes;
 // `se.sig.ct` is where the twin that does not make it lives.
 package se.sig.src;
@@ -29,15 +29,13 @@ node Step {
         // lifecycle method — so the far end of the step is `target`.
         target: double(U) = 1.0;
         t_step: double(s) = 0.0;
-
-        // Reserved (§6.2): declared so an instance may be re-rated, defaulting
-        // to the base step. `sample_rate` reads the base rate here — the
-        // reserved setting is resolved before any other, so this is not
-        // circular (§10.4).
-        rate: double(Hz) = sample_rate;
     }
 
     outputs { y: double(U); }
+
+    // Never written. Its kind is what holds this node (§9.3).
+    states { discrete held: bool = 0; }
+    next() { }
 
     output() { out.y = sim.time() < param.t_step ? param.initial : param.target; }
 }

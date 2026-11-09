@@ -2,30 +2,22 @@
 //
 // THE DRAW IS A PURE FUNCTION OF (seed, sample index). There is no generator
 // word carried in state and no RNG object: the value at sample k is a hash of
-// k, so `next()` -- which is pure and may write nothing but `next.` -- can
-// produce it. That is not a workaround, it is the only shape that fits. A
-// `native { rng: std::mt19937 }` is out of scope in `next()` (§6.7), so a
-// stateful generator would have to be advanced from `on_step()`, which §8.1
-// reserves for methods that carry no equation.
+// k, and `next()` produces it with nothing but `next.` to write.
 //
-// What the choice buys beyond legality: the sequence is reproducible from any
-// point, not just from the start. Two runs that begin at different sample
+// What the choice buys: the sequence is reproducible from any point, not just
+// from the start. Two runs that begin at different sample
 // indices see the same noise on the same samples, and a run restarted from a
 // recorded IC resumes the sequence it would have had.
 //
-// BANDWIDTH IS THIS NODE'S RATE. The output is held between sample instants
-// (§9.3), so the noise is white only up to the node's own Nyquist. Declare
-// `rate` to place that corner deliberately; leaving it at the base step ties
-// the spectrum to the solver's step size, which is the trap `psd` below exists
-// to make visible.
+// BANDWIDTH IS THE BASE RATE. The output is held across the step (§9.3), so the
+// noise is white only up to the base rate's Nyquist. That ties the spectrum to
+// the solver's step size, which is the trap `psd` below exists to make visible.
 package se.sig.src;
 
 node WhiteNoise {
     units { U; }
 
     settings {
-        rate: double(Hz) = sample_rate;
-
         // THREE KNOBS, ONE QUANTITY, in dependency order. Bind any one and the
         // ones below it follow; binding pins (§6.2), so the expression stops
         // running for whatever you bound.
@@ -44,8 +36,8 @@ node WhiteNoise {
         // each other would be a cycle (`SE0421`). A third, plainly-defaulted
         // setting is what breaks it.
         sigma0: double(U)      = 1.0;
-        psd:    double(U^2/Hz) = 2.0 * param.sigma0 * param.sigma0 / param.rate;
-        sigma:  double(U)      = sqrt(param.psd * param.rate / 2.0);
+        psd:    double(U^2/Hz) = 2.0 * param.sigma0 * param.sigma0 / sample_rate;
+        sigma:  double(U)      = sqrt(param.psd * sample_rate / 2.0);
 
         mean: double(U) = 0.0;
         seed: int(-)    = 12345;

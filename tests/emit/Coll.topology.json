@@ -13,12 +13,12 @@
  {"id": "g7", "kind": "composite", "name": "d", "path": "d", "parent": null, "collapsed": true, "ins": [{"name": "u", "type": "m/s^2"}], "outs": [{"name": "y", "type": "m/s^2"}]}
 ],
 "nodes": [
- {"id": "a_s", "kind": "leaf", "name": "s", "path": "a.s", "type": "se.math.Sum", "cluster": "g1", "order": 0, "rate": null, "solver": false, "file": "stdlib/se/math/Sum.se", "line": 11, "ins": [{"name": "a", "type": "m/s^2"}, {"name": "b", "type": "m/s^2"}], "outs": [{"name": "y", "type": "m/s^2"}], "states": []},
- {"id": "a_q_z", "kind": "leaf", "name": "z", "path": "a.q.z", "type": "se.math.Sum", "cluster": "g2", "order": 1, "rate": null, "solver": false, "file": "stdlib/se/math/Sum.se", "line": 11, "ins": [{"name": "a", "type": "m/s^2"}, {"name": "b", "type": "m/s^2"}], "outs": [{"name": "y", "type": "m/s^2"}], "states": []},
- {"id": "b_s", "kind": "leaf", "name": "s", "path": "b.s", "type": "se.math.Sum", "cluster": "g3", "order": 2, "rate": null, "solver": false, "file": "stdlib/se/math/Sum.se", "line": 11, "ins": [{"name": "a", "type": "m/s^2"}, {"name": "b", "type": "m/s^2"}], "outs": [{"name": "y", "type": "m/s^2"}], "states": []},
- {"id": "b_q_z", "kind": "leaf", "name": "z", "path": "b.q.z", "type": "se.math.Sum", "cluster": "g4", "order": 3, "rate": null, "solver": false, "file": "stdlib/se/math/Sum.se", "line": 11, "ins": [{"name": "a", "type": "m/s^2"}, {"name": "b", "type": "m/s^2"}], "outs": [{"name": "y", "type": "m/s^2"}], "states": []},
- {"id": "c_z", "kind": "leaf", "name": "z", "path": "c.z", "type": "se.math.Sum", "cluster": "g6", "order": 4, "rate": null, "solver": false, "file": "stdlib/se/math/Sum.se", "line": 11, "ins": [{"name": "a", "type": "m/s^2"}, {"name": "b", "type": "m/s^2"}], "outs": [{"name": "y", "type": "m/s^2"}], "states": []},
- {"id": "d_z", "kind": "leaf", "name": "z", "path": "d.z", "type": "se.math.Sum", "cluster": "g7", "order": 5, "rate": null, "solver": false, "file": "stdlib/se/math/Sum.se", "line": 11, "ins": [{"name": "a", "type": "m/s^2"}, {"name": "b", "type": "m/s^2"}], "outs": [{"name": "y", "type": "m/s^2"}], "states": []},
+ {"id": "a_s", "kind": "leaf", "name": "s", "path": "a.s", "type": "se.math.Sum", "cluster": "g1", "order": 0, "solver": false, "file": "stdlib/se/math/Sum.se", "line": 11, "ins": [{"name": "a", "type": "m/s^2"}, {"name": "b", "type": "m/s^2"}], "outs": [{"name": "y", "type": "m/s^2"}], "states": []},
+ {"id": "a_q_z", "kind": "leaf", "name": "z", "path": "a.q.z", "type": "se.math.Sum", "cluster": "g2", "order": 1, "solver": false, "file": "stdlib/se/math/Sum.se", "line": 11, "ins": [{"name": "a", "type": "m/s^2"}, {"name": "b", "type": "m/s^2"}], "outs": [{"name": "y", "type": "m/s^2"}], "states": []},
+ {"id": "b_s", "kind": "leaf", "name": "s", "path": "b.s", "type": "se.math.Sum", "cluster": "g3", "order": 2, "solver": false, "file": "stdlib/se/math/Sum.se", "line": 11, "ins": [{"name": "a", "type": "m/s^2"}, {"name": "b", "type": "m/s^2"}], "outs": [{"name": "y", "type": "m/s^2"}], "states": []},
+ {"id": "b_q_z", "kind": "leaf", "name": "z", "path": "b.q.z", "type": "se.math.Sum", "cluster": "g4", "order": 3, "solver": false, "file": "stdlib/se/math/Sum.se", "line": 11, "ins": [{"name": "a", "type": "m/s^2"}, {"name": "b", "type": "m/s^2"}], "outs": [{"name": "y", "type": "m/s^2"}], "states": []},
+ {"id": "c_z", "kind": "leaf", "name": "z", "path": "c.z", "type": "se.math.Sum", "cluster": "g6", "order": 4, "solver": false, "file": "stdlib/se/math/Sum.se", "line": 11, "ins": [{"name": "a", "type": "m/s^2"}, {"name": "b", "type": "m/s^2"}], "outs": [{"name": "y", "type": "m/s^2"}], "states": []},
+ {"id": "d_z", "kind": "leaf", "name": "z", "path": "d.z", "type": "se.math.Sum", "cluster": "g7", "order": 5, "solver": false, "file": "stdlib/se/math/Sum.se", "line": 11, "ins": [{"name": "a", "type": "m/s^2"}, {"name": "b", "type": "m/s^2"}], "outs": [{"name": "y", "type": "m/s^2"}], "states": []},
  {"id": "in.u", "kind": "in", "name": "in.u", "type": "m/s^2"},
  {"id": "out.0", "kind": "out", "name": "out.d.z.y", "type": "m/s^2"},
  {"id": "const.1", "kind": "const", "name": "0.0"},
@@ -44,7 +44,7 @@
  {"from": "d_z", "fromPort": "y", "to": "out.0", "toPort": "in", "type": "m/s^2", "feedthrough": true, "via": ["d.y"]}
 ],
 "settings": [
- {"path": "a.k", "owner": "a", "name": "k", "unit": "m/s^2", "value": "0.0", "from": null, "structural": false, "rate": false},
- {"path": "b.k", "owner": "b", "name": "k", "unit": "m/s^2", "value": "0.0", "from": null, "structural": false, "rate": false}
+ {"path": "a.k", "owner": "a", "name": "k", "unit": "m/s^2", "value": "0.0", "from": null, "structural": false},
+ {"path": "b.k", "owner": "b", "name": "k", "unit": "m/s^2", "value": "0.0", "from": null, "structural": false}
 ]
 }

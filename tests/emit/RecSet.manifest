@@ -63,8 +63,6 @@ xd[0]     src.t'                  -
           nest.s.hi.y             m/s^2       = 5.0   <- span.hi.y
           nest.s.hi.z             m/s^2       = 6.0   <- span.hi.z
 
-[decimation]              # derived from `rate` at configuration
-
 [types]
 se.math.Vec3                      units { U }
 se.math.Vec3.x                    U

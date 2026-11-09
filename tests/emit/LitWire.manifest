@@ -36,8 +36,6 @@
 
 [settings]                # configurable; value is the elaborated default
 
-[decimation]              # derived from `rate` at configuration
-
 [types]
 
 [recorded]                # columns of litwire.csv

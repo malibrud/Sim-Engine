@@ -53,19 +53,19 @@
 // The log map here is `QuatLog`'s, and both of its load-bearing properties are
 // load-bearing again. The shortest-rotation flip is what makes "decay toward
 // neutral" mean the short way round -- without it an orientation past pi leaks
-// AWAY from neutral. Here the flip lives in `adjust()`, which holds `qw >= 0`
+// AWAY from neutral. Here the flip lives in `next()`, which holds `qw >= 0`
 // in the state itself, so `leakOf()` reads the state as it stands. The one
 // gap is inside a step: an RK4 stage taken right at a half turn can see `qw`
 // slightly negative and leak the long way for that fraction of a step. The
-// error is tiny and the next `adjust()` removes it. Scale invariance is what
+// error is tiny and the next `next()` removes it. Scale invariance is what
 // lets the leak be correct on a state that has drifted off the unit sphere
-// since the last `adjust()`.
+// since the last `next()`.
 //
 // The norm behaves as it does in `QuatIntegrator`, for the same reason and with
 // the same answer: `q_dot` stays orthogonal to `q` -- the leak term is a pure
 // quaternion like `w` is, so it changes the axis of the rate and not its
 // orthogonality -- so the norm is conserved by the flow, is a free mode of RK4,
-// and is pinned back every step by `adjust()` (SPEC 6.4b). See
+// and is pinned back every step by `next()` (SPEC 6.4). See
 // `QuatIntegrator.se` for the full argument, including why `output()` does not
 // normalise as well.
 package se.kin;
@@ -123,7 +123,7 @@ node QuatLeakyIntegrator {
     }
 
     // The leak law, `wc * log q`, in the one place both methods read it from.
-    // log q is `QuatLog`'s, minus the flip: `adjust()` keeps `qw >= 0` in the
+    // log q is `QuatLog`'s, minus the flip: `next()` keeps `qw >= 0` in the
     // state, so there is nothing left to flip here.
     void leakOf(double qw, double qx, double qy, double qz,
                 double& lx, double& ly, double& lz) const {
@@ -134,16 +134,16 @@ node QuatLeakyIntegrator {
         lz = param.wc * k * qz;
     }
 
-    adjust() {
+    next() {
         const double n2 = state.qw*state.qw + state.qx*state.qx
                         + state.qy*state.qy + state.qz*state.qz;
 
         double k = 1.0 / std::sqrt(n2); // Force norm of 1.0
         if ( state.qw < 0 ) k *= -1;    // Force to be in branch closest to 1, i.e. keep qw positive.
-        adjust.qw = state.qw * k;
-        adjust.qx = state.qx * k;
-        adjust.qy = state.qy * k;
-        adjust.qz = state.qz * k;
+        next.qw = state.qw * k;
+        next.qx = state.qx * k;
+        next.qy = state.qy * k;
+        next.qz = state.qz * k;
     }
 
     tests {

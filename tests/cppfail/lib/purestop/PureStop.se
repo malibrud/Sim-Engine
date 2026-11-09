@@ -5,7 +5,7 @@
 // widening the surface WITHOUT widening it for `sim.stop`/`sim.abort`, which
 // §10.2 confines to the mutating methods: a leaf holds a plain `se_rt::RunView`
 // member, and `preamble()` shadows it with an `se_rt::RunControl` in `init()`
-// and `on_step()` only.
+// and `next()` only.
 //
 // Nothing else in the suite protects that. A refactor that injected
 // `RunControl` everywhere -- or that made `stop` a member of `RunView` --

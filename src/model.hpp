@@ -339,7 +339,6 @@ struct SettingSlot {
     double value = 0.0;      // what elaboration computed — the dump's starting point
     ExprCode expr;           // emitted right-hand side, references unresolved
     bool constant = true;    // `expr` is a literal; nothing upstream can move it
-    bool rate = false;       // reserved `rate` (§9.2): drives decimation, no param member
     bool structural = false; // fixed at elaboration (§6.2); refused on load
 };
 
@@ -455,7 +454,6 @@ struct Leaf {
     std::vector<Field> ports_in;
     std::vector<Field> ports_out;
 
-    long decimation = 1;               // §9.2 — 1 means base rate
     Loc loc;                           // the instance statement
 
     bool has_kind(ast::StateKind k) const;

@@ -10,7 +10,7 @@ model-file
       n: int(-)
     vars
       rx: buffer(65507)
-    on_step()
+    next()
       body @line 10 (1 bytes): ""
     output(packet)   [feedthrough]
       body @line 11 (64 bytes): "out.data = var.rx; out.n = static_cast<int>(i..."

@@ -48,7 +48,7 @@ and the node code written directly in C++.
   elaboration, scheduling and emission. Given a `.sim` file it writes C++20 that
   compiles warning-free at `/W4` and runs.
 - The language has units, records, composites, flow-down settings, continuous
-  and discrete states, array states, multi-rate scheduling, real-time pacing,
+  and discrete states, array states, real-time pacing,
   CSV recording, logging, contracts, and node-level unit tests.
 - A standard library of about 60 nodes: math, kinematics, filters and signal
   sources.
@@ -135,7 +135,7 @@ node Corner {
 
     structure {
         node whl : Wheel { inertia = param.wheel_inertia; };   // settings flow down
-        node tc  : TractionController { rate = 200.0; };      // 200 Hz on a 1 kHz base
+        node tc  : TractionController {};
 
         self.axle_torque  --> whl.drive_torque;
         self.ground_speed --> whl.ground_speed;
@@ -173,8 +173,7 @@ The key ideas, each specified in [SPECIFICATION.md](SPECIFICATION.md):
   between compatible units are folded at compile time. The generated C++ is
   plain `double`, and a unit manifest records what was erased.
 - **One global fixed step and one global solver** (`euler`, `rk2`, `rk4`).
-  Nodes run at integer divisions of the base rate. Discrete outputs are held
-  between samples.
+  Every node runs every tick. Discrete outputs are held across the step.
 - **Purity is enforced by the C++ compiler.** `output()` and `derivative()` are
   `const` and see only what they may touch. A body that writes a state or
   calls `sim.stop()` where it may not is a compile error, reported at the
@@ -359,9 +358,9 @@ a full one: nothing is tracked between runs.
 ## The examples
 
 - **[examples/drivetrain/](examples/drivetrain/)** is the small one: a wheel
-  (continuous), a 200 Hz traction controller (discrete) and a composite that
-  wires them. It exercises records on wires, flow-down settings, multi-rate
-  scheduling, real-time pacing and a `.settings` override file. It is the
+  (continuous), a traction controller (discrete) and a composite that
+  wires them. It exercises records on wires, flow-down settings, real-time
+  pacing and a `.settings` override file. It is the
   example used throughout the spec.
 - **[examples/washout/](examples/washout/)** is a classical motion-cueing
   washout filter for a motion platform: translational, tilt and rotational
@@ -424,7 +423,7 @@ powershell -File tools\nodetest.ps1         # just the node `tests { }` sections
 | `src/units.*` | Dimensions, the unit symbol table (Appendix A), conversion |
 | `src/model.hpp` | The resolved program and the flat runtime model |
 | `src/resolve.*` | Stage 3: the root set, the loader, name binding, §6 checks |
-| `src/elaborate.*` | Stage 4: the §7 evaluator, settings, wires, rates, overrides |
+| `src/elaborate.*` | Stage 4: the §7 evaluator, settings, wires, overrides |
 | `src/schedule.*` | Stage 5: the feedthrough sort and the algebraic-loop diagnostic |
 | `src/emit.*`, `src/runtime_src.cpp` | Stage 6: the C++, the manifest, the build scripts, and the embedded engine runtime |
 | `src/testgen.*` | `sec --test`: node test programs from `tests { }` sections |

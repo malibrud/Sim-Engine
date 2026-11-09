@@ -47,7 +47,7 @@ node Dst {
 node Sink {
     inputs { m: Mode; }
     vars   { e: Empty; }
-    on_step(m) { (void)in.m; }
+    next(m) { (void)in.m; }
 }
 
 node RecState {

@@ -16,10 +16,10 @@
 // a number the engine already held, and it showed up in the configuration
 // schema (§15.6) as a knob nobody wanted. `t_start` is how you shift the ramp.
 //
-// Still DISCRETE, and deliberately: it declares a `rate`, so its output is
-// zero-order held between sample instants and `sim.time()` is that instant,
-// not the solver's minor step. Feeding an RK4 plant from here hands it a
-// staircase. `se.sig.ct.Ramp` is the twin that does not.
+// Still DISCRETE, and deliberately: `held` makes its output zero-order held
+// across the step (§9.3), so `sim.time()` is the tick instant and not the
+// solver's minor step. Feeding an RK4 plant from here hands it a staircase.
+// `se.sig.ct.Ramp` is the twin that does not.
 package se.sig.src;
 
 node Ramp {
@@ -29,11 +29,13 @@ node Ramp {
         slope:   double(U/s);  // required
         initial: double(U) = 0.0;
         t_start: double(s) = 0.0;
-
-        rate: double(Hz) = sample_rate;
     }
 
     outputs { y: double(U); }
+
+    // Never written. Its kind is what holds this node (§9.3).
+    states { discrete held: bool = 0; }
+    next() { }
 
     output() {
         const double e = sim.time() - param.t_start;

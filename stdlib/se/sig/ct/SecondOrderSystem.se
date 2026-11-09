@@ -51,7 +51,7 @@ node SecondOrderSystem {
         A: math.Poly3 = { 1.0, 0.0, 0.0 };
         B: math.Poly3 = { 0.0, 0.0, 1.0 };
 
-        // NO `fs`, and no `rate`. There is no discretization here, so there is
+        // NO `fs`. There is no discretization here, so there is
         // no sample rate to design against -- the one setting that separates
         // this node from `dt.Biquad` is the one that is missing. Accuracy is the
         // sim file's `step` and `solver`, and a continuous node is by

@@ -12,7 +12,7 @@ node Sites {
     vars     { v: buffer; w [4]: buffer(8); pk: Packet; }   // SE0323, and SE0433: an extent
 
     output(p) { }
-    on_step() { }
+    next() { }
 }
 
 node Pass {

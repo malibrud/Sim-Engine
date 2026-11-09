@@ -20,8 +20,6 @@ node Triangle {
         f:         double(Hz)  = 1.0;
         phase:     double(rad) = 0.0;
         offset:    double(U)   = 0.0;
-
-        rate: double(Hz) = sample_rate;
     }
 
     outputs { y: double(U); }
@@ -31,11 +29,12 @@ node Triangle {
     vars { du: double(-);  p0: double(-); }
 
     init() {
-        var.du = param.f / param.rate;
+        const double fs = 1.0 / sim.step();
+        var.du = param.f / fs;
         var.p0 = param.phase / 6.283185307179586;   // see Sine.se on the 2*pi
-        if (param.f >= 0.5 * param.rate)
-            log.warn("f = {} Hz is at or above the Nyquist of this node's {} Hz rate",
-                     param.f, param.rate);
+        if (param.f >= 0.5 * fs)
+            log.warn("f = {} Hz is at or above the Nyquist of the {} Hz base rate",
+                     param.f, fs);
     }
 
     // Three straight segments: 4p on [0, 1/4), 2 - 4p on [1/4, 3/4), 4p - 4 on

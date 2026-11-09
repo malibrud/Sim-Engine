@@ -24,7 +24,7 @@ node NearMiss {
     inputs  { u: double(-); }
     outputs { y: double(-); }
 
-    on_setp(u) { }
+    nxet(u) { }
     output(u)  { out.y = in.u; }
 }
 
@@ -37,14 +37,12 @@ node BadArity {
     output(u)   { out.y = in.u; }
 }
 
-// `adjust` joined the reserved words (§3.4, Appendix B) the moment it became a
-// lifecycle method, so a port may no longer be called one -- and `adjus` is now
-// a near miss for it, which is the parser's candidate list carrying the new
-// entry.
+// A lifecycle method's name is a reserved word (§3.4, Appendix B), so a port may
+// not be called one -- and `derivativ` is a near miss for it.
 node Reserved {
-    inputs  { adjust: double(-); }
+    inputs  { derivative: double(-); }
     outputs { y: double(-); }
 
-    adjus(u) { }
+    derivativ(u) { }
     output() { out.y = 0.0; }
 }

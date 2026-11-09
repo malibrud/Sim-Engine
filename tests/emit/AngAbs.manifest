@@ -70,8 +70,6 @@
           ta.r.z                  m           = 0.0   <- r.z
           hold.len                m           = 3.0   <- th * rr
 
-[decimation]              # derived from `rate` at configuration
-
 [types]
 se.math.Vec3                      units { U }
 se.math.Vec3.x                    U

@@ -38,8 +38,6 @@
           dev.on_fault            -           = FAULT   <- on_fault
           dev.retry               -           = ALWAYS
 
-[decimation]              # derived from `rate` at configuration
-
 [types]
 enums.Rig#Status.link             enums.LinkState
 enums.Rig#Status.code             -

@@ -3,8 +3,8 @@
 // one. 10 ms base step, rk4.
 //
 //   cl    THE JUMP. A clutch spins up at 50 rad/s^2 towards a 100 rad/s engine
-//         and locks once within 3 rad/s. transition() decides, adjust() snaps
-//         the speed, in the same tick. The lock tick's row still reads
+//         and locks once within 3 rad/s. One next() decides and snaps the speed,
+//         in the same tick. The lock tick's row still reads
 //         unlocked at 97.5 (recording precedes the jump); the next row reads
 //         locked at exactly 100, and so does every row after it. Only the snap
 //         can produce that 100: a locked clutch's derivative is zero, so
@@ -17,11 +17,11 @@
 //         integral is t^2/2 up to 0.5 and t^2 - 0.125 after, to round-off.
 //
 //   pi    ENTRY ONLY. A PI controller switches MANUAL -> AUTO at t = 1.0 and
-//         presets its integrator once, through `prev.`, so the output does not
-//         jump: u = 3 throughout MANUAL and 3 + 2 (t - 1) after. A preset on
+//         presets its integrator once, reading the old mode through `state.`,
+//         so the output does not jump: u = 3 throughout MANUAL and 3 + 2 (t - 1) after. A preset on
 //         every AUTO tick would hold u at 3 for good.
 //
-//   tx    BUFFERED. One transition() moves the range to NEUTRAL at t = 0.5 and
+//   tx    BUFFERED. One next() moves the range to NEUTRAL at t = 0.5 and
 //         picks the gear from `state.range`, which is the OLD range: so the
 //         gear drops to 0 one tick after the range moves, whatever order the
 //         two statements are in. The write to the range comes first here, the
@@ -63,12 +63,11 @@ node Clutch {
     output() { out.w = state.w_clutch; }
     derivative() { der.w_clutch = state.locked ? 0.0 : param.accel; }
 
-    transition(w_eng) {
-        if (!state.locked && std::abs(state.w_clutch - in.w_eng) < param.tol)
-            transition.locked = true;
-    }
-    adjust(w_eng) {
-        if (state.locked) adjust.w_clutch = in.w_eng;   // the NEW value
+    next(w_eng) {
+        const bool lock = state.locked
+                       || std::abs(state.w_clutch - in.w_eng) < param.tol;
+        next.locked = lock;
+        if (lock) next.w_clutch = in.w_eng;
     }
 }
 
@@ -79,8 +78,8 @@ node Gearbox {
     // Not held, so this runs at every stage and sees the stage's instant.
     output() { out.tau = state.gear * sim.time(); }
 
-    transition() {
-        if (sim.time() >= 0.495) transition.gear = 2;
+    next() {
+        if (sim.time() >= 0.495) next.gear = 2;
     }
 }
 
@@ -103,12 +102,11 @@ node Bumpless {
     }
     derivative(err) { der.integ = state.ctl == Ctl::AUTO ? in.err : 0.0; }
 
-    transition() {
-        transition.ctl = sim.time() >= param.engage_at ? Ctl::AUTO : Ctl::MANUAL;
-    }
-    adjust(u_manual, err) {
-        if (state.ctl == Ctl::AUTO && prev.ctl != Ctl::AUTO)
-            adjust.integ = (in.u_manual - param.kp * in.err) / param.ki;
+    next(u_manual, err) {
+        const Ctl c = sim.time() >= param.engage_at ? Ctl::AUTO : Ctl::MANUAL;
+        next.ctl = c;
+        if (c == Ctl::AUTO && state.ctl != Ctl::AUTO)
+            next.integ = (in.u_manual - param.kp * in.err) / param.ki;
     }
 }
 
@@ -118,9 +116,9 @@ node Box {
         finite gear:  int(-) = 1;
     }
 
-    transition() {
-        transition.range = sim.time() >= 0.495 ? Range::NEUTRAL : Range::DRIVE;
-        if (state.range == Range::DRIVE) transition.gear = 3;   // the OLD range
-        else                             transition.gear = 0;
+    next() {
+        next.range = sim.time() >= 0.495 ? Range::NEUTRAL : Range::DRIVE;
+        if (state.range == Range::DRIVE) next.gear = 3;   // the OLD range
+        else                             next.gear = 0;
     }
 }

@@ -89,8 +89,6 @@ xd[5]     lz.wd'                  1/s
           lz.B.c1                 -           = 0.0
           lz.B.c0                 -           = 4.0
 
-[decimation]              # derived from `rate` at configuration
-
 [types]
 se.math.Vec3                      units { U }
 se.math.Vec3.x                    U

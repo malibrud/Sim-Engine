@@ -68,8 +68,8 @@ them is a defect in this document.
   elaboration; body arithmetic is not checked. The unit manifest (§15.6) carries
   the erased information out.
 - **I4 — Everything is discrete at the base step.** One global fixed step, one
-  global solver, per-node rates as integer decimations. A "continuous" node is a
-  base-rate node that happens to have integrated states.
+  global solver, and every node runs every tick. A "continuous" node is a node
+  that happens to have integrated states.
 - **I5 — Generated identifiers are the generator's business.** Users write only
   model paths. Nothing at the language level constrains emitted names.
 
@@ -84,7 +84,7 @@ marks rules with the earliest stage that can detect a violation.
 | 2 | **Syntactic** | Grammar violations, misplaced sections, duplicate sections. |
 | 3 | **Resolution** | Unknown names, file/name mismatch, root collisions, duplicate members. |
 | 4 | **Elaboration** | Unit mismatches, required-setting omissions, setting cycles, non-divisor rates, instantiation. |
-| 5 | **Scheduling** | Feedthrough sort, algebraic loops, rate/active-set construction. |
+| 5 | **Scheduling** | Feedthrough sort, algebraic loops. |
 | 6 | **Emission** | Code, unit manifest, slot map, build script. A model with array-shaped states (§6.4a) emits its state slot map's *declarations* here and its concrete rows at configuration (§15.6). |
 
 All six stages are implemented in `src/`, one source file per stage from stage 3
@@ -156,7 +156,7 @@ not a rule the compiler enforces on anyone's packages.
 
 The library uses the second level to split blocks by **time character**, which is
 the property that decides whether a node's states join the solver's vector or
-advance on a rate:
+advance once per tick:
 
 ```
 <root>/se/sig/ScaleLimit.se       ->  se.sig.ScaleLimit      memoryless
@@ -172,9 +172,8 @@ could not be spelled out even if the convention allowed it.
 
 `se.sig.src` is a **deliberate exception**, and the only one: it groups signal
 *sources* by what they are rather than by time character, and every block in it
-is discrete. A source has no input, so it is never on the receiving end of a
-rate transition, and the property that matters at its use site is which waveform
-it produces, not how it stores its phase. The cost is real and is recorded here
+is discrete. A source has no input, and the property that matters at its use site is which
+waveform it produces, not how it stores its phase. The cost is real and is recorded here
 rather than hidden: a source hands a continuous consumer a zero-order-held
 staircase one base step wide, so RK4 is first-order across that path. A
 `se.sig.src.ct` sibling — the same waveforms with `der.` on a continuous phase,
@@ -373,7 +372,7 @@ Only these words are **reserved** everywhere:
 package  use  type  node  self
 settings units inputs outputs states vars native structure declarations build
 continuous discrete
-init output derivative next adjust on_step final
+init output derivative next final
 sim
 ```
 
@@ -391,7 +390,7 @@ includes:
 - the type name `buffer` — recognised as a one-segment type, as the scalar
   type names are (§5.1a);
 - the accessor prefixes (`param`, `in`, `out`, `state`, `der`, `next`,
-  `adjust`, `var`) and the builtin namespaces (`log`, `sim`) — these live in
+  `var`) and the builtin namespaces (`log`, `sim`) — these live in
   **C++ scope inside verbatim bodies**, not in the DSL's token stream, so they
   are not DSL keywords at all. They are, however, unavailable as member names (§6.11).
 
@@ -935,8 +934,6 @@ node Wheel {
     output(…)   { … }
     derivative(…) { … }
     next(…)       { … }
-    adjust(…)     { … }
-    on_step(…)    { … }
     final(…)    { … }
 
     double helper(double x) const { … }   // verbatim private member
@@ -1016,29 +1013,6 @@ Nothing in this version produces such a setting, because array *ports* do not
 exist (§6.3) and nothing else lets a setting reach shape. The concept and the
 manifest marker (§15.6) are kept for a feature that genuinely drives instance
 count or wiring, should one ever be added; they are currently unreachable.
-
-**Reserved setting: `rate`.** A node may declare
-
-```
-settings { rate: double(Hz) = 200.0; }
-```
-
-`rate` is an ordinary setting in **every** respect — declared, defaulted, bound at
-instantiation, flowed down, overridable at configuration, and holding a `param`
-member like any other. If declared, it must have unit `(Hz)` and type `double`
-(`SE0422`). A node that does not declare `rate` runs at the base step.
-
-Its only distinction is that the scheduler *reads* it (§9.2): the node's
-decimation is derived from `param.rate` during configuration, in the same pass
-and by the same rule as any other derived value. Before §6.2b, `rate` produced
-no runtime member because its value folded into a decimation constant; with
-values no longer folded there is nothing left to special-case, and `sample_rate`
-(§10.4) is simply a reading of it.
-
-`rate` is **not structural**: it sets a decimation counter, not a shape. The
-emitted schedule is a fixed sequence of calls in a fixed order (§15.7); rate
-supplies only the divisor that guards each one (§9.6). See §9.2 for the one
-consequence, which is that `SE0450` moves to configuration time for an override.
 
 #### 6.2a `units` — unit parameters
 
@@ -1198,8 +1172,7 @@ Between construction and `init()`, a compiled model passes through
 2. Overrides are applied from the §14 settings source, each **pinning** its
    target.
 3. Derived defaults (§6.2) and flow-down expressions (§6.9.1) are re-evaluated
-   in dependency order, **skipping pinned settings**, and each node's decimation
-   is recomputed from its `rate` (§9.2).
+   in dependency order, **skipping pinned settings**.
 4. **Array extents (§6.4, §6.5) are evaluated**, each node reports its slot
    counts, and `Sim` sums them into the block sizes.
 5. **The host queries those sizes, provides the state buffers, and `Sim` binds
@@ -1234,11 +1207,10 @@ checked at elaboration (§4.3); an override supplied at configuration is checked
 against the target's recorded dimension (§15.6) by the loader, which is the same
 check applied to a value that arrives later.
 
-**A configuration that fails does not start a run.** Five things can be wrong
+**A configuration that fails does not start a run.** Four things can be wrong
 here — a settings source that cannot be applied (§14.1: a path the model does
 not have, a dimension that disagrees with §15.6, a right-hand side the loader
-does not accept), a `rate` that violates §9.2's
-divisor rule, an array extent that is not a non-negative integer, an element
+does not accept), an array extent that is not a non-negative integer, an element
 path (`bw.w1[3]`) that is out of range for the extent step 4 computed, and a
 host buffer whose size disagrees with what step 4 reported. None can be raised
 where it is found, because configuration runs before there is a run to fail. The
@@ -1344,7 +1316,6 @@ expressions has stopped being the small total language §7.4 argues for.
 
 ##### What did not change
 
-- **`rate` is scalar.** It must still be `double(Hz)` (`SE0422`).
 - **An override addresses a leaf, never a record** (§13.4).
 - **The compiled model's loader is untouched** (§14.1). It still reads a flat
   path and a number with an optional unit suffix, because that is all a leaf
@@ -1413,38 +1384,33 @@ There is deliberately **no preferred state kind**: a default would privilege one
 and the three differ genuinely in write mechanism, in schedule, and in their
 relationship to the solver.
 
-| | write accessors | written in | in the solver state vector | holds its node (§9.3) |
+| | moved by | written in | in the solver state vector | holds its node (§9.3) |
 |---|---|---|---|---|
-| `continuous` | `der.<name>`, `adjust.<name>` | `derivative()`, `adjust()` | **yes** | no |
-| `discrete` | `next.<name>` | `next()` | no | **yes** |
-| `finite` | `transition.<name>` | `transition()` | no | no |
+| `continuous` | flow (`der.<name>`) and jump (`next.<name>`) | `derivative()`, `next()` | **yes** | no |
+| `discrete` | jump (`next.<name>`) | `next()` | no | **yes** |
+| `finite` | jump (`next.<name>`) | `next()` | no | no |
 
 The kinds answer **how a state changes**, not what values it takes. A
-`continuous` state flows and is integrated; a `discrete` one is a sampled-data
-state, x⁺ = h(t,x,u) at the node's sample instants; a `finite` one is the state
-of a state machine, which **jumps** between steps and holds still within one
-(§6.4c). A `discrete int` and a `finite int` can hold the same numbers; what
-differs is when they move and what that does to the schedule.
+`continuous` state flows and is integrated, and may also jump between steps
+(§6.4b); a `discrete` one is a sampled-data state, x⁺ = h(t,x,u); a `finite` one
+is the state of a state machine, which jumps between steps and holds still within
+one (§6.4c). A `discrete int` and a `finite int` can hold the same numbers; what
+differs is what that does to the schedule.
 
-- The **write accessor is symmetric and separately enforced.** The generated
-  `Der` struct carries only continuous fields and the `Store` struct only
-  discrete ones, so `der.ticks` and `next.omega` are "no such member" compile
-  errors with no body parsing whatsoever (I2). `Adj` (§6.4b) is the same field
-  set as `Der`, and buys the same thing for `adjust.ticks`; `Fin` (§6.4c)
-  carries only finite fields, so `transition.omega` and `next.link` fail the
-  same way. (`Store`, not `Next`: the same type is both the committed block
-  `dis` and the buffer `nxt`, so naming it for the buffer would be wrong half
-  the time it is used — §15.5.)
+- **The write accessors are enforced by shape.** The generated `Der` struct
+  carries only continuous fields, so `der.ticks` is a "no such member" compile
+  error with no body parsing whatsoever (I2). `Next` carries one field for each
+  state of any kind, so `next.<name>` exists for exactly the names `state.<name>`
+  does.
 - **`next.` means simultaneous update.** A direct `state.x = …` mutation would be
   *sequential*, making results depend on statement order inside `next()`. With
-  `next.`, every discrete state reads the old value and writes the new one, which
-  is what the state-space form x⁺ = h(t,x,u) actually says. The lowering gives
-  the whole model one discrete block and one buffer of the same shape (§15.5):
-  every `next()` reads `dis` and writes `nxt`, and the tick ends with a single
-  `dis = nxt`. Simultaneity is therefore a property of the **model**, not of each
-  node in turn, and there is no per-node commit step. A node that did not sample
-  this tick left its slice of `nxt` equal to `dis`, so the whole-block assignment
-  is a no-op for it.
+  `next.`, every state reads the old value and writes the new one, which is what
+  the state-space form x⁺ = h(t,x,u) actually says. The lowering gives each block
+  a buffer of the same shape (§15.5): every `next()` reads the committed blocks
+  and writes the buffers, and the tick commits them once. Simultaneity is
+  therefore a property of the **model**, not of each node in turn.
+- **A state the body does not write keeps its value.** The buffers are seeded
+  from the committed blocks before the first `next()` runs.
 - Only `double` may be `continuous` (`SE0431`); the state vector is a flat
   `double` array.
 - Only a type with finitely many values may be `finite` — `bool`, `int` or an
@@ -1528,7 +1494,7 @@ node Butterworth {
         fc: double(Hz) = 2.0;                    // cutoff
         order: int(-)    = 4;                      // filter order
         nbq: int(-)    = ceil(param.order / 2);  // sections, named once
-        rate: double(Hz) = 1000.0;                 // §6.2's reserved setting
+        fs: double(Hz) = sample_rate;
     }
 
     inputs  { x: double(U); }
@@ -1550,8 +1516,8 @@ node Butterworth {
     // already whatever a §14 source overrode it to.
     init() {
         const double pi = std::acos(-1.0);
-        const double K  = 2.0 * param.rate;
-        const double wa = K * std::tan(pi * param.fc / param.rate);   // pre-warped
+        const double K  = 2.0 * param.fs;
+        const double wa = K * std::tan(pi * param.fc / param.fs);     // pre-warped
         const int    N  = param.order;
         const bool   odd = (N % 2) == 1;
 
@@ -1611,7 +1577,7 @@ had to be written a particular way to stay honest.
 - **`output()` and `next()` recompute `w0` rather than sharing it.** §8.2 splits
   the two, and the predecessor C++ this replaces fused them into one
   `double filter(double x)` that advanced state and returned a value in the same
-  call. The split is what makes ZOH, rate transitions and recording well-defined;
+  call. The split is what makes ZOH and recording well-defined;
   the cost is a handful of multiply-adds and it is the same cost a scalar
   `dt.Biquad` already pays.
 - **Nothing here is variadic to the compiler.** One instance, one call site per
@@ -1643,8 +1609,7 @@ computed default — but it becomes load-bearing here, because an extent must
 resolve to an exact non-negative integer and a value that is `2.9999999` is not
 one.
 
-The rule is **exact-or-reject, checked twice**, and it is the same rule §9.2
-already applies to a decimation:
+The rule is **exact-or-reject, checked twice**:
 
 - At **elaboration**, the value must be within `1e-9` of an integer. It is
   rounded to that integer if it is, and is `SE0402` (a lossy conversion to an
@@ -1662,12 +1627,11 @@ non-negative: an extent that is not an exact non-negative integer is `SE0432` at
 elaboration when nothing overridable feeds it, and a configuration failure
 (§6.2b, §16.4) when something does. Zero is legal and yields no slots.
 
-#### 6.4b Adjusting a continuous state between steps
+#### 6.4b Jumping a continuous state
 
-A continuous state normally moves only by being integrated. `adjust()` is the
-one exception: a method that maps a continuous state to a new value **between**
-steps — the *jump map* of a hybrid system, the counterpart of `derivative()`'s
-flow map. Four ordinary things need it, and none of them was expressible before:
+A continuous state normally moves only by being integrated. Writing `next.<name>`
+for one moves it **between** steps instead: the *jump map* of a hybrid system,
+the counterpart of `derivative()`'s flow map. Four ordinary things need it:
 
 - normalise a quaternion or a direction-cosine matrix;
 - wrap a heading into (−π, π];
@@ -1677,63 +1641,44 @@ flow map. Four ordinary things need it, and none of them was expressible before:
 ```
 states { continuous qw: double(-) = 1.0;   continuous qx: double(-) = 0.0; … }
 
-adjust() {
+next() {
     const double n = std::sqrt(state.qw*state.qw + state.qx*state.qx + …);
-    adjust.qw = state.qw / n;
-    adjust.qx = state.qx / n;
+    next.qw = state.qw / n;
+    next.qx = state.qx / n;
     …
 }
 ```
 
-- **Continuous states only.** `Adj` carries the same fields as `Der`, so
-  `adjust.<discrete>` is "no such member" by exactly the mechanism that stops
-  `der.ticks`. A discrete state is already written wholesale by `next()`, and
-  routing one through `adjust()` would step around that method's simultaneity.
-- **A state the body does not write is untouched** — there is no buffer and no
-  commit step, so an unwritten slot is never assigned at all.
-- It runs once per accepted step, at the node's sample instants, below the
-  recording and below the exit. §9.6 has the placement; §8.1 has the rest of the
-  method's shape, which is `next()`'s in every respect but the state kind.
+A jump is opt-in: a continuous state has `derivative()` to move it, and most never
+jump. It lands at the commit, below the recording and the exit and above the
+solver (§9.6), so the row that tick still reports the state before the jump, and
+the integration starts from the state after it.
 
-**`adjust.` and `state.` name the same storage.** This is the one place in the
-language where two accessors alias, and it is deliberate, so it is stated here
-rather than left to be discovered:
-
-```
-adjust.a = state.b;   // state.a is now b …
-adjust.b = state.a;   // … so this is a no-op, not a swap
-```
-
-The `next.` accessor above exists precisely to prevent that, and `adjust.`
-declines the same protection because the two methods do different jobs.
-`next()` computes an entirely new state vector from the old one, where coupled
-and permuted updates are ordinary. `adjust()` applies a correction to the state
-in hand — normalise, clamp, wrap, flip — and every one of those computes what it
-needs before it writes anything, as the listing above does with `n`. Buying
-simultaneity here would cost a second continuous block plus two whole-block
-copies per tick, in every model that adjusts anything, to protect against a
-construct these cases do not contain.
+It lands **before** the flow rather than after, for the same reason every jump
+does. `next()` reads the inputs the tick's outputs produced at *t*[k]; run after
+the solver, it would pair *x*[k+1] with inputs left over from the last trial
+stage.
 
 **It does not replace normalising in `output()`.** The advance re-propagates
 `output()` at each solver stage's trial state (§9.6), which is off the manifold
-again. `adjust()` keeps the *state* on the manifold across a long run; it never
-makes a consumer's precondition (§10.6) hold. A node publishing a quaternion
-that others rely on being unit still normalises what it publishes.
+again. A jump keeps the *state* on the manifold across a long run; it never makes
+a consumer's precondition (§10.6) hold. A node publishing a quaternion that others
+rely on being unit still normalises what it publishes.
 
-#### 6.4c Finite states and `transition()`
+#### 6.4c Finite states
 
 A `finite` state is the state of a **state machine**: a gear, a clutch that is
 locked or slipping, a controller in MANUAL or AUTO, a local mirror of a remote
 device's fifteen states. It jumps between steps and holds still within one, and
 it reads, like any state, as `state.<name>` in every method.
 
-It is a kind of its own because neither existing kind fits. A `discrete` state
+It is a kind of its own because neither other kind fits. A `discrete` state
 makes its node zero-order held (§9.3), so a leaf that keeps a gear beside a
 torque computed from a continuous speed would publish that torque as a
 staircase, and RK4 would collapse to first order across it. A `continuous`
-state with a derivative of zero, moved by `adjust()`, gives the right answer —
-but it is a `double` in the solver's vector standing in for a name, and every
-`derivative()` has to remember to write its zero.
+state with a derivative of zero gives the right answer — but it is a `double` in
+the solver's vector standing in for a name, and every `derivative()` has to
+remember to write its zero.
 
 ```
 states {
@@ -1741,90 +1686,64 @@ states {
     finite retries: int(-) = 0;
 }
 
-transition(ack, err) {
-    if (in.err)                                      transition.link = LinkState::FAULT;
+next(ack, err) {
+    if (in.err)                                      next.link = LinkState::FAULT;
     else if (state.link == LinkState::CONNECTING && in.ack)
-                                                     transition.link = LinkState::CONNECTED;
-    if (in.err) transition.retries = state.retries + 1;
+                                                     next.link = LinkState::CONNECTED;
+    if (in.err) next.retries = state.retries + 1;
 }
 ```
 
-- **`transition()` writes finite states and nothing else.** `Fin` carries only
-  finite fields, so `transition.omega` is "no such member" by the mechanism that
-  stops `der.ticks`, and a finite state is reachable through no other write
-  accessor. Each write method now owns exactly one kind: `der.` and `adjust.`
-  the continuous states, `next.` the discrete ones, `transition.` the finite
-  ones.
-- **A node with a finite state needs `transition()`** (`SE0347`), and
-  `transition()` in a node without one is `SE0348` — §6.12's rule, for the
-  third kind.
-- **It runs once per accepted step, at the node's sample instants**, below the
-  recording and the exit and above `adjust()` (§9.6 step 7). Like every method
-  but `output()` its parameter list constrains no ordering (§8.3).
-
-**`transition.` is buffered.** Every `state.` read in the body sees the value
-the tick began with, and the writes land together when the body is done — the
-simultaneity `next.` has, for the same reason. A state machine's transition
-function maps the current state to the next one, and coupled machines in one
-node are ordinary:
+**Coupled updates are ordinary**, and `next.` being buffered is what makes them
+safe. Every `state.` read sees the value the tick began with:
 
 ```
 states { finite range: Range = DRIVE;   finite gear: int(-) = 1; }
 
-transition(sel, w_out) {
-    transition.range = in.sel;
-    if (state.range == Range::DRIVE) transition.gear = schedule(in.w_out);   // the OLD range
-    else                             transition.gear = 0;
+next(sel, w_out) {
+    next.range = in.sel;
+    if (state.range == Range::DRIVE) next.gear = schedule(in.w_out);   // the OLD range
+    else                             next.gear = 0;
 }
 ```
 
 Moving the selector to NEUTRAL drops the gear on the **following** tick,
 whichever order those two statements are in. Wanting it on this tick is a
-different transition function, and it says so: `in.sel == Range::NEUTRAL`
-rather than `state.range == Range::NEUTRAL`. A finite state the body does not
-write keeps its value.
+different function, and it says so: `in.sel == Range::NEUTRAL` rather than
+`state.range == Range::NEUTRAL`.
 
-`adjust.` declines the same protection (§6.4b) and keeps it declined: its jobs
-are corrections that compute what they need before they write. Mode logic is
-where coupled updates are the norm, which is the whole difference.
-
-**The new value is in force from t_k⁺.** The commit happens before `adjust()`
-and before the advance, so `adjust()`, every stage of the solver and the next
-tick's `output()` all see it; `next()` and `on_step()`, which run above it, see
-the old one. That is exactly how an `adjust()` jump behaves, and it is why a
-finite state does **not** hold its node. A `discrete` node is held because its
-stages would otherwise read *dis*[k+1] while publishing the step that began at
-*dis*[k] (§9.3); a finite state has no such pair to confuse. It holds one value
-across the whole step, the one the step was decided under, and a node that
-reads it is re-evaluated at the stages like any other.
-
-**`adjust()` sees the new value, and `prev.` sees the old one.** A jump in a
-continuous state usually belongs to a transition, so the one runs straight
-after the other in the same tick. A reset that holds *throughout* a mode reads
-`state.`:
+**A mode and the jump it causes are one body.** A clutch that locks snaps its
+speed to the engine's in the same tick:
 
 ```
-transition(w_eng) { if (!state.locked && slip_small(in.w_eng)) transition.locked = true; }
-adjust(w_eng)     { if (state.locked) adjust.w_clutch = in.w_eng; }      // the new value
-```
-
-A reset that happens only on **entry** compares the two. `prev.<name>` is the
-finite state as it was before this tick's transition — read-only, and in scope
-in `adjust()` alone, which is the one method that runs between the two values.
-Bumpless transfer is the standard case: the integrator is preset once, when the
-controller switches to AUTO, and left to integrate afterwards.
-
-```
-adjust(u_manual, err) {
-    if (state.ctl == Ctl::AUTO && prev.ctl != Ctl::AUTO)
-        adjust.integ = (in.u_manual - param.kp * in.err) / param.ki;
+next(w_eng) {
+    const bool lock = state.locked || slip_small(in.w_eng);
+    next.locked = lock;
+    if (lock) next.w_clutch = in.w_eng;
 }
 ```
 
-Entry, exit and any particular edge are comparisons of the same two values, so
-no entry-hook syntax is needed. `prev.` costs nothing at run time: the commit is
-a swap of the block and its buffer (§15.5), and after it the buffer *is* the old
-block.
+A reset that happens only on **entry** compares the new mode with `state.`, which
+is still the old one. Bumpless transfer is the standard case: the integrator is
+preset once, when the controller switches to AUTO, and left to integrate
+afterwards.
+
+```
+next(want_auto, u_manual, err) {
+    const Ctl c = in.want_auto ? Ctl::AUTO : Ctl::MANUAL;
+    next.ctl = c;
+    if (c == Ctl::AUTO && state.ctl != Ctl::AUTO)
+        next.integ = (in.u_manual - param.kp * in.err) / param.ki;
+}
+```
+
+**The new value is in force from t_k⁺.** The commit happens before the advance,
+so every stage of the solver and the next tick's `output()` all see it, and that
+is why a finite state does **not** hold its node. A `discrete` node is held
+because its stages would otherwise read *dis*[k+1] while publishing the step that
+began at *dis*[k] (§9.3); a finite state has no such pair to confuse. It holds one
+value across the whole step, the one the step was decided under, and a node that
+reads it is re-evaluated at the stages like any other.
 
 ### 6.5 `vars`
 
@@ -1835,14 +1754,14 @@ vars { inertia_inv: double(1/(kg*m^2)); }
 Per-instance persistent storage that is **not state**: private C++ members,
 outside the solver vector and outside the override channel.
 
-- **Readable in every method; writable only in `init()` and `on_step()`.**
-  `next()` is pure and cannot write one: it carries the transition equation and
-  nothing else (§8.1).
+- **Readable in every method; writable only in `init()` and `next()`.** A write
+  in `next()` lands at once, unlike a `next.` write (§6.4): it is the node's own
+  bookkeeping, not part of the jump the model commits together.
 - A `var` needs no default; it is zero-initialised and is expected to be computed
   in `init()`.
 - Records are permitted as `vars`.
 - **A `var` may be a buffer**, with a capacity (§5.1a). It is the usual staging
-  area for one: a body that reads a device in `on_step()` cannot write an
+  area for one: a body that reads a device in `next()` cannot write an
   output there, so it fills `var.rx` and `output()` copies it to `out`.
 - **A `var` may carry an extent**, on the same terms as a state (§6.4a): a §7
   expression evaluated at configuration, dimensionless, a non-negative integer.
@@ -1865,7 +1784,7 @@ output() { var.max_v = max(var.max_v, state.velocity); }   // rejected
 ```
 
 would report a maximum that never physically happened and that changes with the
-solver. Confining writes to `on_step()` — which runs exactly once per accepted
+solver. Confining writes to `next()` — which runs exactly once per accepted
 step — makes that unrepresentable.
 
 ### 6.6 `declarations`
@@ -1914,8 +1833,8 @@ native {
   `native.sock`), because native C++ should feel natural. This does not unwind
   the accessor design of §6.10: the prefixes exist because one name can be both
   a state and an output, and a native has no such twin.
-- **Natives are in scope only in `init()`, `on_step()`, and `final()`.** In
-  `output()`, `derivative()` and `next()` the generator simply does not emit the alias, so the
+- **Natives are in scope only in `init()`, `next()`, and `final()`.** In
+  `output()` and `derivative()` the generator simply does not emit the alias, so the
   name is undeclared and the C++ compiler says so, with `#line` pointing at the
   `.se` line. The reason is in §8.4. Note that `const` cannot do this job: a
   `const SOCKET` is still perfectly usable by `recv()`, so the purity mechanism
@@ -1938,7 +1857,6 @@ structure {
         inertia = param.wheel_inertia;   // declarative flow-down
     };
     node tc : TractionController {
-        rate       = 200.0;
         slip_limit = 0.10;
     };
 
@@ -2061,7 +1979,7 @@ endpoint := ( 'self' | identifier ) { '.' identifier }
   configuration reaches the wire in a compiled binary, exactly as a flow-down
   binding does (§6.2b step 3). That is the whole of what it buys over a literal
   (below), which is cheaper still and folds. `se.sig.src.Constant` remains the
-  right answer when the constant wants a `rate`, a name in the schedule, or a
+  right answer when the constant wants a name in the schedule, or a
   recordable signal path.
 
   `param` is available as an endpoint head because it can never be anything
@@ -2084,8 +2002,6 @@ endpoint := ( 'self' | identifier ) { '.' identifier }
     record setting are real, so naming one here is naming a scalar — not taking
     a field of a wire, which is the separate and still-unsupported thing
     `SE0311` rejects. Unknown setting, or unknown field, is `SE0304`.
-  - **`rate` is excluded** (`SE0316`). It selects a decimation (§9.2) and gets
-    no parameter member at all, so there is nothing to read.
 
   Everything else about the endpoint is unchanged: units are checked and
   converted per §5.2, scalar and record alike, and fan-out is free — a setting is
@@ -2236,14 +2152,11 @@ Inside a verbatim body, node data is reached through **namespaced accessors**:
 | `state.<name>` | every method | `init()` |
 | `der.<name>` | — | `derivative()` |
 | `next.<name>` | — | `next()` |
-| `adjust.<name>` | — | `adjust()` |
-| `transition.<name>` | — | `transition()` |
-| `prev.<name>` | `adjust()` | never |
-| `var.<name>` | every method | `init()`, `on_step()` |
-| bare name (`native`) | `init`, `on_step`, `final` | same |
+| `var.<name>` | every method | `init()`, `next()` |
+| bare name (`native`) | `init`, `next`, `final` | same |
 
 **An array-shaped state or var is indexed through the same accessor** —
-`state.w1[i]`, `next.w1[i]`, `adjust.w1[i]`, `der.w[i]`, `var.a1[i]` — with the
+`state.w1[i]`, `next.w1[i]`, `der.w[i]`, `var.a1[i]` — with the
 readability and writability rules above unchanged. Indexing is ordinary C++ subscripting on the
 proxy §15.5 defines, so a body loops over stages the way any C++ does. Bounds
 are not checked: a body's arithmetic is already unchecked (§4.4), and an extent
@@ -2269,7 +2182,7 @@ namespace from outputs, and only from outputs** — a state and an output may sh
 a name; everything else collides (`SE0330`).
 
 A member may not be named `param`, `in`, `out`, `state`, `der`, `next`,
-`adjust`, `transition`, `prev`, `var`, `log`, or `sim`, since the generated
+`var`, `log`, or `sim`, since the generated
 code puts objects by those names in scope of bodies (`SE0331`).
 
 **No name the generated C++ spells verbatim may be a C++ keyword** (`SE0332`):
@@ -2295,13 +2208,11 @@ functions:
 |---|---|---|
 | `outputs` | an output method for each output (§8.3a) | `SE0340` |
 | any `continuous` state | `derivative()` | `SE0341` |
-| any `discrete` state | `next()` | `SE0342` |
-| any `finite` state | `transition()` | `SE0347` |
+| any `discrete` or `finite` state | `next()` | `SE0342` |
 
-The converse is checked for all four, since none could do anything: `output()`
-in a node with no outputs (`SE0344`), `derivative()` in a node with no continuous
-states (`SE0343`), `next()` in a node with no discrete states (`SE0345`), and
-`transition()` in a node with no finite states (`SE0348`). An
+The converse is checked for the first two, since neither could do anything:
+`output()` in a node with no outputs (`SE0344`), and `derivative()` in a node with
+no continuous states (`SE0343`). An
 `output default()` whose every output a group has already claimed is the same
 mistake one level down (`SE0355`).
 
@@ -2310,21 +2221,14 @@ not a second `output()` but a different method, named by what it writes, so
 §8.3a's rules — each output written exactly once — are the ones that apply to
 it.
 
-**`adjust()` (§6.4b) is checked in that direction only.** `adjust()` in a node
-with no `continuous` states is `SE0346`, since `Adj` would be empty and the body
-could write nothing. It gets no row in the table above, because a continuous
-state does not *require* an adjustment — most do not want one — so there is no
-forward rule to pair with the converse.
-
-The table is symmetric because each row pairs one state kind with the one pure
-method that must write it. `init()`, `on_step()` and `final()` are always
-optional and have no converse rule either — they carry no equation, so whether a
-body does anything is not decidable without parsing it, which I1 forbids.
+The table pairs each state kind with the method that must write it. A continuous
+state gets no row for `next()`, because a jump is optional (§6.4b). `next()` has no
+converse rule: it is also the node's per-tick hook (§8.1), so a node with no state
+may define one. `init()` and `final()` are always optional too — whether a body
+does anything is not decidable without parsing it, which I1 forbids.
 
 Note that the rules are per-kind, not blanket: a purely continuous node needs no
-`next()`, and a purely algebraic node needs no `derivative()`. Neither needs an
-`on_step()`, though either may have one to do per-step `var`, native or logging
-work.
+`next()`, and a purely algebraic node needs no `derivative()`.
 
 ### 6.13 `tests`
 
@@ -2380,7 +2284,7 @@ what is checked:
 | Side | Columns | Meaning |
 |---|---|---|
 | given | `param.<name>`, `in.<name>`, `state.<name>`, `step` | supplied before the invocation |
-| expected | `out.<name>`, `der.<name>`, `next.<name>`, `transition.<name>`, `adjust.<name>`, `var.<name>` | read after it and compared |
+| expected | `out.<name>`, `der.<name>`, `next.<name>`, `var.<name>` | read after it and compared |
 
 A column on the wrong side is `SE0361`. The split is not arbitrary: it is
 §6.10's writability column read from the outside. What a body may only write is
@@ -2398,7 +2302,7 @@ solver. The solver is verified once, not once per node.
 one fixed order:
 
 ```
-init()  →  output()  →  derivative()  →  next()  →  transition()  →  adjust()
+init()  →  output()  →  derivative()  →  next()
 ```
 
 `init()` always runs — a node whose `output()` reads a `var` its `init()`
@@ -2410,15 +2314,8 @@ read only the row's inputs, so the order among them cannot matter. So a set expe
 `var.g` supplies no inputs and calls nothing else. The order is fixed rather
 than derived so that a set expecting several fields means one thing.
 
-`adjust.` and `state.` name the same storage (§6.4b), so an `adjust.` column
-checks the state as the adjustment left it.
-
-`transition()` also runs whenever `adjust()` does, because in a tick it always
-precedes it (§9.6 step 7) and an `adjust()` that reads a finite state reads the
-value `transition()` just committed. A given `state.` column on a finite state
-is therefore the value **before** the transition, and it is what `prev.` reads
-inside `adjust()`; there is no `prev.` column, since it could only ever repeat
-the given one.
+A `next.` column reads what the body wrote, without the commit, so a given
+`state.` column stays the value the body read as the old one.
 
 #### Rows
 
@@ -2486,9 +2383,7 @@ designed at the wrong rate are silently wrong. Reaching a rate-derived setting
 with neither a `step` column nor a `step:` entry is `SE0470`; the node is
 unconfigurable, and saying so beats defaulting to a number nobody chose.
 
-The node's own `rate` (§6.2) needs nothing new. It is a reserved setting
-written through the channel every other column uses, so `param.rate` is an
-ordinary column, and §10.5's `sim.step()` reads what `step` supplied.
+§10.5's `sim.step()` reads what `step` supplied.
 
 #### Tests are not part of the model
 
@@ -2804,71 +2699,57 @@ it would need run-time signals here, which is a much larger change than it looks
 
 This is the load-bearing part of the design.
 
-### 8.1 The eight methods
+### 8.1 The five methods
 
 | Method | Equation | Purity | When it runs |
 |---|---|---|---|
 | `init()` | — | mutating | Once, at run start, in elaboration order. |
 | `output()` | y = g(t, x, u) | **pure** | Whenever signals propagate — many times per step. |
 | `derivative()` | ẋ = f(t, x, u) | **pure** | Every minor step (4× per RK4 step). |
-| `next()` | x⁺ = h(t, x, u) | **pure** | Once per accepted step, at the node's sample instants. |
-| `transition()` | q⁺ = δ(t, q, x, u) | **pure** | Once per accepted step, below the exit and above `adjust()`, at the node's sample instants. |
-| `adjust()` | x⁺ = j(t, x, u) | **pure** | Once per accepted step, below the exit, at the node's sample instants. |
-| `on_step()` | — | mutating | Once per accepted step, immediately after `next()`. |
+| `next()` | x⁺ = h(t, x, u) | mutating | Once per accepted step, every tick. |
 | `final(ctx)` | — | mutating | Once at run end, in reverse init order. |
 
 Write permissions, exactly:
 
-- `init()` writes `state` (the IC escape hatch) and `var`; may touch natives; may log.
+- `init()` writes `state` (the IC escape hatch) and `var`; may touch natives; may
+  log; may halt.
 - `output()` writes `out` only — and an output group (§8.3a) only the outputs it
   names.
 - `derivative()` writes `der` only.
-- `next()` writes `next` only.
-- `transition()` writes `transition` only.
-- `adjust()` writes `adjust` only.
-- `on_step()` writes `var`; may touch natives; may log.
+- `next()` writes `next` and `var`; may touch natives; may log; may halt.
 - `final(ctx)` writes nothing model-visible; may touch natives; may log.
 
-**The naming rule is the purity column.** The five methods that carry an
-equation are pure and are named for the accessor they write — `out.` → `output()`,
-`der.` → `derivative()`, `next.` → `next()`, `transition.` → `transition()`,
-`adjust.` → `adjust()`. The three
-that carry none have no quantity to be named for, so they are named for the
-moment they fire: `init()`,
-`on_step()`, `final()`. Nothing else in the language is prefixed, and the singular
-follows the accessor rather than the section, which is why `output()` is singular
-though `outputs {}` is plural.
+**`next()` is the node's one per-tick hook, and it does two jobs in one body.** It
+is the jump map, x⁺ = h(t, x, u), for a state of any kind (§6.4). It is also
+where a node does per-tick work that is no equation at all: read a socket, keep
+a count in a `var`, log, stop the run. A node with no state may define it for the
+second job alone. It runs exactly once per accepted step and at no trial state,
+which is what lets it have side effects where `output()` and `derivative()` may
+not (§8.4).
 
-`on_step()` earns its name by having no equation. It is the model's only general
-per-step mutating hook — `var`, natives, logging — and a node may define it with
-no `discrete` state at all. It is *not* the discrete counterpart of
-`derivative()`; `next()` is. Keeping the two apart is what lets `next()` be pure
-and lets [§6.12](#612-consistency-rules) check it in both directions.
+Its two kinds of write land at different moments, and this is deliberate. A
+`next.<state>` write goes into a buffer and lands at the commit, together with
+every other node's (§9.6). A `var` write lands at once, and a statement below it
+in the same body reads the new value: it is the node's private bookkeeping.
+
+Slower work is written in the body, against the tick counter:
+
+```
+next() { if (sim.tick() % var.poll_ticks == 0) poll(); }
+```
+
+Methods that write model values are named for what they write — `out.` →
+`output()`, `der.` → `derivative()`, `next.` → `next()`. `init()` and `final()`
+carry no equation and are named for the moment they fire. The singular follows
+the accessor rather than the section, which is why `output()` is singular though
+`outputs {}` is plural.
 
 "Mutating" above describes what the method may change in the *model*, not the
-constness of the generated C++ member. All seven of `output`, `derivative`,
-`next`, `transition`, `adjust`, `on_step` and `final` lower to `const` members,
-and each receives what it may write as an out-parameter — `out`, `der`, `next`,
-`transition`, `adjust`, `var`. Only
-`init()` is non-const, because it writes its own storage directly. See §15.4:
-that uniformity is what makes the write permissions above compile-time facts
-rather than documented conventions.
-
-`adjust()` is `next()` for the other state kind (§6.4b). Same purity, same
-once-per-accepted-step schedule at the node's sample instants, same
-documentation-plus-enforcement parameter list; it differs only in which states it
-may write and in where the tick puts it (§9.6). It is deliberately **not** on
-§8.4's list of mutating methods — it may not log, may not reach a native and may
-not halt the run — because it runs below the exit, where a halt could not take
-effect until the following tick. Per-step work of that kind belongs in
-`on_step()`, which is above both the recording and the exit.
-
-`transition()` is `next()` for the third state kind (§6.4c), and q above is the
-finite states: same purity, same schedule, the same buffered write. It differs in
-which states it writes and in where the tick puts it — below the exit, so like
-`adjust()` it may not log, reach a native or halt the run — and its result is in
-force from t_k⁺ rather than from t_{k+1}, which is what lets a finite state leave
-its node unheld (§9.3).
+constness of the generated C++ member. `output`, `derivative`, `next` and `final`
+all lower to `const` members, and each receives what it may write as an
+out-parameter — `out`, `der`, `next`, `var`. Only `init()` is non-const, because
+it writes its own storage directly. See §15.4: that uniformity is what makes the
+write permissions above compile-time facts rather than documented conventions.
 
 `next()`'s out-parameter is named `next`, shadowing the member function inside its
 own body. That is deliberate and harmless: §11 copies bodies verbatim, so a body
@@ -2891,9 +2772,6 @@ output(cmd)      { out.force = state.force + param.kff * in.cmd; }  // feedthrou
 output()         { out.velocity = state.velocity; }                 // breaks loops
 derivative(cmd, load) { … }                                         // constrains nothing
 next()                { … }                                         // constrains nothing
-transition(ack)       { … }                                         // constrains nothing
-adjust(sat)           { … }                                         // constrains nothing
-on_step(ws)           { … }                                         // constrains nothing
 ```
 
 - **A method's parameter list is exactly the set of inputs it reads.** The names
@@ -2910,9 +2788,9 @@ on_step(ws)           { … }                                         // constra
 - **"Algebraic" and "feedthrough" are orthogonal.** A node can have states *and*
   feedthrough — a PID, or any state-space block with D ≠ 0 — so feedthrough
   cannot be derived from the leaf/composite inference.
-- Only `output()`'s list constrains ordering. `derivative()`, `next()`,
-  `transition()`, `adjust()` and `on_step()` run after outputs have propagated,
-  so their lists are documentation plus enforcement.
+- Only `output()`'s list constrains ordering. `derivative()` and `next()` run
+  after outputs have propagated, so their lists are documentation plus
+  enforcement.
 - Granularity is per-port on the output side too, where a node asks for it:
   §8.3a splits `output()` into groups, each with its own list.
 
@@ -2963,7 +2841,7 @@ two leaves, and every setting declared twice — for no reason the physics gave.
   sort root, and a group may read an input wired from another group of the
   same node, as long as no cycle runs through them.
 - **Holding is per node.** A held node (§9.3) holds all of its groups: each is
-  evaluated at the node's sample ticks and none at the solver's stages, so a
+  evaluated at the tick and none at the solver's stages, so a
   hold never splits a node's outputs across two instants.
 
 **Sharing goes through helpers.** Outputs that need a common intermediate
@@ -2978,9 +2856,7 @@ computes from the values of that moment, so nothing it returns can be stale.
 A hand-made cache does not have that property, and `const` does not stop one.
 A `mutable` member or a `static` in a helper survives from one pass to the
 next, so a value computed at an RK4 stage, at a trial state the trajectory
-never visits, can reach the next tick's `output()`; one computed in step 2 can
-reach an `adjust()` that runs after the modes have moved (§9.6). The generator
-cannot see it, because bodies are verbatim. A compute-once intermediate that the
+never visits, can reach the next tick's `output()`. The generator cannot see it, because bodies are verbatim. A compute-once intermediate that the
 language manages is Appendix C 8e.
 
 ### 8.4 Why mutation is confined
@@ -2990,12 +2866,18 @@ the trajectory never visits**. Any side effect there fires four times, at values
 that are not on the solution. That single fact is the reason for three separate
 restrictions, which are really one restriction wearing three hats:
 
-- `var` writes → `init()`/`on_step()` only (§6.5).
-- `log.*` → `init()`/`on_step()`/`final()` only (§10.1).
-- `native` handles in scope → `init()`/`on_step()`/`final()` only (§6.7).
-- `sim.stop`/`sim.abort` → `init()`/`on_step()` only (§10.2).
-- `sim.require` → `init()`/`on_step()` only (§10.6): it halts, so it is
+- `var` writes → `init()`/`next()` only (§6.5).
+- `log.*` → `init()`/`next()`/`final()` only (§10.1).
+- `native` handles in scope → `init()`/`next()`/`final()` only (§6.7).
+- `sim.stop`/`sim.abort` → `init()`/`next()` only (§10.2).
+- `sim.require` → `init()`/`next()` only (§10.6): it halts, so it is
   confined where every other way of halting is.
+
+`next()` is on the permitted side because the hazard does not reach it: it runs
+once per accepted step, at the tick's entry state, which is on the trajectory.
+Its body runs above the recording and the exit (§9.6), so a halt takes effect that
+tick, and its `next.` writes are buffered until below the exit, so a run that halts
+never commits them.
 
 A `sendto()` in `output()` would put four packets on the wire per step, at values
 the model never actually took, silently. Confining mutation keeps results
@@ -3027,8 +2909,8 @@ to the group whose list names the input, and a node without groups is one
 vertex, as before.
 
 - `output()` runs in **topological order** of that graph.
-- `derivative()`, `next()`, `transition()` and `adjust()` may run in **any**
-  order once outputs have propagated.
+- `derivative()` and `next()` may run in **any** order once outputs have
+  propagated.
 - A node whose `In_output` is empty is a **sort root** and needs no predecessor.
   Registered discrete nodes, unit delays, and integrators are all sort roots by
   the same single mechanism, not three special cases.
@@ -3099,9 +2981,7 @@ step: 1 (ms);
 A single global fixed step, set in the sim file. This is the highest-leverage
 constraint in the design:
 
-- Every node's rate is an **integer decimation** of the base step: a 100 Hz
-  controller on a 1 kHz base fires every 10th tick. Sample instants land exactly,
-  by construction.
+- Every node runs **every tick**, at the base rate.
 - It **eliminates most of Simulink's sample-time machinery**: no step-size
   negotiation, no forcing a variable-step solver to hit sample instants, no
   zero-crossing search for sample hits, and **no fractional resampling ever**.
@@ -3111,82 +2991,52 @@ constraint in the design:
 It also retroactively justifies rejecting algebraic loops (§8.6) — a Newton solve
 has no statable worst-case execution time.
 
-### 9.2 Sampling rates and decimation
+### 9.2 One rate
 
-`rate` is a reserved setting (§6.2) set at instantiation, flowed down through the
-expression language, and **constant from configuration onward** (§6.2b). A 100 Hz
-PID and a 50 Hz PID are the same definition with different instances.
+There is one rate, the base rate, and every node runs at it. The signal
+processing a model does happens every tick. Work that is genuinely slower — how
+often to poll a device, say — is written in `next()` against `sim.tick()` (§8.1),
+as the special case it is; it does not need a schedule.
 
-The decimation is `base_rate / rate`. It is a **counter divisor, not a shape**:
-the emitted schedule is a fixed sequence of direct calls in a fixed order
-(§15.7), and rate supplies only the modulus that guards each one (§9.6 step 1).
-Nothing about which nodes exist, how they are wired, or how they sort depends on
-it — §9.3 requires one topological order to be valid whether or not a node
-samples, so the order cannot be rate-derived.
+A purely algebraic node — `Gain`, `Sum` — is re-evaluated in every `output()` pass
+from whatever its inputs currently hold.
 
-A rate that is not an integer divisor of the base rate is an error. `sec` checks
-the elaborated default:
+### 9.3 Discrete outputs
 
-```
-error[SE0450]: rate 60 Hz is not an integer divisor of the 1 kHz base step
-  --> Vehicle.se:31:22
-   = note: 1000 / 60 = 16.667; nearest legal rates are 62.5 Hz and 58.82 Hz
-```
+Discrete outputs are **zero-order held** across the step: `output()` is evaluated
+once, at the tick, and the value stands until the next tick.
 
-A `rate` **override** supplied at configuration is checked by the loader instead,
-and the same violation fails there — deterministically, before the first tick,
-with the offending path named. This is the one check that moves out of `sec` as a
-consequence of §6.2b, and it moves only for values `sec` never sees.
+**A node is held when it has a `discrete` state**, and in no other case. A `finite`
+state (§6.4c) does not hold its node, although it too moves only between steps:
+its new value is committed before the advance, so the stages see one value across
+the whole step, and nothing a held output would protect is at risk. A leaf may
+therefore keep a gear beside a torque computed from a continuous speed, and the
+torque is re-evaluated at every stage.
 
-**Rate propagation/inference was dropped**, and that is a real simplification. A
-purely algebraic node — `Gain`, `Sum` — has **no rate at all**. It is
-re-evaluated in every tick's `output()` pass from whatever its inputs currently
-hold. Fed by a 100 Hz held signal, its output effectively changes at 100 Hz; fed
-by two rates, it changes whenever either input does. All well-defined, no aliasing
-introduced, and no rate to assign — which dissolves the ambiguity that inference
-existed to resolve.
+The commit is above the solver, so the stages run with *dis*[k+1] already in place.
+An unheld discrete node would publish its next value inside the step. Holding is
+what keeps its published output at y[k] for the whole of it, and that includes a
+direct-feedthrough node, whose output would otherwise follow its inputs through
+the trial stages.
 
-### 9.3 Discrete outputs and rate transitions
+A held output returns the **same value across all RK4 trial substeps**, so the
+multiple-evaluation hazard of §8.4 never touches discrete nodes at all. This is
+guaranteed by *omission*: a held node's `output()` is not re-evaluated at the
+solver's minor steps (§9.6 step 7), so nothing that moves within a step —
+`sim.time()` above all — can reach it.
 
-Discrete outputs are **zero-order held** between sample instants: `output()` is
-evaluated at the node's sample ticks and the value persists until the next one.
-
-**A node is held when it has a `discrete` state or a declared `rate`**, and in no
-other case. A `finite` state (§6.4c) does not hold its node, although it too moves
-only between steps: its new value is committed before the advance, so the stages
-see one value across the whole step, and nothing a held output would protect is
-at risk. A leaf may therefore keep a gear beside a torque computed from a
-continuous speed, and the torque is re-evaluated at every stage.
-
-**No explicit rate-transition blocks exist or are needed.** Simulink's Rate
-Transition block exists because *its* multitasking execution order is not
-guaranteed; here (1) all rates are harmonic integer decimations and (2) there is a
-single deterministic schedule with a topological sort, so transitions are
-deterministic by construction.
-
-How discrete interacts with the §8.5 sort:
-
-- The sort runs **per tick over the nodes active on that tick** — base-rate nodes
-  always, a slow node only on its sample ticks.
-- A slow node **not** sampling this tick contributes its held output as a
-  **constant: a sort root with no edge.** So a fast consumer reading a slow signal
-  never creates an inter-tick ordering constraint.
-- A held output returns the **same value across all RK4 trial substeps**, so the
-  multiple-evaluation hazard of §8.4 never touches discrete nodes at all. This is
-  guaranteed by *omission*, not by coincidence: a held node's `output()` is not
-  re-evaluated at the solver's minor steps (§9.6 step 8), so nothing that moves
-  within a step — `sim.time()` above all — can reach it. Before `sim.time()`
-  existed the guarantee came for free, because a held node's state was frozen
-  and its output was therefore a function of frozen inputs; that argument no
-  longer holds, and the schedule now carries the property explicitly.
+A node with no state of its own to hold still can be made held by giving it a
+`discrete` state that nothing writes, which is what `se.sig.src.Step` and
+`se.sig.src.Ramp` do.
 
 Two idioms, both expressed with the existing signature mechanism:
 
 ```
 // Registered (the default idiom): one sample of latency, sort root, loop-breaker.
 // Physically honest — a real digital controller has exactly this latency.
-on_step(err) { var.cmd = param.kp * in.err; }
-output()     { out.cmd = var.cmd; }
+states { discrete cmd: double(-) = 0.0; }
+next(err) { next.cmd = param.kp * in.err; }
+output()  { out.cmd = state.cmd; }
 
 // Direct (Mealy): zero added latency, but a feedthrough node subject to
 // ordering, and able to form an algebraic loop.
@@ -3195,8 +3045,8 @@ output(err)  { out.cmd = param.kp * in.err; }
 
 ### 9.4 The real-time frame
 
-Real-time execution introduces a **third integer quantity** alongside the base
-step and the rate decimations:
+Real-time execution introduces a **second integer quantity** alongside the base
+step:
 
 ```
 step: 1 (ms);
@@ -3209,7 +3059,7 @@ until the frame boundary. At 1 ms `step` and 10 ms `sync`, that is ten steps fla
 out, then spin.
 
 - `sync` not being an integer multiple of `step` is an elaboration error
-  (`SE0451`) — the same error class as a non-divisor rate.
+  (`SE0451`).
 - An **overrun** is a batch that missed its frame boundary. The next batch then
   starts immediately with no spin, so **sim time drifts behind wall time**.
 - **Every base step always runs.** Dropping steps to catch up was rejected: it
@@ -3225,14 +3075,14 @@ The solver is **global, not per-node** (`solver: rk4;`). Mixing integrators
 across one state vector was deliberately kept closed. Normative values are
 `euler`, `rk2`, and `rk4`; the menu beyond that is an open question.
 
-**`adjust()` (§6.4b) constrains what may join that menu**, and the constraint is
-recorded here rather than discovered later. All three normative solvers are
-**one-step and fixed-step**, so there is no history for an adjustment to
-invalidate: step 8 begins from whatever `x` step 7 left, and nothing older is
+**A jump of a continuous state (§6.4b) constrains what may join that menu**, and
+the constraint is recorded here rather than discovered later. All three normative
+solvers are **one-step and fixed-step**, so there is no history for a jump to
+invalidate: step 7 begins from whatever `x` step 6 left, and nothing older is
 consulted. A multistep method carries past states and past rates, and an
 adaptive one carries an accepted step size; a jump between steps makes both
-stale. Either would have to restart its history whenever any node's `adjust()`
-changed a state — which is implementable, and is a cost the solver must pay
+stale. Either would have to restart its history whenever a `next()` changed a
+state — which is implementable, and is a cost the solver must pay
 rather than a reason to forbid the method.
 
 ### 9.6 The tick
@@ -3240,59 +3090,40 @@ rather than a reason to forbid the method.
 One base tick at index *k*, normatively:
 
 1. **Set the time** to *t*[k] — which is what `sim.time()` returns for the rest
-   of this step, except where step 8 moves it — and determine the active set:
-   base-rate nodes, plus nodes whose decimation divides *k*.
-2. **Propagate outputs.** `output()` in topological order over the active set,
-   at the tick's entry state. Held outputs are constants throughout.
-3. **`next()`** on every active node with discrete states, in any order. Each
-   reads `dis` and writes `nxt`.
-4. **`on_step()`** on every active node that defines it, in any order.
-5. **Record** (§13.5) if this tick is a recording tick.
-6. **Exit** if the run has been halted (§10.2) or *k* is the last tick.
-7. **Jump.** First **`transition()`** on every active node that defines it, in
-   any order; each reads the finite block and writes its buffer (§6.4c). Then
-   the finite block **commits**, all at once. Then **`adjust()`** on every
-   active node that defines it, in any order; each reads `state` — the finite
-   states at their new values — and `prev`, and writes `adjust`, which names
-   the same storage as `state` (§6.4b), so this is the tick's only write to *x*
-   outside the solver.
-8. **Advance both state kinds.** `dis = nxt` for the discrete block — and a
-   second whole-block copy for `dis_arr` if the model has array-shaped discrete
-   states (§15.5) — then `x` by the solver's combination of stage rates. Each
-   stage sets the time to that stage's instant and re-propagates outputs before
-   evaluating `derivative()`, at trial states the trajectory never visits
-   (§9.5). **Only nodes that are not zero-order held are re-propagated**: a held
-   node keeps the output it published in step 2, which is what makes the hold a
-   hold, and `sim.time()` moves for the others alone (§10.5).
-9. If `mode: realtime` and this tick closes a frame, spin to the frame boundary
+   of this step, except where step 7 moves it.
+2. **Propagate outputs.** `output()` in topological order, at the tick's entry
+   state.
+3. **`next()`** on every node that defines it, in any order, unless the run has
+   already been halted. Each reads `state` and `var` and this tick's inputs, and
+   writes the buffers through `next.` (§6.4).
+4. **Record** (§13.5) if this tick is a recording tick.
+5. **Exit** if the run has been halted (§10.2) or *k* is the last tick.
+6. **Commit.** The buffers land together: `dis = nxt` and `fin = fnx`, and `x = xnx`
+   in a model where a `next()` can reach a continuous state. A model with
+   array-shaped discrete states has a second whole-block copy for `dis_arr` (§15.5).
+   This is the tick's only write to any state outside the solver.
+7. **Flow.** `x` by the solver's combination of stage rates. Each stage sets the
+   time to that stage's instant, re-propagates outputs, and evaluates
+   `derivative()`, at trial states the trajectory never visits (§9.5). **Only nodes
+   that are not zero-order held are re-propagated**: a held node keeps the output
+   it published in step 2, which is what makes the hold a hold, and `sim.time()`
+   moves for the others alone (§10.5). `derivative()` runs at every stage on every
+   node that has one, held or not.
+8. If `mode: realtime` and this tick closes a frame, spin to the frame boundary
    and update the metrics.
 
-Two properties are load-bearing, and both come from advancing at the end.
+Two properties are load-bearing, and both come from moving state last.
 
-**The whole tick observes one state.** Steps 2–5 all see *x*[k], *dis*[k] and
+**The whole tick observes one state.** Steps 2–4 all see *x*[k], *dis*[k] and
 the finite block as the tick found it, so one recorded row is one consistent
-sample of the model at *t*[k] — signals and states of every kind alike. Step 7
-is below the recording for exactly that reason: it is the last reader of *x*[k] and the first writer
-after it, so the row it does not disturb reports the state that produced the
-signals beside it. The same reasoning is why `output()` sees *dis*[k] rather
-than *dis*[k+1]: y[k] = g(x[k]) precedes x⁺ = h(x[k], u[k]), which is what
-discrete-time state space says.
+sample of the model at *t*[k] — signals and states of every kind alike. The same
+reasoning is why `output()` sees *dis*[k] rather than *dis*[k+1]: y[k] = g(x[k])
+precedes x⁺ = h(x[k], u[k]), which is what discrete-time state space says.
 
-**A stopped run holds a valid checkpoint.** The exit at step 6 is above the
-jump and above both advances, so a run ending on `sim.stop`, on `sim.abort` or
-on the tick count leaves `x` + `sig` + `dis` + the finite block mutually
-consistent —
-the completeness §15.5 claims for that set.
-
-`next()` precedes `on_step()`, and both read the same `dis`[k], so the order
-matters only through `var`: a value `on_step()` learns from a native at tick *k*
-is stashed in a `var` and reaches a discrete state through `next()` at tick
-*k+1*. For I/O that is an honest one-sample transport delay.
-
-`transition()` precedes `adjust()` because a jump in a continuous state usually
-belongs to a transition (§6.4c): the clutch that locks also snaps its speed to
-the engine's, in the same tick. It follows `next()` and `on_step()`, which
-therefore see a finite state's old value, as they see every other state's.
+**A stopped run holds a valid checkpoint.** The exit at step 5 is above the
+commit and the flow, so a run ending on `sim.stop`, on `sim.abort` or on the tick
+count leaves `x` + `sig` + `dis` + the finite block mutually consistent — the
+completeness §15.5 claims for that set.
 
 ---
 
@@ -3310,8 +3141,8 @@ log.trace(fmt, args…)   log.debug(…)   log.info(…)   log.warn(…)   log.e
 
 - `{}` positional formatting. The engine **auto-tags** every record with sim
   time, node path, and level — those are never arguments.
-- **Restricted to `init()`, `on_step()`, and `final()`** for the reason in §8.4.
-- **Escape hatch:** `log.trace` alone is permitted in the three pure methods.
+- **Restricted to `init()`, `next()`, and `final()`** for the reason in §8.4.
+- **Escape hatch:** `log.trace` alone is permitted in the two pure methods.
   It is tagged with the substep index and suppressed unless a verbose flag is
   set, so the four-evaluations-per-step hazard is visible in the output rather
   than hidden.
@@ -3326,7 +3157,7 @@ log.error("CAN bus timeout after {} ms", t);  // then:
 sim.abort("CAN bus timeout");                 // fault end
 ```
 
-- Callable from `init()` and `on_step()` — the mutating, I/O-capable methods.
+- Callable from `init()` and `next()` — the mutating, I/O-capable methods.
 - **Halting is the `sim.*` family's job.** Overloading `log.fatal` with control
   flow was rejected: a logging call that sometimes ends the program is exactly
   the hidden side effect the purity rules fight everywhere else. A fault site
@@ -3339,7 +3170,7 @@ sim.abort("CAN bus timeout");                 // fault end
 The rest of the namespace — `sim.time()` and the other reflection members — is
 readable from every body; §10.5 sets out the surface and the rule that admits a
 member to it. The split is carried by the type, not by a runtime check: a leaf
-holds a reflection-only handle, and `init()`/`on_step()` shadow it with a wider
+holds a reflection-only handle, and `init()`/`next()` shadow it with a wider
 one, so `sim.stop` inside `output()` is *no such member* — a compile error at
 the `.se` line, like every other confinement in §8.4.
 
@@ -3386,12 +3217,12 @@ write no `final()` at all.
 
 ### 10.4 `sample_rate` and `time_step`
 
-Two constants in the §7 expression language, giving the node's **effective** rate:
+Two constants in the §7 expression language, giving the base rate:
 
 | | | |
 |---|---|---|
-| `sample_rate` | `(Hz)` | the node's declared `rate` (§6.2), or the base rate if it declares none |
-| `time_step` | `(s)` | `1 / sample_rate` |
+| `sample_rate` | `(Hz)` | 1 / `step`, from the sim file |
+| `time_step` | `(s)` | `step`, from the sim file |
 
 ```
 node Biquad {
@@ -3401,27 +3232,16 @@ node Biquad {
 ```
 
 A discrete filter cannot compute its coefficients without its own sample period —
-`K = 2·fs` in a bilinear transform — and §6.2 gives the reserved `rate` setting no
-runtime member, so it cannot be read directly.
+`K = 2·fs` in a bilinear transform.
 
-- They are **effective, not global.** A node declaring `rate = 200 (Hz)` inside a
-  1 kHz model sees `sample_rate = 200` and `time_step = 0.005`, not the base step.
-  That is the point: coefficients designed at the wrong rate are silently wrong.
 - **Both spellings ship** because coefficient design wants a rate while anything
   expressed as a period wants the reciprocal. Both derive from one number, so
   `sample_rate * time_step` is exactly 1 and they cannot drift apart.
-- They are **derived from the node's own `rate`**, and resolved with the rest of
-  its settings at configuration (§6.2b). Overriding `rate` moves `sample_rate` and
-  `time_step` with it, and any coefficient derived from them follows — which is
-  the behaviour a filter needs and the reason they are not folded.
-- The reserved `rate` setting is resolved **before** any other setting of the same
-  node, so a derived setting may read `sample_rate` freely.
 
 These are **configuration-time constants in the §7 expression language**, and
 that is what keeps them distinct from §10.5's `sim.step()`. `sample_rate` is
-this node's effective rate, fixed before the run starts and legal in a setting
-default; `sim.step()` is the model's global base step, read at run time from a
-body. Neither substitutes for the other.
+fixed before the run starts and legal in a setting default; `sim.step()` is the
+same base step read at run time from a body. Neither substitutes for the other.
 
 ### 10.5 `sim.*` reflection
 
@@ -3453,11 +3273,11 @@ y = g(t,x,u), ẋ = f(t,x,u) and x⁺ = h(t,x,u), so the language supplied `x` a
 finer to state, because the *schedule* rather than the value carries the
 distinction:
 
-- A node with `discrete` states or a declared `rate` is zero-order held across
-  the step (§9.3); a `finite` state does not make it one. Its `output()` is evaluated once, at its sample instant, and
-  is **not** re-evaluated at the solver's minor steps; `sim.time()` there is
-  that sample instant, identical for the whole step, and its held output stays
-  held.
+- A node with a `discrete` state is zero-order held across the step (§9.3); a
+  `finite` state does not make it one. Its `output()` is evaluated once, at the
+  tick, and is **not** re-evaluated at the solver's minor steps; `sim.time()`
+  there is the tick instant, identical for the whole step, and its held output
+  stays held.
 - Every other node — continuous or purely algebraic — **is** re-evaluated at
   each minor step, and `sim.time()` returns *t* + *c·h*, the instant the solver
   is actually at.
@@ -3470,13 +3290,11 @@ the held twin that deliberately does not.
 
 **A body's use of `sim.*` is invisible to the compiler**, because bodies are
 verbatim and are never parsed (§11.1). The schedule therefore assumes every body
-reads time: a node with a declared `rate` is gated on **every** tick, not only
-when its `output()` takes arguments. One `k % decimation` branch per slow node
-per tick is the price, and it buys zero-order hold by construction rather than
-by an argument about what a body happens to contain.
+reads time, which is why holding is decided by the node's states and never by
+what a body happens to contain.
 
 `sim.stop` and `sim.abort` are **not** part of this surface; they stay confined
-to `init()` and `on_step()` by §10.2, and the confinement is carried by the
+to `init()` and `next()` by §10.2, and the confinement is carried by the
 handle's type rather than by a rule an implementation has to remember.
 
 `sim.check_*` (§10.6) **is** part of it, and meets the admission rule the same
@@ -3502,7 +3320,7 @@ Observational, legal in **every** method:
 | `sim.check_range(v, lo, hi, "contract")` | got, the interval, and the overshoot |
 | `sim.check_near(a, b, tol, "contract")` | got, want, \|err\|, tol |
 
-Halting, and confined to `init()`/`on_step()` by §8.4:
+Halting, and confined to `init()`/`next()` by §8.4:
 
 | | |
 |---|---|
@@ -3941,8 +3759,8 @@ source may be valid against one `order` and invalid against another.
 
 A recorded row is the model at *t*[k] for **every** kind of value it names —
 signals and continuous, discrete and finite states alike. Recording happens
-before any state moves (§9.6 step 5, above steps 7 and 8), so a row never mixes
-vintages. On the tick a transition fires, the row still shows the old value;
+before any state moves (§9.6 step 4, above steps 6 and 7), so a row never mixes
+vintages. On the tick a state jumps, the row still shows the old value;
 the new one is in the next row, beside the signals it produced.
 
 Recording is **quantitative**: an aligned numeric time-series table, distinct from
@@ -3966,7 +3784,7 @@ record: {
 - **A computed intermediate is recorded as an output nothing reads** (§6.3).
   States have storage and outputs have storage; a local in `output()` has
   none, so it gains a column by becoming an output. It belongs to its row:
-  §9.6 step 2 writes outputs at *t*[k], before step 5 records, and the solver
+  §9.6 step 2 writes outputs at *t*[k], before step 4 records, and the solver
   stages that re-run `output()` at trial states come after the record and are
   overwritten by the next tick's step 2. It costs a store when the outputs
   compute the value anyway; work done only for the column is repeated at every
@@ -4288,15 +4106,11 @@ fails, but `this->state.x = …` still compiles. A guarantee with a one-token
 escape hatch is not a guarantee, so the storage itself carries the constness.
 
 - **Purity is `const` on the method, and the writable thing is an
-  out-parameter.** `output()`, `derivative()`, `next()`, `transition()`,
-  `adjust()`, `on_step()` and `final()` are all const members, so no body can
-  write `state`, `var` or `param` through `this`. What a method may write, it
-  receives: `Out& out`, `Der& der`, `Store& next`, `Fin& transition`,
-  `Adj& adjust`, `Var& var`. What it may only read beyond its own members, it
-  receives too: `adjust()` takes `const Fin& prev` in a node with finite
-  states (§6.4c). This is one rule, applied uniformly, and it is why
-  `on_step()` can write a `var` (§6.5) while still reaching a state only
-  through `next.` (§6.4).
+  out-parameter.** `output()`, `derivative()`, `next()` and `final()` are all
+  const members, so no body can write `state`, `var` or `param` through `this`.
+  What a method may write, it receives: `Out& out`, `Der& der`, `Next& next`,
+  `Var& var`. This is one rule, applied uniformly, and it is why `next()` can
+  write a `var` (§6.5) while reaching a state only through `next.` (§6.4).
 - **Settings are `const` by construction.** `param` is a `const Param` member,
   initialised when the leaf is constructed, because settings are fixed at
   elaboration (§6.2) and there is no moment at which writing one would be
@@ -4326,7 +4140,7 @@ escape hatch is not a guarantee, so the storage itself carries the constness.
 - **A narrow member, shadowed by a wider local, is the same mechanism a second
   time.** `log` is a trace-only member that the mutating methods shadow with the
   full object, and `sim` is a reflection-only member (§10.5) that `init()` and
-  `on_step()` shadow with one that also carries `stop`/`abort` (§10.2). Both
+  `next()` shadow with one that also carries `stop`/`abort` (§10.2). Both
   make an illegal call *no such member* rather than a rule to enforce, and both
   keep the pure methods free of preamble.
 
@@ -4390,7 +4204,7 @@ Discrete nxt{};                      // the x⁺ = h(t,x,u) buffer
 
 struct Finite { Clutch::Fin cl; };   // only in a model with a `finite` state
 Finite fin{};                        // every finite state, as committed
-Finite fnx{};                        // transition()'s buffer; after the commit, `prev`
+Finite fnx{};                        // the q⁺ buffer
 ```
 
 A model containing an **array-shaped state** (§6.4a) differs in two ways, and
@@ -4436,17 +4250,21 @@ when the model has finite states) is a complete checkpoint of the model.**
   struct and the new block gets the same address-size-table treatment as `x`.
   The commit is still one whole-block copy per side, so §6.4's claim that
   simultaneity is a property of the *model* rather than of each node survives
-  unchanged; there are now two block copies at the bottom of the tick instead of
+  unchanged; there are now two block copies at the commit instead of
   one.
 - **`fin`/`fnx` is the finite block and its buffer**, a generated struct for
-  `dis`'s reasons: a finite state may be `bool`, `int` or a finite type. The commit
-  is not a copy at the bottom of the tick but a three-step sequence in the
-  middle of it (§9.6 step 7): `fnx = fin` seeds the buffer, so a state no
-  `transition()` writes keeps its value; `transition()` writes `fnx`; and
-  `std::swap(fin, fnx)` commits. After the swap `fnx` holds the block as the
-  tick found it, which is precisely what `prev` (§6.4c) is — it is passed to
-  `adjust()` as a `const Fin&` into `fnx`, so it costs no storage of its own.
-  The swap exchanges values, not addresses, so every `value_ref` into `fin`
+  `dis`'s reasons: a finite state may be `bool`, `int` or a finite type.
+- **`xnx` is the continuous buffer, and only a model that needs one has it.** It
+  exists when some node defines `next()` beside a continuous state, and it is a
+  flat `double` block like `x`.
+- **`Next` is a view, not a block.** Each node that defines `next()` has one
+  `Next`, holding a proxy per state, each bound into the buffer of that state's
+  kind. Like `Der` it is a `Sim` member rather than a leaf member, because the
+  out-parameter has to be non-const at the call site while the method is const.
+- **Seed, write, commit.** Before the first `next()` the buffers are seeded from
+  the committed blocks (`nxt = dis`, `fnx = fin`, `xnx = x`), so a state no body
+  writes keeps its value. Every `next()` writes the buffers. The commit copies them
+  back below the exit (§9.6 step 6). Values move, not addresses, so every proxy
   stays bound.
 - **A named state is a `value_ref<T>` proxy holding a `T*`.** The proxy exists
   because generated `State` and `Der` structs must be default-constructible
@@ -4484,13 +4302,6 @@ when the model has finite states) is a complete checkpoint of the model.**
   generator could never redirect it (§11.4). A lowering that passed `x` as a
   parameter and left the member at the step's state would leave every helper
   reading the wrong instant, silently.
-- **`adjust` is a second view of `x`, not a fourth block.** §6.4b's aliasing is
-  exactly this: `Adj` holds the same `state_ref`s that `State` holds for the
-  node's continuous states, bound to the same slots of the same array. Like
-  `Der` it is a `Sim` member rather than a leaf member, because the
-  out-parameter has to be non-const at the call site while the method is const.
-  Nothing is allocated and nothing is copied, so the checkpoint above remains
-  complete: a view holds no state of its own.
 - `der` is **`Sim`-owned scratch, not node data** — evaluated once per solver
   stage at trial states the trajectory never visits, then discarded. `states`
   and `vars` remain the only DSL storage sections; `vars` stay inside the node,
@@ -4519,15 +4330,6 @@ override reach its children. **§7 is emitted, not interpreted** — it is total
 side-effect-free arithmetic over `double` plus `<cmath>`, so each expression
 becomes one C++ expression and I1 is untouched: the generator writes C++, it
 still never parses it.
-
-**`resolve_settings` also derives the schedule's divisors.** A node that declares
-`rate` gets a decimation *member*, and the tick guard reads it — `if (k %
-dec_decim == 0)` where the emitted code would otherwise have carried
-`if (k % 5 == 0)`. This is what makes §9.2's "counter divisor, not a shape" true
-of the generated code and not merely of the language: an override moves the
-guard, and nothing about the call sequence or its order moves with it. It is also
-where the divisor rule is re-checked (§16.4), the elaborated default no longer
-being the value that runs.
 
 #### 15.5a The state buffers are the host's
 
@@ -4610,7 +4412,6 @@ dis_arr[?]  bw.w2 [param.nbq]   -           dynamic
 
 [settings]                # configurable; value is the elaborated default
           whl.inertia           kg*m^2      = 0.9
-          tc.rate               Hz          = 200.0
           bw.order              -           = 4
           cue.limit.x           m/s^2       = 5.0
           cue.limit.z           m/s^2       = 4.0
@@ -4840,7 +4641,6 @@ of thing wearing the same name.
 | `SE0313` | 3 | Wrong number of unit arguments on a type reference |
 | `SE0314` | 3 | A bare wire endpoint needs exactly one port on that side |
 | `SE0315` | 3 | A `param` wire endpoint is a destination, or names no setting |
-| `SE0316` | 4 | The reserved setting `rate` cannot be a wire source |
 | `SE0317` | 3 | Two enumerators of one finite type share a name |
 | `SE0318` | 3 | Two enumerators of one finite type share a value |
 | `SE0319` | 3 | A finite type declares no enumerators |
@@ -4855,13 +4655,9 @@ of thing wearing the same name.
 | `SE0332` | 3 | A name the generated C++ spells verbatim is a C++ keyword |
 | `SE0340` | 3 | An output that no output method computes |
 | `SE0341` | 3 | Continuous state declared but no `derivative()` |
-| `SE0342` | 3 | Discrete state declared but no `next()` |
+| `SE0342` | 3 | Discrete or finite state declared but no `next()` |
 | `SE0343` | 3 | `derivative()` in a node with no continuous states |
 | `SE0344` | 3 | `output()` in a node with no outputs |
-| `SE0345` | 3 | `next()` in a node with no discrete states |
-| `SE0346` | 3 | `adjust()` in a node with no continuous states |
-| `SE0347` | 3 | Finite state declared but no `transition()` |
-| `SE0348` | 3 | `transition()` in a node with no finite states |
 | `SE0350` | 3 | Method parameter is not a declared input |
 | `SE0351` | 3 | Duplicate method parameter |
 | `SE0352` | 3 | A lifecycle method defined twice (two `output()`s or two `output default()`s included) |
@@ -4889,7 +4685,6 @@ of thing wearing the same name.
 | `SE0417` | 3 | Duplicate unit parameter |
 | `SE0418` | — | *Retired.* A composite may not declare unit parameters — lifted by §6.2a. The number stays burned; codes are stable. |
 | `SE0419` | 4 | Wrong number of unit arguments at an instantiation |
-| `SE0422` | 4 | Reserved setting `rate` has the wrong unit or type |
 | `SE0423` | 4 | Wrong number of values in a positional brace list |
 | `SE0424` | 4 | Unknown field name in a brace list |
 | `SE0425` | 4 | A field is given twice in a brace list |
@@ -4904,7 +4699,6 @@ of thing wearing the same name.
 | `SE0442` | 4 | Fan-in: two sources into one input |
 | `SE0443` | 4 | Wire direction is invalid |
 | `SE0445` | 4 | A buffer port on the root node |
-| `SE0450` | 4 | Rate is not an integer divisor of the base rate |
 | `SE0451` | 4 | `sync` is not an integer multiple of `step` |
 | `SE0460` | 4 | Override target is ambiguous, or is an output |
 | `SE0461` | 4 | Recorded signal path is ambiguous |
@@ -4924,9 +4718,7 @@ of thing wearing the same name.
 compiled model (§14.1) is diagnosed by that model's loader, not by `sec`, and
 reports through `load_settings`'s return rather than through this catalogue. The
 three failures are: an unknown path, a right-hand side outside the restricted
-grammar, and a dimension that disagrees with §15.6 — including a `rate` override
-that violates `SE0450`'s divisor rule, which is the only entry above with a
-runtime counterpart. Each names the offending path. `sec`'s own checks are
+grammar, and a dimension that disagrees with §15.6. Each names the offending path. `sec`'s own checks are
 unchanged: everything it can see, it still rejects at the stage listed.
 
 ---
@@ -4999,8 +4791,7 @@ given_list      = given { "," given } ;
 given           = "step" | accessor ;
 accessor_list   = accessor { "," accessor } ;
 accessor        = accessor_ns "." IDENT { "." IDENT | "[" INT "]" } ;
-accessor_ns     = "param" | "in" | "state" | "out" | "der" | "next"
-                | "transition" | "adjust" | "var" ;
+accessor_ns     = "param" | "in" | "state" | "out" | "der" | "next" | "var" ;
 test_row        = expression { "," expression } "," STRING ";" ;
 
 inputs_sec      = "inputs"  "{" { port_decl } "}" ;
@@ -5068,10 +4859,7 @@ lifecycle_method= "init"    "(" ")"                VERBATIM_BLOCK
                        group writes; `default`, contextual, marks the method
                        that writes the rest; see §8.3a *)
                 | "derivative" "(" [ ident_list ] ")" VERBATIM_BLOCK
-                | "next"       "(" [ ident_list ] ")" VERBATIM_BLOCK
-                | "transition" "(" [ ident_list ] ")" VERBATIM_BLOCK
-                | "adjust"     "(" [ ident_list ] ")" VERBATIM_BLOCK
-                | "on_step"    "(" [ ident_list ] ")" VERBATIM_BLOCK ;
+                | "next"       "(" [ ident_list ] ")" VERBATIM_BLOCK ;
 ident_list      = IDENT { "," IDENT } ;
 
 (* A helper is any other item: verbatim C++ up to its opening brace,
@@ -5179,15 +4967,14 @@ An unknown symbol is `SE0414`, and the diagnostic must suggest near matches —
 ## Appendix B — Reserved words
 
 ```
-adjust      build       continuous    declarations  derivative  discrete
-final       finite      init          inputs        native      next
-node        on_step     output        outputs       package     self
-settings    sim         states        structure     transition  type
-units       use         vars
+build       continuous    declarations  derivative  discrete    final
+finite      init          inputs        native        next        node
+output      outputs       package       self          settings    sim
+states      structure     type          units         use         vars
 ```
 
-`param`, `in`, `out`, `state`, `der`, `next`, `adjust`, `transition`, `prev`,
-`var`, `log`, and `sim` are additionally unavailable as member names (§6.11), because the generated code
+`param`, `in`, `out`, `state`, `der`, `next`, `var`, `log`, and `sim` are
+additionally unavailable as member names (§6.11), because the generated code
 puts objects by those names in scope of bodies.
 
 C++'s keywords are not reserved here but are refused as names where the generated
@@ -5213,7 +5000,7 @@ Recorded so that their absence is visibly deliberate.
    degrees in its output.
 2. **Read-only `native` access in `output()`** (§6.7). A preloaded lookup table or
    interpolation map is genuinely pure and genuinely wants to be read there, but
-   the `init`/`on_step`/`final` confinement excludes it. A real need with no
+   the `init`/`next`/`final` confinement excludes it. A real need with no
    mechanism yet.
 2a. ~~**Ambient `time` in the pure methods**~~ — **RESOLVED.** See §10.5. Time
    is readable from every body as `sim.time()`, and it is the first member of a
@@ -5299,10 +5086,8 @@ Recorded so that their absence is visibly deliberate.
    stage — a node computing an expensive intermediate pays for it once per
    reader. A declared intermediate, computed once per pass by its own method
    with its own input list and sorted like an output, would remove that. It
-   is safe only under two rules, both of which come from §9.6: it may not be
-   read in `adjust()`, which runs after the finite commit and would see a
-   value computed under the old modes; and it is recomputed at every stage
-   even in a held node, whose `derivative()` runs at trial states while its
+   is safe only under one rule, which comes from §9.6: it is recomputed at
+   every stage even in a held node, whose `derivative()` runs at trial states while its
    outputs hold. Recording does not need it — a recorded intermediate is an
    output nothing reads (§6.3, §13.5) — so this is about sharing alone, which
    wants opaque C++ types where a recorded column wants DSL ones and units.

@@ -880,7 +880,7 @@ if (-not $cl) {
     # Section 10.5 put `sim` in scope of every body. That is only safe because
     # the surface it widens is NOT the one section 10.2 confines: a leaf holds
     # a plain se_rt::RunView, and preamble() shadows it with an
-    # se_rt::RunControl in init() and on_step() alone. Section 10.6 rests on the
+    # se_rt::RunControl in init() and next() alone. Section 10.6 rests on the
     # same split -- `sim.check_*` observes and is legal everywhere, `sim.require`
     # halts and is not. Nothing else here would notice a refactor that injected
     # RunControl everywhere or moved a halting member onto RunView, so these
@@ -944,8 +944,8 @@ if (-not $cl) {
     #
     # tests/nodetest holds the runner's own cases: `Every` reaches every
     # column namespace, `EnumCells` writes enumerators in cells (SPEC 7.2a),
-    # `Machine` checks `transition.` and runs it ahead of `adjust.` with the
-    # given state as `prev` (SPEC 6.4c), `Groups` calls only the output groups
+    # `Machine` checks a mode and the jump it causes in one next() (SPEC 6.4),
+    # `Swap` that `next.` is buffered for every kind of state, `Groups` calls only the output groups
     # a set expects, each through its own view (SPEC 8.3a), and `Fails` MUST
     # fail -- a runner that printed "ok" for everything would pass every other
     # case here. The script
@@ -953,7 +953,8 @@ if (-not $cl) {
     $nodetest = Join-Path $root 'tools/nodetest.ps1'
     & $nodetest -I @('stdlib', 'tests/nodetest/lib') -Out 'build/test' `
         'stdlib' 'tests/nodetest/lib/nt/Every.se' 'tests/nodetest/lib/nt/EnumCells.se' `
-        'tests/nodetest/lib/nt/Machine.se' 'tests/nodetest/lib/nt/Groups.se'
+        'tests/nodetest/lib/nt/Machine.se' 'tests/nodetest/lib/nt/Groups.se' `
+        'tests/nodetest/lib/nt/Swap.se'
     if ($LASTEXITCODE -eq 0) {
         Write-Host ("ok   tools/nodetest.ps1 : every tested stdlib node, nt.Every, " +
                     "nt.EnumCells, nt.Machine and nt.Groups") -ForegroundColor Green
@@ -1206,28 +1207,28 @@ if (-not $cl) {
         }
     }
 
-    # SPECIFICATION 6.4b / 9.6 step 7 -- the jump map. Three columns, each
-    # pinning a different claim, and each moved hard by deleting the adjust()
+    # SPECIFICATION 6.4 / 9.6 -- a jump of a continuous state. Three columns,
+    # each pinning a different claim, and each moved hard by deleting the next()
     # that produces it. See tests/emit/lib/adj/Adjust.se for the full argument.
     #
     #   rot.r    RK4 is not symplectic, so a point on the unit circle spirals
-    #            off it: with no adjust() this column decays to 0.9219 over the
+    #            off it: with no next() this column decays to 0.9219 over the
     #            two seconds. With one, the state is renormalised every step and
     #            the column holds at |R(i*theta)| = 0.99959, theta = w*h -- one
     #            step's worth off the manifold, because out.r is published from
     #            the state the SOLVER left. That plateau is therefore also the
-    #            check that adjust() does NOT stand in for normalising in
-    #            output(), which SPECIFICATION 6.4b says in as many words.
+    #            check that a jump does NOT stand in for normalising in
+    #            output(), which SPECIFICATION 6.4 says in as many words.
     #
-    #   clamp.y  A ramp against a limit that arrives on a wire, so In_adjust is
+    #   clamp.y  A ramp against a limit that arrives on a wire, so In_next is
     #            non-empty and the parameter list is doing its 8.3 job. It
     #            plateaus at lim + h, not at lim, and that is what pins the
-    #            PLACEMENT: adjust() runs below the recorder, so every row
-    #            reports the pre-adjust state and the advance has already added
-    #            one step to the clamped value. Move the call above record_row()
+    #            PLACEMENT: the commit is below the recorder, so every row
+    #            reports the state before the jump and the advance has already
+    #            added one step to the clamped value. Move it above record_row()
     #            and this column reads 1.00 instead of 1.01.
     #
-    #   free.y   exp(-2t), from a node with no adjust() at all, sharing the
+    #   free.y   exp(-2t), from a node with no next() at all, sharing the
     #            model with two that have one. Byte-identical with the feature
     #            and without it, which is what says an untouched node stays
     #            untouched -- no Adj member, no binding, no call.
@@ -1260,7 +1261,7 @@ if (-not $cl) {
             }
         }
         if ($worst -lt 1e-8) {
-            Write-Host ("ok   build/emit/Adjust : adjust() holds the state on the " +
+            Write-Host ("ok   build/emit/Adjust : next() holds the state on the " +
                         "manifold, clamps below the recorder, and leaves an " +
                         "unadjusted node alone, max error " +
                         $worst.ToString('E2')) -ForegroundColor Green
@@ -1285,11 +1286,11 @@ if (-not $cl) {
     #         is good to a nanoradian over the run and all four components can
     #         be held against q(t) = (cos 1.5t, sin(1.5t)*(1,2,2)/3). Three
     #         distinct vector components, so a transposed or mis-signed axis in
-    #         the Hamilton product moves a column. Says nothing about adjust():
+    #         the Hamilton product moves a column. Says nothing about next():
     #         its norm drift is around 1e-13.
     #
     #   nF.n  |w| = 120 rad/s about z, turning 0.6 rad per step, where RK4
-    #         amplifies by |R(0.6i)| = 0.99969 each step. With adjust() the norm
+    #         amplifies by |R(0.6i)| = 0.99969 each step. With next() the norm
     #         is pinned every step and this column holds at that single-step
     #         value; without it, 200 steps compound to 0.93997. Sixty times the
     #         residual, and verified by negative control before it was recorded.
@@ -1319,7 +1320,7 @@ if (-not $cl) {
                 # divides the ARRAY and throws op_Division on Object[] -- and
                 # then $want silently keeps whatever the previous block left in
                 # it, which is a passing-looking failure in some other column.
-                # adjust() holds qw >= 0, and cos(1.5t) crosses zero at
+                # next() holds qw >= 0, and cos(1.5t) crosses zero at
                 # t = pi/3, so past there the state is -q(t): same rotation.
                 $sg = 1.0
                 if ([Math]::Cos($a) -lt 0.0) { $sg = -1.0 }
@@ -1333,7 +1334,7 @@ if (-not $cl) {
         }
         if ($worst -lt 1e-8) {
             Write-Host ("ok   build/emit/QInt : the attitude loop closes, matches " +
-                        "its closed form, and adjust() holds |q| against RK4, " +
+                        "its closed form, and next() holds |q| against RK4, " +
                         "max error " + $worst.ToString('E2')) -ForegroundColor Green
             $script:pass++
         } else {
@@ -1618,15 +1619,15 @@ if (-not $cl) {
     # for the four leaves; each column has a closed form at a 10 ms step:
     #   w_clutch, locked   50 t until the lock, whose row still reads unlocked
     #                      within 3 of 100; every row after it reads locked at
-    #                      EXACTLY 100, which only adjust()'s snap can produce
+    #                      EXACTLY 100, which only next()'s snap can produce
     #   integ.y            t^2/2 to t = 0.5, t^2 - 0.125 after -- exact under rk4
     #                      only if the gearbox is re-evaluated at the stages,
     #                      which is the claim that a finite state does not hold
     #   pi.u               3 to t = 1, 3 + 2 (t - 1) after: bumpless, and preset
-    #                      once through `prev.`, not on every AUTO tick
+    #                      once on entry, not on every AUTO tick
     #   range, gear        range 0 to t = 0.5 and 1 after; gear 1 at t = 0, 3
     #                      to t = 0.51, 0 after -- one tick behind the range,
-    #                      because transition() reads the tick-entry value
+    #                      because next() reads the tick-entry value
     if ($emitDirs.ContainsKey('Finite')) {
         $fnDir = $emitDirs['Finite']
         Push-Location $fnDir
@@ -1676,7 +1677,7 @@ if (-not $cl) {
         }
         if (-not $why) {
             Write-Host ("ok   build/emit/Finite : the jump snaps in its tick, a finite state " +
-                        "does not hold its node, `prev` presets once, transitions are " +
+                        "does not hold its node, a preset fires once, jumps are " +
                         "buffered, max error " + $worst.ToString('E2')) -ForegroundColor Green
             $script:pass++
         } else {
@@ -2250,8 +2251,8 @@ if (-not $cl) {
     #
     # The point is the gap between them, which is what proves `sim.time()`
     # reaches the solver's minor steps (section 10.5). The ct source is in the
-    # minor-step output pass, so rk4 keeps its order; the dt source declares a
-    # `rate` and is zero-order held, so its forcing is a staircase and the
+    # minor-step output pass, so rk4 keeps its order; the dt source has a
+    # discrete state and is zero-order held, so its forcing is a staircase and the
     # error is A*h/2 = 5.0e-4 -- and that is a property of the HOLD, not of the
     # solver, so it does not shrink with a better integrator.
     #
@@ -2300,7 +2301,7 @@ if (-not $cl) {
             $script:pass++
         } else {
             Write-Host ("FAIL build/emit/CtSrc : held source error " + $wdt +
-                        " is too SMALL -- a rated node is seeing minor-step time, " +
+                        " is too SMALL -- a held node is seeing minor-step time, " +
                         "so zero-order hold has been lost") -ForegroundColor Red
             $script:fail++
         }
@@ -2430,7 +2431,7 @@ if (-not $cl) {
 
     # tests/emit/host.cpp is a hand-written host: it includes the generated
     # HEADER, drives the root boundary that the batch driver cannot, and checks
-    # the block offset tables and the 200 Hz decimation. It fails to link if the
+    # the block offset tables. It fails to link if the
     # generator ever goes back to emitting its own main().
     if ($emitDirs.ContainsKey('drivetrain')) {
         $hostDir = $emitDirs['drivetrain']

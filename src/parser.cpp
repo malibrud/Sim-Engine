@@ -50,9 +50,8 @@ const std::vector<const char*>& section_names() {
 }
 
 const std::vector<const char*>& lifecycle_names() {
-    static const std::vector<const char*> v = {"init",   "output",  "derivative",
-                                              "next",   "transition", "adjust",
-                                              "on_step", "final"};
+    static const std::vector<const char*> v = {"init", "output", "derivative", "next",
+                                              "final"};
     return v;
 }
 
@@ -189,9 +188,6 @@ void Parser::recover_in_node_body() {
                 case Tok::KwOutput:
                 case Tok::KwDerivative:
                 case Tok::KwNext:
-                case Tok::KwTransition:
-                case Tok::KwAdjust:
-                case Tok::KwOnStep:
                 case Tok::KwFinal:
                     return;
                 default:
@@ -1149,9 +1145,6 @@ bool Parser::parse_node_item(ast::NodeDef& node) {
         case Tok::KwOutput:
         case Tok::KwDerivative:
         case Tok::KwNext:
-        case Tok::KwTransition:
-        case Tok::KwAdjust:
-        case Tok::KwOnStep:
         case Tok::KwFinal:
             return parse_method(node);
 
@@ -1216,7 +1209,7 @@ bool Parser::parse_node_item(ast::NodeDef& node) {
                          "verbatim as a helper function",
                          "did you mean `" + did + "`?",
                          {note("the lifecycle methods are init, output, derivative, next, "
-                               "transition, adjust, on_step, final (\xc2\xa7""8.1)")});
+                               "final (\xc2\xa7""8.1)")});
             }
             return parse_helper(node);
         }
@@ -1342,13 +1335,13 @@ bool Parser::parse_test_column(ast::TestColumn& out) {
         return true;
     }
     static const std::vector<const char*> namespaces = {
-        "param", "in", "state", "out", "der", "next", "transition", "adjust", "var"};
+        "param", "in", "state", "out", "der", "next", "var"};
     if (!tok_.is_word() || !contains(namespaces, tok_.text)) {
         err("SE0201", tok_.loc,
             std::string("expected a column, found ") + describe(tok_.kind),
             "expected `step` or an accessor",
             {note("a column is `step` or one of param. in. state. out. der. next. "
-                  "transition. adjust. var. (\xc2\xa7""6.13)")});
+                  "var. (\xc2\xa7""6.13)")});
         return false;
     }
     out.ns = tok_.text;
@@ -1699,8 +1692,9 @@ bool Parser::parse_state_list(std::vector<ast::StateDecl>& out) {
                         "` must be declared `continuous`, `discrete` or `finite`",
                     "expected `continuous`, `discrete` or `finite` before the state name",
                     {note("there is deliberately no default state kind — the three differ in "
-                          "write accessor (`der.`, `next.`, `transition.`), in schedule, and "
-                          "in whether they enter the solver's state vector (\xc2\xa7""6.4)"),
+                          "how they evolve, in what they do to their node's output across "
+                          "a step, and in whether they enter the solver's state vector "
+                          "(\xc2\xa7""6.4)"),
                      help("prefix the declaration with `continuous`, `discrete` or "
                           "`finite`")});
                 ok = false;
@@ -2412,9 +2406,6 @@ bool Parser::parse_method(ast::NodeDef& node) {
         case Tok::KwOutput:     m.which = ast::Method::Which::Output;     break;
         case Tok::KwDerivative: m.which = ast::Method::Which::Derivative; break;
         case Tok::KwNext:       m.which = ast::Method::Which::Next;       break;
-        case Tok::KwTransition: m.which = ast::Method::Which::Transition; break;
-        case Tok::KwAdjust:     m.which = ast::Method::Which::Adjust;     break;
-        case Tok::KwOnStep:     m.which = ast::Method::Which::OnStep;     break;
         default:                m.which = ast::Method::Which::Final;      break;
     }
     const std::string name = tok_.text;

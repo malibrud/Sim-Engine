@@ -23,11 +23,11 @@ error[SE0410]: incompatible units for setting `total_mass`
   = note: target is kg
 
 error[SE0420]: required setting `mass` is not bound
-  --> tests/emit/lib/params/Params.se:18:14
+  --> tests/emit/lib/params/Params.se:17:14
    |
-18 |         node needy : Needy {};                    // SE0420: `mass` is required
+17 |         node needy : Needy {};                    // SE0420: `mass` is required
    |              ^^^^^ instantiated here
-   = note: declared with no default, so every instantiation must bind it (§6.2)  [tests/emit/lib/params/Params.se:28]
+   = note: declared with no default, so every instantiation must bind it (§6.2)  [tests/emit/lib/params/Params.se:26]
 
 error[SE0410]: incompatible units for setting `overridden.mass`
  --> tests/emit/params.settings:9:1
@@ -38,19 +38,12 @@ error[SE0410]: incompatible units for setting `overridden.mass`
   = note: target is kg
 
 error[SE0421]: cycle among derived settings of `Ring`
-  --> tests/emit/lib/params/Params.se:35:9
+  --> tests/emit/lib/params/Params.se:33:9
    |
-35 |         a: double(-) = param.b + 1.0;
+33 |         a: double(-) = param.b + 1.0;
    |         ^ `a` depends on itself
    = note: cycle: a -> b -> c -> a
    = note: settings are a dependency graph requiring a topological sort, so a cycle has no value (§6.2)
-
-error[SE0450]: rate 60 Hz is not an integer divisor of the base rate
-  --> tests/emit/lib/params/Params.se:21:14
-   |
-21 |         node slow  : Slow  { rate = 60.0; };      // SE0450: 1000/60 is not integral
-   |              ^^^^ instantiated here
-   = note: 1000 / 60 = 16.6667; the nearest legal rates are 62.5 Hz and 58.8235 Hz
 
 error[SE0460]: override `needy.masss` matches nothing
  --> tests/emit/params.settings:3:1
@@ -60,4 +53,4 @@ error[SE0460]: override `needy.masss` matches nothing
   = help: did you mean `needy.mass`?
   = note: overrides address a setting or a state by a dotted path from the root (§13.2, §13.4)
 
-8 errors emitted
+7 errors emitted

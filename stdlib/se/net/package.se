@@ -1,7 +1,7 @@
 // Networking: nodes that move bytes between a model and the outside world.
 //
 // Everything here is I/O, so everything here is confined the way §8.4 confines
-// I/O: a socket is a `native`, reachable only from `init()`, `on_step()` and
+// I/O: a socket is a `native`, reachable only from `init()`, `next()` and
 // `final()`, and what crosses into the model's wires is a `buffer` (§5.1a) a
 // pure `output()` can publish. Decoding those bytes into typed signals is the
 // job of a leaf that knows the protocol; this package does not guess at one.

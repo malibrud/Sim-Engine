@@ -16,6 +16,7 @@
           (none)
 
 [state.discrete]          # Sim::Impl::dis; offsets from Sim::Impl::discrete_map()
+          ramp.held               -           bool
           hp.w1                   -           double
           hp.w2                   -           double
           acc.w1                  -           double
@@ -42,7 +43,6 @@
           ramp.slope              m/s^3       = 1.0
           ramp.initial            m/s^2       = 0.0
           ramp.t_start            s           = 0.0
-          ramp.rate               Hz          = 1000.0
           lim.gain                -           = 1.0
           lim.limit               m/s^2       = 100.0
           hp.a0                   -           = 1.0
@@ -60,8 +60,5 @@
           lp.a1                   rad/s       = 8.68   <- (2.0 * lp.zeta) * lp.wn
           lp.a2                   rad^2/s^2   = 9.610000000000001   <- lp.wn * lp.wn
           lp.fs                   Hz          = 1000.0
-
-[decimation]              # derived from `rate` at configuration
-          ramp                    1000 Hz     = every 1 tick
 
 [types]

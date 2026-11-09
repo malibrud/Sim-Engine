@@ -1,36 +1,36 @@
-// Numerical check for §6.4b's jump map. Three leaves, each pinning a different
-// claim the feature makes, and each chosen so that removing `adjust()` moves a
-// recorded column by far more than any tolerance.
+// Numerical check for §6.4's jump of a continuous state. Three leaves, each
+// pinning a different claim the feature makes, and each chosen so that removing
+// `next()` moves a recorded column by far more than any tolerance.
 //
 //   rot   A point on the unit circle: c' = -w s, s' = w c. RK4 is not
 //         symplectic and does not preserve the radius, so the state walks off
 //         the manifold — and the step here is chosen to make it walk FAST.
 //         At w = 20*pi rad/s on a 10 ms step, one step multiplies the radius by
 //         |R(i*theta)| = 0.99959 at theta = 0.6283, so 2 s of it costs 8%.
-//         `adjust()` renormalises after every step; the recorded radius must
+//         `next()` renormalises after every step; the recorded radius must
 //         therefore hold at that same 0.99959 forever instead of decaying.
 //
-//         The plateau value is itself the assertion that §6.4b's last paragraph
-//         is true: `out.r` is published at step 2 from the state the SOLVER
-//         left, which is one step off the manifold. `adjust()` keeps the state
+//         The plateau value is itself the assertion that a jump does not stand in
+//         for normalising a published value (§6.4): `out.r` is published at step 2 from the state the SOLVER
+//         left, which is one step off the manifold. `next()` keeps the state
 //         on the sphere; it does not make a consumer's precondition hold.
 //
-//   clamp Anti-windup, and the case that needs `In_adjust`: the limit arrives
+//   clamp Anti-windup, and the case that needs `In_next`: the limit arrives
 //         on a WIRE, so the body reads `in.lim` and the method's parameter list
 //         is doing its §8.3 job. `u` is a constant 1, so the state is a ramp,
 //         and with lim = 1 the clamp starts biting halfway through the run.
 //
 //         Its plateau is `lim + h`, not `lim`, and that is the column that pins
-//         the placement in the tick. `adjust()` runs at §9.6 step 7, BELOW the
+//         the placement in the tick. The commit is at §9.6, BELOW the
 //         recording, so every row reports the pre-adjust state: the clamp pulls
 //         the state back to `lim` and the advance immediately adds one step's
-//         worth before anything is recorded. Move `adjust()` above the recorder
+//         worth before anything is recorded. Move the commit above the recorder
 //         and this column reads `lim`.
 //
-//   free  A first-order decay with no `adjust()` at all, sharing the model with
+//   free  A first-order decay with no `next()` at all, sharing the model with
 //         two nodes that have one. Its column must be exp(-k t) to RK4's usual
 //         accuracy, which is what says the feature costs an untouched node
-//         nothing: no `Adj` member, no binding, no call.
+//         nothing: no `Next` member, no binding, no call.
 package adj;
 
 node Adjust {
@@ -48,7 +48,7 @@ node Adjust {
     }
 }
 
-// File-private. Both states are adjusted, and `adjust()` reads no input, so
+// File-private. Both states are adjusted, and `next()` reads no input, so
 // this is the empty-parameter-list case.
 node Rotor {
     settings { w: double(rad/s) = 62.83185307179586; }
@@ -64,14 +64,11 @@ node Rotor {
         der.s =  param.w * state.c;
     }
 
-    // The norm is cached before anything is written, which is the idiom §6.4b
-    // says every constraint enforcement uses -- and has to, since `adjust.c`
-    // and `state.c` are the same slot.
-    adjust() {
+    next() {
         const double n = std::sqrt(state.c * state.c + state.s * state.s);
         if (n > 0.0) {
-            adjust.c = state.c / n;
-            adjust.s = state.s / n;
+            next.c = state.c / n;
+            next.s = state.s / n;
         }
     }
 
@@ -82,10 +79,10 @@ node Rotor {
     }
 }
 
-// File-private. `adjust(lim)` reads an input, and writes CONDITIONALLY: on
+// File-private. `next(lim)` reads an input, and writes CONDITIONALLY: on
 // every tick before the ramp reaches the limit, neither branch fires and the
-// slot is simply never assigned, which is §6.4b's "a state the body does not
-// write is untouched" in the only form a test can see it.
+// slot is simply never assigned, which is §6.4's "a state the body does not
+// write keeps its value" in the only form a test can see it.
 node Clamped {
     inputs  { lim: double(-);  u: double(-); }
     outputs { y: double(-); }
@@ -94,15 +91,15 @@ node Clamped {
 
     derivative(u) { der.i = in.u; }
 
-    adjust(lim) {
-        if (state.i >  in.lim) adjust.i =  in.lim;
-        if (state.i < -in.lim) adjust.i = -in.lim;
+    next(lim) {
+        if (state.i >  in.lim) next.i =  in.lim;
+        if (state.i < -in.lim) next.i = -in.lim;
     }
 
     output() { out.y = state.i; }
 }
 
-// File-private, and deliberately has no `adjust()`.
+// File-private, and deliberately has no `next()`.
 node Free {
     settings { k: double(1/s) = 2.0; }
     outputs  { y: double(-); }

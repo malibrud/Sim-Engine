@@ -3,7 +3,7 @@
   |
 7 |         omega:         double(rad/s) = 0.0;
   |         ^^^^^ expected `continuous`, `discrete` or `finite` before the state name
-  = note: there is deliberately no default state kind — the three differ in write accessor (`der.`, `next.`, `transition.`), in schedule, and in whether they enter the solver's state vector (§6.4)
+  = note: there is deliberately no default state kind — the three differ in how they evolve, in what they do to their node's output across a step, and in whether they enter the solver's state vector (§6.4)
   = help: prefix the declaration with `continuous`, `discrete` or `finite`
 
 1 error emitted

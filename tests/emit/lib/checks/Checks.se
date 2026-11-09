@@ -59,10 +59,8 @@ node NoOutput {
 }
 
 node IdleNext {
-    // SE0345 — `next()` may write only `next.`, and there is no discrete state
-    // for it to write. The check only became possible once `on_step()` stopped
-    // carrying the equation: while one method did both jobs, a body with no
-    // discrete states could still be doing legitimate `var` work.
+    // Legal, and no diagnostic: `next()` is also the per-tick hook (§8.1), so a
+    // node with no state may have one.
     outputs { z: double(-); }
     next()   { }
     output() { out.z = 0.0; }

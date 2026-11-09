@@ -69,7 +69,7 @@ node Watch {
         der.t = 1.0;
     }
 
-    on_step() {
+    next() {
         // The halting form (§10.6), legal here and a compile error in the two
         // methods above. `tick` rather than `time` so the boundary is an
         // integer comparison and not a question about a decimal literal.

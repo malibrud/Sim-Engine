@@ -1,8 +1,7 @@
-// SPECIFICATION 6.4c / 6.13 -- a finite state in a node test. A `transition.`
-// column checks the committed value; an `adjust.` column runs transition()
-// first, as the tick does, so adjust() reads the new value through `state.`
-// and the GIVEN one through `prev.`. The bumpless preset fires only on the row
-// whose given state is not already AUTO.
+// SPECIFICATION 6.4 / 6.13 -- one next() over two kinds of state. A `next.`
+// column checks what the body wrote: the mode, and the integrator it presets.
+// `state.` is the GIVEN value throughout, which is how the bumpless preset
+// fires only on the row whose given state is not already AUTO.
 package nt;
 
 finite Ctl { MANUAL, AUTO }
@@ -16,21 +15,21 @@ node Machine {
     }
 
     derivative(err) { der.integ = state.ctl == Ctl::AUTO ? in.err : 0.0; }
-    transition(engage) { transition.ctl = in.engage ? Ctl::AUTO : Ctl::MANUAL; }
-    adjust(u_manual, err) {
-        if (state.ctl == Ctl::AUTO && prev.ctl != Ctl::AUTO)
-            adjust.integ = (in.u_manual - param.kp * in.err) / param.ki;
+    next(engage, u_manual, err) {
+        next.ctl = in.engage ? Ctl::AUTO : Ctl::MANUAL;
+        if (in.engage && state.ctl != Ctl::AUTO)
+            next.integ = (in.u_manual - param.kp * in.err) / param.ki;
     }
 
     tests {
         step: 1 (ms);
 
-        set "engage moves the controller", state.ctl, in.engage = transition.ctl {
+        set "engage moves the controller", state.ctl, in.engage = next.ctl {
             MANUAL, 1, AUTO,   "engaged";
             AUTO,   0, MANUAL, "released";
         }
         set "the preset fires on entry only", state.ctl, state.integ, in.engage, in.err,
-            in.u_manual = adjust.integ {
+            in.u_manual = next.integ {
             MANUAL, 0.0, 1, 0.5, 3.0, 0.5, "entering AUTO presets the integrator";
             AUTO,   7.0, 1, 0.5, 3.0, 7.0, "already AUTO: left to integrate";
             MANUAL, 7.0, 0, 0.5, 3.0, 7.0, "staying MANUAL: untouched";

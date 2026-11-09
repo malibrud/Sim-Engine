@@ -3,7 +3,7 @@
 //
 //  Folds the hierarchy flat. Settings become numbers, composites evaporate,
 //  wires become producer/consumer pairs with their conversion folded to a
-//  constant, rates become integer decimations, and states are handed slots in
+//  constant, and states are handed slots in
 //  the flat vector.
 //
 //  Everything here happens once, at compile time, and the language of §7 is
@@ -42,8 +42,7 @@ struct Value {
     ExprCode code;
 
     // False once anything that a configuration override could move (§6.2b) has
-    // entered the expression — a `param.*`, or `sample_rate`, which is derived
-    // from the overridable `rate`. While true the whole expression folds and
+    // entered the expression — a `param.*`. While true the whole expression folds and
     // `cpp` is discarded in favour of the number, which is why the generated
     // code for a model that overrides nothing looks exactly as it did before
     // settings became runtime values.
@@ -198,16 +197,10 @@ private:
     // to its type, so `v: Vec3(U)` in a node bound `(m/s)` becomes `Vec3(m/s)`.
     Type bound_type(const Type& t) const { return bind_type(t, unit_binding_); }
 
-    // §10.4 — `sample_rate` / `time_step`. `base_rate_` is 1/step from the sim
-    // file; `effective_rate_` is the node currently being elaborated, which is
-    // its declared `rate` when it has one and the base rate otherwise.
+    // §10.4 — `sample_rate` / `time_step`: 1/step from the sim file, and zero
+    // outside a node's settings, where neither has a value.
     double base_rate_ = 0.0;
-    double effective_rate_ = 0.0;
-    // The same rate as something emittable (§6.2b). A node that declares `rate`
-    // reads its own `param.rate`, so an override of it moves every coefficient
-    // derived from `sample_rate`; a node that does not declare one has nothing
-    // to override and folds to the base rate.
-    ExprCode effective_rate_code_;
+    double sample_rate_ = 0.0;
     // Model path of the node whose settings are being evaluated — the owner
     // recorded on every `param.*` reference, since §6.2 confines those to the
     // node itself.

@@ -47,7 +47,7 @@ constexpr char kPage0[] = R"SETP(<!doctype html>
 :root {
   --bg: #f7f7f5; --panel: #ffffff; --fg: #1d1d1f; --muted: #6b6b70; --line: #d6d6d2;
   --node-bg: #ffffff; --node-stroke: #55565c; --comp-bg: rgba(60, 90, 160, 0.05);
-  --comp-stroke: #9aa6c2; --edge: #6d6f78; --pill-bg: #eef1f6; --rate: #8a5a00;
+  --comp-stroke: #9aa6c2; --edge: #6d6f78; --pill-bg: #eef1f6;
   --sel: #c2410c; --up: #2563eb; --down: #059669; --warn: #b45309;
   --font: Arial, Helvetica, sans-serif; --mono: Consolas, "SFMono-Regular", Menlo, monospace;
   color-scheme: light;
@@ -56,14 +56,14 @@ constexpr char kPage0[] = R"SETP(<!doctype html>
   :root:not([data-theme="light"]) {
     --bg: #17181b; --panel: #1f2024; --fg: #e8e8ea; --muted: #9a9aa2; --line: #34353b;
     --node-bg: #23252a; --node-stroke: #a4a6ae; --comp-bg: rgba(120, 150, 220, 0.07);
-    --comp-stroke: #4b5675; --edge: #8e909a; --pill-bg: #2a2f3a; --rate: #e0a84a;
+    --comp-stroke: #4b5675; --edge: #8e909a; --pill-bg: #2a2f3a;
     --sel: #fb923c; --up: #60a5fa; --down: #34d399; --warn: #f59e0b; color-scheme: dark;
   }
 }
 :root[data-theme="dark"] {
   --bg: #17181b; --panel: #1f2024; --fg: #e8e8ea; --muted: #9a9aa2; --line: #34353b;
   --node-bg: #23252a; --node-stroke: #a4a6ae; --comp-bg: rgba(120, 150, 220, 0.07);
-  --comp-stroke: #4b5675; --edge: #8e909a; --pill-bg: #2a2f3a; --rate: #e0a84a;
+  --comp-stroke: #4b5675; --edge: #8e909a; --pill-bg: #2a2f3a;
   --sel: #fb923c; --up: #60a5fa; --down: #34d399; --warn: #f59e0b; color-scheme: dark;
 }
 * { box-sizing: border-box; }
@@ -122,7 +122,6 @@ main { flex: 1; display: flex; min-height: 0; }
 
 #canvas text { font-family: var(--font); fill: var(--fg); }
 #canvas text[fill="#666666"] { fill: var(--muted); }
-#canvas text[fill="#8a5a00"] { fill: var(--rate); }
 #canvas text[fill="#999999"] { fill: var(--muted); font-style: italic; }
 #canvas .node polygon[fill="white"], #canvas .node path[fill="white"] { fill: var(--node-bg); }
 #canvas .node polygon[fill="#eef1f6"], #canvas .node path[fill="#eef1f6"] { fill: var(--pill-bg); }
@@ -309,8 +308,7 @@ function nodeLabel(n) {
     return `<<B>${esc(n.name)}</B>${n.type ? `<BR/><FONT POINT-SIZE="11" COLOR="#666666">${esc(n.type)}</FONT>` : ""}>`;
   const head = n.kind === "collapsed"
     ? `<B>▸ ${esc(n.name)}</B><BR/><FONT POINT-SIZE="11" COLOR="#666666">${n.ckind} · ${n.leaves} leaves</FONT>`
-    : `<B>${esc(n.name)}</B><BR/><FONT POINT-SIZE="11" COLOR="#666666">${esc(n.type)}</FONT>` +
-      (n.rate ? `<BR/><FONT POINT-SIZE="11" COLOR="#8a5a00">${esc(n.rate)}</FONT>` : "");
+    : `<B>${esc(n.name)}</B><BR/><FONT POINT-SIZE="11" COLOR="#666666">${esc(n.type)}</FONT>`;
   const rows = Math.max(n.ins.length, n.outs.length);
   let body = "";
   for (let i = 0; i < rows; i++) {
@@ -599,7 +597,7 @@ const portLink = (id, port) => byId.get(id).kind === "leaf" ? `${goLink(id)}.${e
 function settingsOf(owner) { return settingRows(T.settings.filter(s => s.owner === owner)); }
 function settingRows(rows) {
   if (!rows.length) return `<p class="none">none</p>`;
-  return `<table>${rows.map(s => `<tr><td>${esc(s.name)}${s.structural ? '<span class="badge w" title="fixed at elaboration (section 6.2)">structural</span>' : ""}${s.rate ? '<span class="badge" title="drives decimation (section 9.2)">rate</span>' : ""}` +
+  return `<table>${rows.map(s => `<tr><td>${esc(s.name)}${s.structural ? '<span class="badge w" title="fixed at elaboration (section 6.2)">structural</span>' : ""}` +
     `${s.from ? `<div class="from">← ${esc(s.from)}</div>` : ""}</td><td class="v">${esc(s.value)}</td><td class="u">${esc(s.unit)}</td></tr>`).join("")}</table>`;
 }
 function sourceLink(n) {
@@ -610,7 +608,7 @@ function sourceLink(n) {
 function panelNode(n) {
   let h = `<button class="close" title="Close">✕</button><h2>${esc(label(n))}</h2>`;
   if (n.kind === "leaf") {
-    h += `<div class="k">${esc(n.type)}</div><div class="k">schedule #${n.order}${n.rate ? " · " + esc(n.rate) : ""}${n.solver ? " · owns continuous state" : ""}</div>`;
+    h += `<div class="k">${esc(n.type)}</div><div class="k">schedule #${n.order}${n.solver ? " · owns continuous state" : ""}</div>`;
     h += sourceLink(n);
   } else if (n.kind === "setting") {
     // A record setting is one row per field: `headPos.x`, `headPos.y`, ...

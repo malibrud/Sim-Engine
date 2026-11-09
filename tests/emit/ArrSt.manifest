@@ -45,8 +45,6 @@ dis_arr[?]  h [param.n]           -           dynamic
           n                       -           = 3
           k0                      1/s         = 1.0
 
-[decimation]              # derived from `rate` at configuration
-
 [types]
 
 [recorded]                # columns of arrst.csv

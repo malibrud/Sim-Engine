@@ -79,9 +79,9 @@ bool schedule(Diagnostics& diag, Model& m) {
         const Leaf& leaf = m.leaves[verts[v].leaf];
         const NodeInfo::OutputGroup* g = group_of(m, verts[v]);
         if (!g) continue;
-        // Only `output()`'s list constrains ordering. `derivative()`, `next()`,
-        // `adjust()` and `on_step()` run after outputs have propagated, so their
-        // lists are documentation plus enforcement (§8.3).
+        // Only `output()`'s list constrains ordering. `derivative()` and `next()`
+        // run after outputs have propagated, so their lists are documentation
+        // plus enforcement (§8.3).
         for (const std::string& p : g->method->params) {
             auto it = leaf.inputs.find(p);
             if (it == leaf.inputs.end()) continue;

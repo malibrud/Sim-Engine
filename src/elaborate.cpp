@@ -279,11 +279,10 @@ bool Elaborator::eval(const ast::Expr* e, const Source& src, const Env& env, Val
                 out.code = ec_lit("HUGE_VAL");
                 return true;
             }
-            // §10.4 — the node's own effective sample rate, resolved at
-            // elaboration: its declared `rate` if it has one, the base step
-            // otherwise. NOT runtime ambient context (§10.2) — these are
-            // compile-time constants, which is why they carry none of the
-            // "which fields are live when" baggage that closed `sim.*`.
+            // §10.4 — the base rate, resolved at elaboration. NOT runtime
+            // ambient context (§10.2) — these are compile-time constants, which
+            // is why they carry none of the "which fields are live when"
+            // baggage that closed `sim.*`.
             //
             // Both spellings ship because coefficient design wants a rate
             // (`K = 2 * sample_rate`) while anything expressed as a period
@@ -291,27 +290,23 @@ bool Elaborator::eval(const ast::Expr* e, const Source& src, const Env& env, Val
             // cannot disagree.
             if (e->text == "sample_rate" || e->text == "time_step") {
                 rate_reached_ = true;
-                if (effective_rate_ <= 0.0) {
+                if (sample_rate_ <= 0.0) {
                     diag_.error("SE0413", src, e->loc,
                                 "`" + e->text + "` has no value here",
                                 "no sample rate in scope",
-                                {note("it resolves to the node's `rate`, or the base "
-                                      "step when the node declares none — neither is "
-                                      "known outside a node's settings (§10.4)")});
+                                {note("it resolves to 1/step, which is known only "
+                                      "inside a node's settings (§10.4)")});
                     return false;
                 }
                 Unit u;
                 lookup_unit_symbol(e->text == "sample_rate" ? "Hz" : "s", u);
-                out = Value{e->text == "sample_rate" ? effective_rate_
-                                                     : 1.0 / effective_rate_,
+                out = Value{e->text == "sample_rate" ? sample_rate_ : 1.0 / sample_rate_,
                             u, false};
-                // Both spellings come off one number, so they cannot disagree
-                // after an override any more than they can before one.
+                // Both spellings come off one number, so they cannot disagree.
                 out.code = e->text == "sample_rate"
-                               ? effective_rate_code_
-                               : ec_bin(ec_num(1.0), "/", effective_rate_code_);
-                out.constant = effective_rate_code_.size() == 1 &&
-                               effective_rate_code_[0].kind == ExprTok::Kind::Text;
+                               ? ec_num(sample_rate_)
+                               : ec_bin(ec_num(1.0), "/", ec_num(sample_rate_));
+                out.constant = true;
                 return true;
             }
             // The grammar has no other way to spell a bare name here, so this
@@ -943,8 +938,7 @@ bool Elaborator::read_sim_entries(const ast::SimFile& sim, const Source& src, Mo
                     {note("the `root` entry is what makes a model runnable (§13.1)")});
     if (!have_step)
         diag_.error("SE0262", src, sim.loc, "`sim` has no `step:` entry", "required here",
-                    {note("one global fixed base step; every rate is an integer "
-                          "decimation of it (§9.1)")});
+                    {note("one global fixed base step (§9.1)")});
     if (!have_duration)
         diag_.error("SE0262", src, sim.loc, "`sim` has no `duration:` entry",
                     "required here");
@@ -953,7 +947,7 @@ bool Elaborator::read_sim_entries(const ast::SimFile& sim, const Source& src, Mo
         diag_.error("SE0262", src, sim.loc, "`mode: realtime` requires a `sync:` entry",
                     "required here",
                     {note("the frame is the third integer quantity alongside the base "
-                          "step and the rate decimations (§9.4)")});
+                          "step (§9.4)")});
     if (!m.realtime && have_sync)
         diag_.error("SE0263", src, sync_loc, "`sync:` requires `mode: realtime`",
                     "no frame to synchronise to");
@@ -969,7 +963,6 @@ bool Elaborator::read_sim_entries(const ast::SimFile& sim, const Source& src, Mo
                      note("a batch run has no frame boundaries, so both metrics would "
                           "record as zero")});
 
-    // §9.4 — the same error class as a non-divisor rate.
     if (have_sync && have_step && m.step > 0.0) {
         const double ratio = m.sync / m.step;
         const double r = std::floor(ratio + 0.5);
@@ -1004,7 +997,7 @@ bool Elaborator::read_sim_entries(const ast::SimFile& sim, const Source& src, Mo
                          help("`window` must be at least `sync`")});
         }
     }
-    // §10.4 — the base rate every node's `sample_rate` falls back to.
+    // §10.4 — what every node's `sample_rate` reads.
     base_rate_ = m.step > 0.0 ? 1.0 / m.step : 0.0;
     return have_root && have_step && have_duration;
 }
@@ -1336,23 +1329,7 @@ bool Elaborator::settings_of(const NodeInfo* def,
 
     bool ok = shape_ok;
 
-    // §10.4 — `sample_rate` and `time_step` are this node's EFFECTIVE values,
-    // so the reserved `rate` setting has to be resolved before any other
-    // setting can read them. Seeded with the base rate first, so that a `rate`
-    // default which itself mentions `sample_rate` reads the base step rather
-    // than an undefined value.
-    effective_rate_ = base_rate_;
-    effective_rate_code_ = ec_num(base_rate_);
-    for (const Leafling& lf : leaves) {
-        if (lf.key != "rate") continue;
-        ok = visit(lf) && ok;
-        auto it = env.find("rate");
-        if (it != env.end() && it->second.v > 0.0) effective_rate_ = it->second.v;
-        // Only now, so that a `rate` default which itself mentions `sample_rate`
-        // reads the base step rather than referring to itself.
-        effective_rate_code_ = ec_param(settings_path_, "rate");
-        break;
-    }
+    sample_rate_ = base_rate_;   // §10.4
 
     for (const Leafling& lf : leaves) ok = visit(lf) && ok;
 
@@ -1388,7 +1365,6 @@ bool Elaborator::settings_of(const NodeInfo* def,
         slot.scalar = sv.scalar;
         slot.enm = sv.enm;
         slot.value = sv.value;
-        slot.rate = (lf.key == "rate");
         auto r = resolved.find(lf.key);
         if (r != resolved.end()) {
             slot.expr = r->second.code;
@@ -1674,35 +1650,6 @@ void Elaborator::instantiate(const NodeInfo* def, const std::string& path,
     leaf.node = def;
     leaf.loc = loc;
     leaf.settings = std::move(settings);
-
-    // §9.2 — the elaborated decimation. It is a DEFAULT, not the final word:
-    // `rate` is an ordinary runtime setting, so the emitted model recomputes
-    // this in resolve_settings() and re-runs the divisor check there. What is
-    // checked here is what `sec` can see, which is the default.
-    for (const SettingValue& s : leaf.settings) {
-        if (s.name != "rate") continue;
-        const double base_rate = m.step > 0.0 ? 1.0 / m.step : 0.0;
-        const double ratio = s.value > 0.0 ? base_rate / s.value : 0.0;
-        const double r = std::floor(ratio + 0.5);
-        if (s.value <= 0.0 || std::fabs(ratio - r) > 1e-9 || r < 1.0) {
-            char buf[64];
-            std::snprintf(buf, sizeof buf, "%g", s.value);
-            std::vector<Attachment> att;
-            char note_buf[160];
-            std::snprintf(note_buf, sizeof note_buf,
-                          "%g / %g = %.4f; the nearest legal rates are %g Hz and %g Hz",
-                          base_rate, s.value, ratio, base_rate / std::max(1.0, std::floor(ratio)),
-                          base_rate / std::max(1.0, std::ceil(ratio)));
-            att.push_back(note(note_buf));
-            diag_.error("SE0450", src, loc,
-                        std::string("rate ") + buf +
-                            " Hz is not an integer divisor of the base rate",
-                        "instantiated here", std::move(att));
-            failed_ = true;
-        } else {
-            leaf.decimation = static_cast<long>(r);
-        }
-    }
 
     const Source& def_src = *def->file->src;
     for (const auto& st : def->states) {
@@ -2030,15 +1977,6 @@ void Elaborator::collect_wires(const NodeInfo* def, const std::string& path, Mod
                 diag_.error("SE0304", src, e.loc,
                             "`" + def->def->name + "` has no setting `" + e.segs[1] + "`",
                             "unresolved setting");
-                return false;
-            }
-            if (e.segs[1] == "rate") {
-                // §9.2 — `rate` drives the schedule's decimation and gets no
-                // param member at all (§15.5), so there is nothing to read.
-                diag_.error("SE0316", src, e.loc,
-                            "the reserved setting `rate` cannot be a wire source",
-                            "`" + e.str() + "`",
-                            {note("`rate` selects a decimation and holds no signal (§9.2)")});
                 return false;
             }
 

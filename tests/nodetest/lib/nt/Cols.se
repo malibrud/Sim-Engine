@@ -13,7 +13,7 @@ node Cols {
     tests {
         set "a checked column given", out.y = in.x { 1, 2, "SE0361"; }
         set "no such port", in.z = out.y { 1, 2, "SE0360"; }
-        set "no adjust() to call", state.s = adjust.s { 1, 1, "SE0362"; }
+        set "no next() to call", state.s = next.s { 1, 1, "SE0362"; }
         set "a time where a length is declared", in.x = out.y { 1 (s), 1, "SE0410"; }
     }
 }

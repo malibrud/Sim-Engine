@@ -43,8 +43,6 @@
           v.y                     mm/s^2      = 2000.0
           v.z                     mm/s^2      = 3000.0
 
-[decimation]              # derived from `rate` at configuration
-
 [types]
 se.math.Vec3                      units { U }
 se.math.Vec3.x                    U

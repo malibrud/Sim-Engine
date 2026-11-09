@@ -13,9 +13,7 @@ node UParam {
         // (m/s^2) — and the `(km/h^2)` spelling has to convert into it.
         node flt : Section   (m/s^2)   { k = 0.5; limit = 36000 (km/h^2); };
         node acc : Integrate (m/s^2)   {};
-        // §10.4 — same definition, different rate. `dec` declares `rate`, so
-        // its `sample_rate` is 200 Hz while `flt`'s is the 1 kHz base step.
-        node dec : Decimated (m/s^2)   {};
+        node dec : Timed     (m/s^2)   {};
 
         src --> flt --> acc --> self;
         src --> dec;
@@ -37,7 +35,7 @@ node Section {
     // block's limit needs, and it means the binding converts per instance.
     settings { k: double(-) = 1.0;
                limit: double(U) = 100.0;
-               // §10.4 — no `rate` declared, so this is the base step.
+               // §10.4 — the base rate.
                fs: double(Hz) = sample_rate; }
     inputs   { x: double(U); }
     outputs  { y: double(U); }
@@ -45,13 +43,10 @@ node Section {
     output(x) { out.y = param.k * in.x; }
 }
 
-// §10.4 — a decimated node. `sample_rate` and `time_step` must follow the
-// node's OWN rate, not the base step: filter coefficients computed at the
-// wrong rate are silently wrong, which is the whole reason these exist.
-node Decimated {
+// §10.4 — the two spellings of the base step.
+node Timed {
     units    { U; }
-    settings { rate: double(Hz) = 200.0;
-               fs: double(Hz) = sample_rate;
+    settings { fs: double(Hz) = sample_rate;
                dt: double(s) = time_step;
                // The two spellings must agree by construction.
                unity: double(-) = sample_rate * time_step; }

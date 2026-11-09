@@ -68,14 +68,6 @@ int main() {
         check(m.whl.param.radius == 0.25, "a bare number is taken as written");
     }
 
-    // ── a load re-resolves: `rate` moves the schedule (§9.2) ─────────────────
-    {
-        static Impl m;
-        check(m.tc_decim == 5, "tc elaborates to 200 Hz on a 1 kHz base");
-        check(m.load_settings("tc.rate = 0.5 (kHz);", "rate"), "a rate in kHz is accepted");
-        check(m.tc_decim == 2, "the decimation followed the loaded rate");
-    }
-
     // ── 2. every refusal says where and why ──────────────────────────────────
     {
         const std::string u = refusal("wheel_inertia = 3 (m);");
@@ -98,15 +90,11 @@ int main() {
         check(has(refusal("whl.radius = 1 (degC*m);"), "offset unit `degC` in a compound unit"),
               "an offset unit in a compound is refused, as SE0411 refuses it");
         check(has(refusal("whl.radius = 1 (m)"), "expected `;`"), "a missing `;` is refused");
-        check(has(refusal("tc.rate = 7 (Hz);"), "not an integer divisor"),
-              "a configuration failure after the load is reported by the load");
         check(has(refusal("// a comment\n/* and a\n block */\nwhl.radius = 1 (s);"),
                   "t:4: whl.radius"),
               "the line count survives both kinds of comment");
         check(refusal("tc.gain = 1 (N*m*rad);").empty(),
               "angle absorbs into a positive length power (section 4.5), as it does in sec");
-        check(has(refusal("tc.rate = 1 (rad/s);"), "incompatible units"),
-              "rad/s is not Hz");
     }
 
     // ── 3. all or nothing, and a refusal stands ──────────────────────────────

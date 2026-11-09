@@ -4,7 +4,6 @@
 wheel_inertia = 0.95 (kg*m^2);
 whl.inertia   = 1.05 (kg*m^2);
 whl.radius    = 0.315 (m);
-tc.rate       = 200 (Hz);
 tc.slip_limit = 0.08;
 tc.gain       = 400 (N*m);
 

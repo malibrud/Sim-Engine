@@ -15,10 +15,8 @@ namespace {
 // A member name the generated code already uses for an object in scope of
 // every body (§6.11, Appendix B).
 bool is_reserved_member(const std::string& n) {
-    // `adjust` and `transition` are reserved words and so never reach here;
-    // `prev` is not (§6.4c), and is in scope of every adjust() body.
     static const char* const kReserved[] = {"param", "in",  "out", "state", "der",
-                                            "next",  "prev", "var", "log", "sim"};
+                                            "next",  "var", "log", "sim"};
     for (const char* r : kReserved)
         if (n == r) return true;
     return false;
@@ -782,20 +780,6 @@ NodeInfo* Resolver::resolve_node(FileInfo& file, const ast::NodeDef& def,
                            "language of numbers with dimensions"))
             continue;
         resolve_type(file, s.type, si.type);
-        // §6.2 — `rate` is an ordinary setting the scheduler happens to read.
-        if (si.name == "rate") {
-            Unit hz;
-            lookup_unit_symbol("Hz", hz);
-            if (si.type.is_record || si.type.scalar != "double" ||
-                !compatible(si.type.unit, hz)) {
-                diag_.error("SE0422", *file.src, s.loc,
-                            "the reserved setting `rate` must be `(Hz): double`",
-                            "declared otherwise",
-                            {note("the scheduler consumes it as an integer decimation "
-                                  "of the base step and it produces no runtime member "
-                                  "(§6.2, §9.2)")});
-            }
-        }
         info->settings.push_back(std::move(si));
     }
 
@@ -1173,8 +1157,6 @@ void Resolver::check_methods(const NodeInfo& info) {
         if (g.method->writes.empty()) out_m = g.method;
     const ast::Method* der_m = info.method(ast::Method::Which::Derivative);
     const ast::Method* next_m = info.method(ast::Method::Which::Next);
-    const ast::Method* adj_m = info.method(ast::Method::Which::Adjust);
-    const ast::Method* tr_m = info.method(ast::Method::Which::Transition);
 
     // §6.12 — typo safety, per kind, in both directions.
     if (!info.composite) {
@@ -1211,18 +1193,17 @@ void Resolver::check_methods(const NodeInfo& info) {
                         "no `derivative()`",
                         {note("a continuous state is written through `der.` in "
                               "`derivative()` (§6.4)")});
-        if (info.has_discrete() && !next_m)
+        // §6.12 — a continuous state has `derivative()` to move it, so a jump is
+        // optional. The other two kinds have nothing else that could ever change
+        // them. `next()` itself is legal anywhere: it is also the per-tick hook.
+        if ((info.has_discrete() || info.has_finite()) && !next_m)
             diag_.error("SE0342", src, def.loc,
-                        "node `" + def.name + "` has a `discrete` state but no `next()`",
+                        "node `" + def.name + "` has a `" +
+                            (info.has_discrete() ? "discrete" : "finite") +
+                            "` state but no `next()`",
                         "no `next()`",
-                        {note("a discrete state is written through `next.` in "
-                              "`next()` (§6.4)")});
-        if (info.has_finite() && !tr_m)
-            diag_.error("SE0347", src, def.loc,
-                        "node `" + def.name + "` has a `finite` state but no `transition()`",
-                        "no `transition()`",
-                        {note("a finite state is written through `transition.` in "
-                              "`transition()` (§6.4c)")});
+                        {note("a discrete or finite state changes only through `next.` "
+                              "in `next()` (§6.4)")});
     }
     if (der_m && !info.has_continuous())
         diag_.error("SE0343", src, der_m->loc,
@@ -1234,32 +1215,6 @@ void Resolver::check_methods(const NodeInfo& info) {
         diag_.error("SE0344", src, out_m->loc,
                     "`output()` in a node with no outputs", "nothing to write",
                     {note("`output()` may write only `out.`, and `Out` is empty here")});
-    // §6.12 — the converse for `next()`. This check only became possible once
-    // `on_step()` stopped carrying the discrete equation: while one method did
-    // both jobs, a body with no discrete states could still be doing var work.
-    if (next_m && !info.has_discrete())
-        diag_.error("SE0345", src, next_m->loc,
-                    "`next()` in a node with no `discrete` states", "nothing to write",
-                    {note("`next()` may write only `next.`, and `Store` is empty here"),
-                     help("per-step work that is not a state transition belongs in "
-                          "`on_step()` (§8.1)")});
-    if (tr_m && !info.has_finite())
-        diag_.error("SE0348", src, tr_m->loc,
-                    "`transition()` in a node with no `finite` states", "nothing to write",
-                    {note("`transition()` may write only `transition.`, and `Fin` is empty "
-                          "here"),
-                     help("a sampled-data state is `discrete` and written by `next()` "
-                          "(§6.4)")});
-    // §6.12 — the converse for `adjust()`, and the ONLY rule it has. A continuous
-    // state does not require an adjustment and most do not want one, so there is
-    // no forward rule to pair this with; §6.4b's jump map is opt-in.
-    if (adj_m && !info.has_continuous())
-        diag_.error("SE0346", src, adj_m->loc,
-                    "`adjust()` in a node with no `continuous` states", "nothing to write",
-                    {note("`adjust()` may write only `adjust.`, and `Adj` is empty here"),
-                     help("a discrete state is written wholesale by `next()`, and "
-                          "per-step work that changes no state belongs in `on_step()` "
-                          "(§8.1)")});
 
     // §8.3 — a method's parameter list is exactly the set of inputs it reads.
     // `init()` takes none (SE0241) and `final(ctx)`'s one parameter is the run

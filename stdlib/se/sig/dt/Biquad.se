@@ -32,8 +32,8 @@ node Biquad {
         b1: double(-) = 0.0;
         b2: double(-) = 1.0;
 
-        // This node's own rate, not the base step — coefficients designed at
-        // the wrong rate are silently wrong.
+        // The rate the coefficients are designed at, which is the base rate:
+        // designed at any other they are silently wrong.
         fs: double(Hz) = sample_rate;
     }
 

@@ -37,8 +37,6 @@ node Chirp {
         // (§7.1) has no boolean literal, and a nonzero number renders as
         // `true`. This is not a typo to be tidied.
         repeat: bool = 1;
-
-        rate: double(Hz) = sample_rate;
     }
 
     outputs { y: double(U); }
@@ -52,12 +50,13 @@ node Chirp {
     }
 
     init() {
-        var.ts = 1.0 / param.rate;
+        const double fs = 1.0 / sim.step();
+        var.ts = 1.0 / fs;
         var.kq = 0.5 * (param.f1 - param.f0) / param.sweep;
         const double top = param.f0 > param.f1 ? param.f0 : param.f1;
-        if (top >= 0.5 * param.rate)
-            log.warn("sweep reaches {} Hz, at or above the Nyquist of this node's {} Hz rate",
-                     top, param.rate);
+        if (top >= 0.5 * fs)
+            log.warn("sweep reaches {} Hz, at or above the Nyquist of the {} Hz base rate",
+                     top, fs);
     }
 
     output() {

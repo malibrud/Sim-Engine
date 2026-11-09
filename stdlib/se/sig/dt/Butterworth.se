@@ -109,7 +109,7 @@ node Butterworth {
     // §8.2 splits output() from next(), so `w0` is computed in both rather than
     // shared. The predecessor C++ this replaces fused them into one
     // `double filter(double x)` that advanced state and returned a value in the
-    // same call; the split is what makes ZOH, rate transitions and recording
+    // same call; the split is what makes ZOH and recording
     // well-defined, and the cost is a handful of multiply-adds — the same cost
     // the scalar `dt.Biquad` already pays.
     output(x) {

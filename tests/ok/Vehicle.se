@@ -6,7 +6,6 @@ package tests;
 node Vehicle {
     settings {
         total_mass: double(kg) = 1500.0;
-        ctl_rate:   double(Hz) = 100.0;
     }
     inputs {
         throttle: double(-);
@@ -20,7 +19,6 @@ node Vehicle {
     structure {
         node front : Axle {
             axle_mass = param.total_mass / 2.0;
-            rate      = param.ctl_rate;
         };
         node rear : Axle {
             axle_mass = param.total_mass / 2.0;

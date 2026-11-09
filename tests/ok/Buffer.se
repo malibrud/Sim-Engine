@@ -7,6 +7,6 @@ node Buffer {
     outputs { data: buffer(1500); n: int(-); }
     vars    { rx: buffer(65507); }
 
-    on_step() { }
+    next() { }
     output(packet) { out.data = var.rx; out.n = static_cast<int>(in.packet.size()); }
 }

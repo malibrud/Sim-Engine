@@ -49,8 +49,6 @@ xd[2]     pi.integ'               1/s
           pi.ki                   -           = 4.0
           pi.engage_at            s           = 0.995
 
-[decimation]              # derived from `rate` at configuration
-
 [types]
 fsm.Finite#Ctl                    finite { MANUAL = 0, AUTO = 1 }
 fsm.Finite#Range                  finite { DRIVE = 0, NEUTRAL = 1 }

@@ -10,18 +10,12 @@
 //       away from what the example host does.
 //    2. The root outputs are the ports, read through their wires: `ws` and
 //       `torque_cut` as Corner declares them, updated every tick.
-//    3. A `rate` override reaches the SCHEDULE (§9.2). The tick guards read a
-//       decimation member that resolve_settings() derives, so retuning a
-//       compiled binary moves when a node samples and not only what it
-//       computes. A decimation baked as a literal passes every other check in
-//       this suite, which is why the case is here rather than nowhere.
-//    4. The block offset tables (§15.6) address the blocks they describe.
+//    3. The block offset tables (§15.6) address the blocks they describe.
 //
-//  3 and 4 are about Sim::Impl, which the public header leaves incomplete, so
+//  3 is about Sim::Impl, which the public header leaves incomplete, so
 //  this program #includes Drivetrain.cpp and is compiled on its own: the white
-//  box and the public interface in one translation unit. The rate override
-//  arrives through the settings loader (§14.1), as it would in a shipped
-//  binary; the loader's own checks are in settings_host.cpp.
+//  box and the public interface in one translation unit. The settings loader's
+//  own checks are in settings_host.cpp.
 //
 //  It also drives the root boundary, which the example host does not: the sim
 //  file has no syntax for supplying `axle_torque`, so a batch run leaves it at
@@ -50,43 +44,6 @@ void check(bool ok, const char* what) {
 int main() {
     se_rt::logs().configure("", se_rt::Level::Warn);
     se_rt::realtime().configure(0.0, 0.0);   // batch: do not spin on frames
-
-    // ── §9.2 — a `rate` override moves the SCHEDULE, not only the values ─────
-    //  This runs FIRST and never calls finish(), because §10.2's control is a
-    //  process global with first-writer-wins: once one run completes, no second
-    //  run can start in the same process.
-    {
-        static drivetrain::Sim::Impl retuned;
-        check(retuned.tc_decim == 5, "tc elaborates to 200 Hz on a 1 kHz base");
-
-        check(retuned.load_settings("tc.rate = 500 (Hz);", "host"),
-              "500 Hz is an integer divisor of 1 kHz");
-        check(retuned.config_error().empty(), "and leaves no configuration error");
-        check(retuned.tc_decim == 2, "the decimation followed the rate override");
-
-        std::uint64_t off_sample = 0, total = 0;
-        retuned.init();
-        for (int i = 0; i < 400 && !retuned.done(); ++i) {
-            retuned.sig.in.axle_torque = 250.0;
-            retuned.sig.in.ground_speed = 22.0;
-            const std::uint64_t k = retuned.tick_index();
-            const double before = retuned.dis.tc.cut;
-            retuned.tick();
-            if (retuned.dis.tc.cut != before) {
-                ++total;
-                if (k % 2 != 0) ++off_sample;
-            }
-        }
-        check(total > 0, "the retuned controller actually did something");
-        check(off_sample == 0, "the retuned state moves on the NEW sample ticks");
-
-        // SE0450's runtime counterpart. Checked without init(), so the failed
-        // configuration does not poison the global control for the run below.
-        retuned.tc.param.rate = 60.0;
-        retuned.resolve_settings();
-        check(!retuned.config_error().empty(), "a non-divisor rate is refused");
-        check(retuned.tc_decim == 1, "a refused rate does not leave a bogus divisor");
-    }
 
     // ── the block layout is self-describing (§15.6) ──────────────────────────
     {
@@ -126,7 +83,7 @@ int main() {
           "and error() says configuration is over");
 
     double cut_at_last_change = 0.0;
-    std::uint64_t changes_off_sample = 0, changes_total = 0, clock_slips = 0;
+    std::uint64_t changes_total = 0, clock_slips = 0;
     while (!sim.done()) {
         const std::uint64_t k = sim.tick_index();
         if (sim.time() != static_cast<double>(k) * drivetrain::Sim::step_seconds) ++clock_slips;
@@ -139,17 +96,12 @@ int main() {
         const double after = sim.outputs().torque_cut;
         if (after != before) {
             ++changes_total;
-            // tc runs at 200 Hz on a 1 kHz base, so its output may only move on
-            // ticks where the decimation divides the index: the zero-order hold
-            // the whole-block `dis = nxt` commit has to preserve.
-            if (k % 5 != 0) ++changes_off_sample;
             cut_at_last_change = after;
         }
     }
     check(sim.finish() == 0, "a clean run finishes with 0");
 
     check(clock_slips == 0, "time() is the instant the next tick() samples");
-    check(changes_off_sample == 0, "the 200 Hz output only moves on its sample ticks");
     check(changes_total > 0, "the traction controller actually did something");
     check(cut_at_last_change > 0.0, "a positive slip produced a positive torque cut");
 

@@ -14,12 +14,12 @@ error[SE0240]: expected a function body
    = note: a node-body item that is not a section or a lifecycle method is a verbatim helper function, which must be a definition (§11.4)
    = help: put forward declarations, `#include`s and free functions in `declarations { ... }`
 
-warning[SE0221]: `on_setp` is not a lifecycle method; it will be copied verbatim as a helper function
+warning[SE0221]: `nxet` is not a lifecycle method; it will be copied verbatim as a helper function
   --> tests/err/methods.se:27:5
    |
-27 |     on_setp(u) { }
-   |     ^^^^^^^ did you mean `on_step`?
-   = note: the lifecycle methods are init, output, derivative, next, transition, adjust, on_step, final (§8.1)
+27 |     nxet(u) { }
+   |     ^^^^ did you mean `next`?
+   = note: the lifecycle methods are init, output, derivative, next, final (§8.1)
 
 error[SE0241]: `init` takes no parameters
   --> tests/err/methods.se:35:10
@@ -36,18 +36,18 @@ error[SE0242]: `final` takes at most one parameter
    = note: the single parameter is the read-only run context: reason, message, time (§10.3)
    = help: write `final(ctx) { ... }` or `final() { ... }`
 
-error[SE0201]: expected a input port name, found `adjust`
-  --> tests/err/methods.se:45:15
+error[SE0201]: expected a input port name, found `derivative`
+  --> tests/err/methods.se:43:15
    |
-45 |     inputs  { adjust: double(-); }
-   |               ^^^^^^ expected a input port name
-   = note: `adjust` is a reserved word (Appendix B)
+43 |     inputs  { derivative: double(-); }
+   |               ^^^^^^^^^^ expected a input port name
+   = note: `derivative` is a reserved word (Appendix B)
 
-warning[SE0221]: `adjus` is not a lifecycle method; it will be copied verbatim as a helper function
-  --> tests/err/methods.se:48:5
+warning[SE0221]: `derivativ` is not a lifecycle method; it will be copied verbatim as a helper function
+  --> tests/err/methods.se:46:5
    |
-48 |     adjus(u) { }
-   |     ^^^^^ did you mean `adjust`?
-   = note: the lifecycle methods are init, output, derivative, next, transition, adjust, on_step, final (§8.1)
+46 |     derivativ(u) { }
+   |     ^^^^^^^^^ did you mean `derivative`?
+   = note: the lifecycle methods are init, output, derivative, next, final (§8.1)
 
 5 errors, 2 warnings emitted

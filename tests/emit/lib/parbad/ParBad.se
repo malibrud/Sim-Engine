@@ -16,7 +16,6 @@ node ParBad {
     settings {
         k:    double(-)     = 1.0;
         v:    math.Vec3(-)  = { 1.0, 2.0, 3.0 };
-        rate: double(Hz)    = 100.0;
     }
 
     outputs { y: double(-); }
@@ -34,10 +33,6 @@ node ParBad {
 
         // Stage 4: no such setting.
         param.nope --> g.x;
-
-        // Stage 4: `rate` selects a decimation (§9.2) and gets no param member
-        // at all, so there is nothing on the other end of this arrow.
-        param.rate --> g.x;
 
         // Stage 4: a dotted tail addresses into a RECORD (§6.2c). `k` is a
         // scalar, so there is no leaf to reach...

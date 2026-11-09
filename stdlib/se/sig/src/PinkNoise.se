@@ -6,7 +6,7 @@
 // constants tuned for 44.1 kHz; drop it into a 1 kHz model and the slope is
 // wrong across the whole band, silently. Spacing the poles logarithmically
 // between `f_lo` and `f_hi` and computing the coefficients in `init()` from the
-// node's own rate makes the block rate-independent -- the same principle
+// base rate makes the block rate-independent -- the same principle
 // `se.sig.dt.Biquad` follows by taking analog coefficients and discretising
 // them itself.
 //
@@ -21,7 +21,7 @@
 // binary -- and state array extents are not implemented. Widening the band
 // means adding sections, so it is a change to this file, not a knob.
 //
-// See `WhiteNoise` for the draw and for what `rate` does to the source
+// See `WhiteNoise` for the draw and for what the base rate does to the source
 // spectrum feeding this.
 package se.sig.src;
 
@@ -36,8 +36,6 @@ node PinkNoise {
         f_hi: double(Hz) = 1000.0;  // above this it flattens too
 
         seed: int(-) = 12345;
-
-        rate: double(Hz) = sample_rate;
     }
 
     outputs { y: double(U); }
@@ -88,20 +86,21 @@ node PinkNoise {
     }
 
     // Three poles spaced evenly in log frequency across [f_lo, f_hi], each a
-    // one-pole low-pass at exp(-2*pi*fc/rate). Each section on its own rolls
+    // one-pole low-pass at exp(-2*pi*fc/fs). Each section on its own rolls
     // off at -6 dB/octave above its corner; STAGGERING them a decade or so
     // apart and summing is what averages to the -3 dB/octave that 1/f power
     // means. The ripple between corners is the approximation error.
     //
     // The 2*pi is on erased units, for `LowPass2`'s reason -- see `Sine.se`.
     init() {
+        const double fs = 1.0 / sim.step();
         const double lo = std::log(param.f_lo);
         const double hi = std::log(param.f_hi);
         const double d  = (hi - lo) * 0.5;              // two gaps, three poles
 
-        var.p0 = std::exp(-6.283185307179586 * std::exp(lo)           / param.rate);
-        var.p1 = std::exp(-6.283185307179586 * std::exp(lo + d)       / param.rate);
-        var.p2 = std::exp(-6.283185307179586 * std::exp(lo + 2.0 * d) / param.rate);
+        var.p0 = std::exp(-6.283185307179586 * std::exp(lo)           / fs);
+        var.p1 = std::exp(-6.283185307179586 * std::exp(lo + d)       / fs);
+        var.p2 = std::exp(-6.283185307179586 * std::exp(lo + 2.0 * d) / fs);
 
         // Normalise so the output's standard deviation is `sigma` whatever the
         // poles are. Without this, moving `f_lo` silently moves the level.
@@ -118,9 +117,9 @@ node PinkNoise {
             for (int j = 0; j < 3; ++j) v += 1.0 / (1.0 - p[i] * p[j]);
         var.g = 1.0 / std::sqrt(v);
 
-        if (param.f_hi >= 0.5 * param.rate)
-            log.warn("f_hi = {} Hz is at or above the Nyquist of this node's {} Hz rate",
-                     param.f_hi, param.rate);
+        if (param.f_hi >= 0.5 * fs)
+            log.warn("f_hi = {} Hz is at or above the Nyquist of the {} Hz base rate",
+                     param.f_hi, fs);
         if (param.f_lo <= 0.0 || param.f_hi <= param.f_lo)
             log.error("f_lo = {} Hz and f_hi = {} Hz do not bracket a band",
                       param.f_lo, param.f_hi);

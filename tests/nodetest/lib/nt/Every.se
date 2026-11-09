@@ -1,7 +1,7 @@
 // The node-test runner's own coverage (SPECIFICATION 6.13): one node that
 // every column namespace can reach, so each is exercised end to end -- the
 // given side through a setting pin, a state write and an input, the checked
-// side through all five of out, der, next, adjust and var. It is parametric,
+// side through all four of out, der, next and var. It is parametric,
 // so the preamble's unit binding is exercised too, and its first row converts
 // a `km` cell into the `m` its port is bound to.
 package nt;
@@ -17,8 +17,8 @@ node Every {
     init()        { var.h = 0.5 * param.k; }
     output(x)     { out.y = param.k * in.x + param.off + state.s; }
     derivative(x) { der.s = in.x; }
-    next(x)       { next.c = state.c + 1.0; }
-    adjust()      { adjust.s = state.s > 1.0 ? 1.0 : state.s; }
+    next(x)       { next.c = state.c + 1.0;
+                    next.s = state.s > 1.0 ? 1.0 : state.s; }
 
     tests {
         units    { U = m; }
@@ -44,7 +44,7 @@ node Every {
         set "next counts", state.c = next.c {
             2, 3, "2 -> 3";
         }
-        set "adjust clamps the state", state.s = adjust.s {
+        set "next clamps the state", state.s = next.s {
             5,   1,   "clamped";
             0.5, 0.5, "left alone";
         }

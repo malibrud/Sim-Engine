@@ -115,8 +115,6 @@ ast::Method::Which writer_of(const std::string& ns) {
     if (ns == "out") return ast::Method::Which::Output;
     if (ns == "der") return ast::Method::Which::Derivative;
     if (ns == "next") return ast::Method::Which::Next;
-    if (ns == "transition") return ast::Method::Which::Transition;
-    if (ns == "adjust") return ast::Method::Which::Adjust;
     return ast::Method::Which::Init;   // var
 }
 
@@ -221,7 +219,7 @@ bool TestGen::resolve_column(const ast::TestColumn& c, bool expected, Col& out) 
                     expected ? "a given column, not a checked one"
                              : "a checked column, not a given one",
                     {note("given: param. in. state. step -- checked: out. der. next. "
-                          "transition. adjust. var. (\xc2\xa7""6.13)")});
+                          "var. (\xc2\xa7""6.13)")});
         return false;
     }
     if (c.is_step) {
@@ -265,30 +263,20 @@ bool TestGen::resolve_column(const ast::TestColumn& c, bool expected, Col& out) 
             if (v.name == head) f = &v;
         if (!f) return none();
         base = bind_type(f->type, binding_);
-    } else {   // state der next transition adjust
+    } else {   // state der next
         const StateSlot* st = nullptr;
         for (const StateSlot& s : leaf_->states)
             if (s.name == head) st = &s;
         if (!st) return none();
-        // §6.4 — each write accessor reaches exactly one kind, and a column
-        // checks what an accessor writes.
-        using K = ast::StateKind;
-        const bool wrong = (c.ns == "der" || c.ns == "adjust") ? st->kind != K::Continuous
-                           : c.ns == "next"                    ? st->kind != K::Discrete
-                           : c.ns == "transition"              ? st->kind != K::Finite
-                                                               : false;
-        if (wrong) {
-            const char* its = st->kind == K::Continuous ? "`der.` or `adjust.`"
-                              : st->kind == K::Discrete ? "`next.`"
-                                                        : "`transition.`";
+        // §6.4 — `der.` reaches the continuous states and `next.` every kind,
+        // and a column checks what an accessor writes.
+        if (c.ns == "der" && st->kind != ast::StateKind::Continuous) {
             diag_.error("SE0360", *src_, c.loc,
                         "`" + head + "` is a " + ast::state_kind_name(st->kind) +
-                            " state and has no `" + c.ns + ".`",
-                        std::string("not ") +
-                            (c.ns == "next" ? "discrete"
-                             : c.ns == "transition" ? "finite" : "continuous"),
+                            " state and has no `der.`",
+                        "not continuous",
                         {help(std::string("a ") + ast::state_kind_name(st->kind) +
-                              " state is checked through " + its)});
+                              " state is checked through `next.`")});
             return false;
         }
         base.unit = c.ns == "der" ? st->der_unit : st->unit;
@@ -436,21 +424,19 @@ bool TestGen::run(const std::string& fq, const Source& req_src, Loc req_loc) {
         if (!cols_ok) continue;
 
         // Which methods run is inferred from the expected columns (SE0362).
-        bool call[5] = {false, false, false, false, false};   // out der next tr adj
-        const ast::Method::Which order[5] = {
-            ast::Method::Which::Output, ast::Method::Which::Derivative,
-            ast::Method::Which::Next, ast::Method::Which::Transition,
-            ast::Method::Which::Adjust};
+        bool call[3] = {false, false, false};   // out der next
+        const ast::Method::Which order[3] = {ast::Method::Which::Output,
+                                             ast::Method::Which::Derivative,
+                                             ast::Method::Which::Next};
         bool methods_ok = true;
         for (const Col& c : expected) {
             const ast::Method::Which w = writer_of(c.ns);
             if (c.ns == "var") continue;
-            for (int k = 0; k < 5; ++k)
+            for (int k = 0; k < 3; ++k)
                 if (order[k] == w) call[k] = true;
             if (!info_->method(w)) {
                 const char* name = c.ns == "out" ? "output" : c.ns == "der" ? "derivative"
-                                   : c.ns == "next" ? "next"
-                                   : c.ns == "transition" ? "transition" : "adjust";
+                                                                            : "next";
                 diag_.error("SE0362", *src_, c.ast->loc,
                             "`" + c.ast->str() + "` is written by `" + name + "()`, which `" +
                                 def.name + "` does not define",
@@ -459,10 +445,6 @@ bool TestGen::run(const std::string& fq, const Source& req_src, Loc req_loc) {
             }
         }
         if (!methods_ok) continue;
-        // §6.13 — in a tick transition() always precedes adjust(), and an
-        // adjust() that reads a finite state reads the value it committed, so
-        // running one runs the other.
-        if (call[4] && info_->method(ast::Method::Which::Transition)) call[3] = true;
 
         body << "    {\n"
              << "        const char* set = " << cpp_str(set.claim) << ";\n"
@@ -490,10 +472,8 @@ bool TestGen::run(const std::string& fq, const Source& req_src, Loc req_loc) {
                         for (std::size_t k = 0; k < m.settings.size(); ++k)
                             if (m.settings[k].owner.empty() && m.settings[k].name == lf.key)
                                 slot = k;
-                        if (slot == m.settings.size() || m.settings[slot].rate ||
-                            m.settings[slot].structural) {
-                            unsupported(c.ast->loc, "a column for `rate` or a structural "
-                                                    "setting");
+                        if (slot == m.settings.size() || m.settings[slot].structural) {
+                            unsupported(c.ast->loc, "a column for a structural setting");
                             row_ok = false;
                             continue;
                         }
@@ -509,8 +489,8 @@ bool TestGen::run(const std::string& fq, const Source& req_src, Loc req_loc) {
                 }
             }
 
-            const char* mname[5] = {"output", "derivative", "next", "transition", "adjust"};
-            for (int k = 0; k < 5; ++k) {
+            const char* mname[3] = {"output", "derivative", "next"};
+            for (int k = 0; k < 3; ++k) {
                 if (!call[k]) continue;
                 if (k == 0) {
                     // §6.13 / §8.3a — every output method that writes an
@@ -558,19 +538,14 @@ bool TestGen::run(const std::string& fq, const Source& req_src, Loc req_loc) {
                 }
                 if (k == 1)
                     calls << "            n.derivative(" << in << ", s." << ident << "_der);\n";
-                else if (k == 2)
-                    calls << "            n.next(" << in << ", s.nxt." << ident << ");\n";
-                else if (k == 3)
-                    // The tick's seed, write and swap (§9.6 step 7), so a
-                    // `transition.` column reads the committed block and
-                    // `prev` the given one.
-                    calls << "            s.fnx = s.fin;\n"
-                          << "            n.transition(" << in << ", s.fnx." << ident << ");\n"
-                          << "            std::swap(s.fin, s.fnx);\n";
                 else
-                    calls << "            n.adjust(" << in << ", s." << ident << "_adj"
-                          << (leaf_->has_finite() ? ", s.fnx." + ident : std::string())
-                          << ");\n";
+                    // The tick's seed and write (§9.6), without the commit: a
+                    // `next.` column reads what the body wrote into the buffer.
+                    calls << "            s.seed_next();\n"
+                          << "            n.next(" << in
+                          << (leaf_->states.empty() ? std::string()
+                                                    : ", s." + ident + "_next")
+                          << (info_->vars.empty() ? "" : ", n.var") << ");\n";
             }
 
             for (std::size_t j = 0; j < expected.size(); ++j) {
@@ -585,9 +560,19 @@ bool TestGen::run(const std::string& fq, const Source& req_src, Loc req_loc) {
                     std::string got;
                     if (c.ns == "out") got = "out." + lf.key;
                     else if (c.ns == "der") got = "s." + ident + "_der." + lf.key;
-                    else if (c.ns == "next") got = "s.nxt." + ident + "." + lf.key;
-                    else if (c.ns == "transition") got = "s.fin." + ident + "." + lf.key;
-                    else if (c.ns == "adjust") got = "n.state." + lf.key;
+                    else if (c.ns == "next") {
+                        // Through the buffer where there is a typed one: a view
+                        // of a finite state converts to its enumeration, and
+                        // from there `static_cast<double>` cannot follow.
+                        got = "s." + ident + "_next." + lf.key;
+                        for (const StateSlot& st : leaf_->states) {
+                            if (st.name != c.ast->segs.front()) continue;
+                            if (st.kind == ast::StateKind::Finite)
+                                got = "s.fnx." + ident + "." + lf.key;
+                            else if (st.kind == ast::StateKind::Discrete)
+                                got = "s.nxt." + ident + "." + lf.key;
+                        }
+                    }
                     else got = "n.var." + lf.key;
 
                     double tol = 0.0;
@@ -658,8 +643,8 @@ bool TestGen::run(const std::string& fq, const Source& req_src, Loc req_loc) {
       << "//  node: " << info_->fq << "\n"
       << "//  The tests section of " << info_->file->path << " (SPECIFICATION 6.13): each\n"
       << "//  row fabricates one (settings, states, inputs) point, invokes the node's\n"
-      << "//  pure methods on it in the fixed order init, output, derivative, next,\n"
-      << "//  adjust, and compares what came back.\n"
+      << "//  methods on it in the fixed order init, output, derivative, next, and\n"
+      << "//  compares what came back.\n"
       << "// ----------------------------------------------------------------------------\n"
       << "#include \"" << stem << ".cpp\"   // the whole model: this program is white-box\n\n"
       << "#include <cmath>\n#include <cstdint>\n#include <cstdio>\n#include <cstring>\n"

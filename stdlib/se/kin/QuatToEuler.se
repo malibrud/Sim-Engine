@@ -21,7 +21,7 @@
 // THE TOLERANCE IS 1e-6, NOT 1e-9, and it is sized against the integrator, not
 // against rounding. A contract is checked at every solver stage (SPEC 10.6),
 // and an RK4 stage state `q + (h/2) q_dot` leaves the sphere by about
-// `(h|w|/4)^2 / 2` before `adjust()` ever sees it: 1.3e-7 at a 1 ms step and
+// `(h|w|/4)^2 / 2` before `next()` ever sees it: 1.3e-7 at a 1 ms step and
 // the washout's 2 rad/s rate limit, 1.3e-5 at 10 ms. That drift moves the
 // angles by the same order, so it is harmless, and a check that fired on it
 // would fail correct runs. The misuse worth catching -- a quaternion that is

@@ -206,7 +206,7 @@ inline LogSink& logs() {
     return s;
 }
 
-// The `log` object the generator puts in scope of init(), on_step() and final().
+// The `log` object the generator puts in scope of init(), next() and final().
 //
 // It holds the node path and NOTHING else — the sim time is read at call time,
 // from sim_time(). That is what lets the restricted form below be a class
@@ -478,63 +478,18 @@ struct Slot {
     const char* unit;     // the declared unit; "-" is dimensionless
 };
 
-// ─── Configuration (section 6.2b, section 9.2) ───────────────────────────────
-//
-// A node's decimation is derived from its `rate` setting rather than baked at
-// elaboration. `rate` is an ordinary runtime setting, so an override has to
-// move the SCHEDULE as well as the coefficients; a decimation frozen at code
-// generation would leave the node running at its compiled rate while every
-// value derived from `sample_rate` followed the override, which is worse than
-// refusing the override outright.
-//
-// This is SE0450's runtime counterpart: section 9.2's divisor rule, applied
-// where the value now arrives. Returns false and leaves `out` at 1 on a rate
-// that is not a positive integer divisor of the base rate. The caller knows
-// which path it was configuring; this function does not (section 16.4).
-inline bool decimation_of(double base_rate, double rate, std::uint64_t& out) {
-    out = 1;
-    if (!(rate > 0.0) || !(base_rate > 0.0)) return false;
-    const double ratio = base_rate / rate;
-    const double n = std::floor(ratio + 0.5);
-    // Tolerance, not equality: `rate` reaches here through a decimal literal
-    // and possibly a unit conversion, so the ratio need not be exact even when
-    // the intent was. One part in 1e9 is far tighter than any adjacent legal
-    // rate, which differ by whole decimation counts.
-    if (n < 1.0 || std::fabs(ratio - n) > 1e-9 * ratio) return false;
-    out = static_cast<std::uint64_t>(n);
-    return true;
-}
-
-// The message SE0450 would have produced, for a rate that arrived after the
-// model was compiled. Same wording and the same nearest-legal-rates note, so a
-// rate rejected by the compiler and one rejected by the loader read alike.
-inline std::string rate_error(const char* path, double rate, double base_rate) {
-    std::ostringstream o;
-    o << path << " = " << rate << " Hz is not an integer divisor of the "
-      << base_rate << " Hz base rate";
-    if (rate > 0.0 && base_rate > 0.0) {
-        const double ratio = base_rate / rate;
-        const double lo = std::floor(ratio) < 1.0 ? 1.0 : std::floor(ratio);
-        const double hi = std::ceil(ratio) < 1.0 ? 1.0 : std::ceil(ratio);
-        o << "; the nearest legal rates are " << base_rate / lo << " Hz and "
-          << base_rate / hi << " Hz";
-    }
-    return o.str();
-}
-
 // ─── Array extents (section 6.4a, section 15.5a) ─────────────────────────────
 //
 // An extent is a section-7 expression over ordinary overridable settings, so it
 // is evaluated at configuration and only then does it have to be an exact
-// non-negative integer. This is the same shape of check as decimation_of(): the
+// non-negative integer. The
 // DSL compiler applied the rule to what it could see, and this applies it to
 // what actually arrived. Zero is legal and yields no slots.
 inline bool extent_of(double v, std::size_t& out) {
     out = 0;
     if (!(v >= 0.0)) return false;
     const double n = std::floor(v + 0.5);
-    // A tolerance rather than equality, for the same reason decimation_of()
-    // uses one: the value reaches here through decimal literals and possibly a
+    // A tolerance rather than equality: the value reaches here through decimal literals and possibly a
     // unit conversion, so an intended integer need not be exact.
     if (std::fabs(v - n) > 1e-9 * (n > 1.0 ? n : 1.0)) return false;
     out = static_cast<std::size_t>(n);
@@ -813,7 +768,7 @@ protected:
     }
 };
 
-// The widened form for init(), on_step() and final(): everything above plus
+// The widened form for init(), next() and final(): everything above plus
 // the two calls that end a run (section 10.2). `sim.stop` in output() is "no
 // member named stop" — a compile error at the .se line, not a runtime rule.
 struct RunControl : RunView {

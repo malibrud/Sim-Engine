@@ -9,11 +9,11 @@
 // noise. That is the property `WhiteNoise` cannot offer and the reason both
 // exist.
 //
-// THE BIT RATE IS THE NODE'S `rate`, which is the knob that actually matters:
-// it sets the excitation bandwidth. Choose it a few times above the fastest
-// dynamics of interest, and choose `order` so one period
-// (2^order - 1 bits) is longer than the plant's settling time -- otherwise the
-// sequence wraps into itself and the estimate smears.
+// THE BIT RATE IS THE KNOB THAT ACTUALLY MATTERS, and `ticks_per_bit` sets it:
+// the base rate divided by this is the excitation bandwidth. Choose it a few
+// times above the fastest dynamics of interest, and choose `order` so one
+// period (2^order - 1 bits) is longer than the plant's settling time --
+// otherwise the sequence wraps into itself and the estimate smears.
 //
 // Unlike the other sources here, this one is a shift register rather than a
 // counter-based hash: a PRBS is DEFINED by its recurrence, and its spectral
@@ -29,14 +29,14 @@ node Prbs {
         offset:    double(U) = 0.0;
 
         // Register width. One period is 2^order - 1 samples: at order 11 and a
-        // 1 kHz rate that is 2.047 s.
+        // 1 kHz bit rate that is 2.047 s.
         order: int(-) = 11;
 
         // Any nonzero value; the all-zero register is the one state a maximal
         // LFSR cannot leave, which `init()` rejects.
         seed: int(-) = 1;
 
-        rate: double(Hz) = sample_rate;
+        ticks_per_bit: int(-) = 1;   // the register shifts every this many ticks
     }
 
     outputs { y: double(U); }
@@ -61,6 +61,9 @@ node Prbs {
     // and configuration runs before the first tick, so this fails with nothing
     // having executed.
     init() {
+        if (!sim.require(param.ticks_per_bit >= 1, "ticks_per_bit >= 1",
+                         static_cast<double>(param.ticks_per_bit)))
+            return;
         switch (param.order) {
             case  7: var.taps = 0x60;       break;   // x^7  + x^6  + 1
             case  9: var.taps = 0x110;      break;   // x^9  + x^5  + 1
@@ -109,6 +112,7 @@ node Prbs {
     // masked result always fits, so the conversion back to `int` is in range
     // rather than implementation-defined.
     next() {
+        if (sim.tick() % static_cast<std::uint64_t>(param.ticks_per_bit) != 0) return;
         const unsigned r = static_cast<unsigned>(state.reg);
         unsigned v = r & static_cast<unsigned>(var.taps);
         v ^= v >> 16;

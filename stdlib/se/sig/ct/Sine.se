@@ -46,9 +46,9 @@ node Sine {
 
     outputs { y: double(U); }
 
-    // No `rate` and no state: that pair is what puts this node in the
-    // minor-step output pass (§10.5). Adding either would silently make it
-    // zero-order held again and undo the point of the node.
+    // No discrete state: that is what puts this node in the minor-step output
+    // pass (§10.5). Adding one would silently make it zero-order held again and
+    // undo the point of the node.
     vars { w: double(rad/s); }
 
     // The 2*pi lives here, on erased units, for `src.Sine`'s reason: once angle

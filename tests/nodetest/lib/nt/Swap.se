@@ -1,0 +1,46 @@
+// SPECIFICATION 6.4 -- `next.` is buffered for EVERY kind of state, and a state
+// the body leaves alone keeps its value. The swap is the assertion: with an
+// in-place write the second line would read the first line's result, and both
+// columns would come back the same.
+package nt;
+
+finite Mode { A, B }
+
+node Swap {
+    inputs { go: bool; }
+    states {
+        continuous a: double(-) = 0.0;
+        continuous b: double(-) = 0.0;
+        discrete   c: double(-) = 0.0;
+        discrete   d: double(-) = 0.0;
+        finite     m: Mode      = A;
+        finite     n: Mode      = A;
+    }
+
+    derivative() { der.a = 0.0; der.b = 0.0; }
+
+    next(go) {
+        if (!in.go) return;
+        next.a = state.b;
+        next.b = state.a;
+        next.c = state.d;
+        next.d = state.c;
+        next.m = state.n;
+        next.n = state.m;
+    }
+
+    tests {
+        set "a continuous swap", state.a, state.b, in.go = next.a, next.b {
+            1, 2, 1, 2, 1, "swapped";
+            1, 2, 0, 1, 2, "unwritten states keep their value";
+        }
+        set "a discrete swap", state.c, state.d, in.go = next.c, next.d {
+            1, 2, 1, 2, 1, "swapped";
+            1, 2, 0, 1, 2, "unwritten states keep their value";
+        }
+        set "a finite swap", state.m, state.n, in.go = next.m, next.n {
+            A, B, 1, B, A, "swapped";
+            A, B, 0, A, B, "unwritten states keep their value";
+        }
+    }
+}

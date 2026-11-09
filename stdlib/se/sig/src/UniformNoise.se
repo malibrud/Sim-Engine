@@ -13,7 +13,7 @@
 // hard-bounded, which is exactly wrong for modelling sensor noise.
 //
 // See `WhiteNoise` for why the draw is a pure function of the sample index and
-// for what the node's `rate` does to the spectrum.
+// for what the base rate does to the spectrum.
 package se.sig.src;
 
 node UniformNoise {
@@ -24,8 +24,6 @@ node UniformNoise {
         hi: double(U) = 1.0;
 
         seed: int(-) = 12345;
-
-        rate: double(Hz) = sample_rate;
     }
 
     outputs { y: double(U); }

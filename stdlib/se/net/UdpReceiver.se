@@ -1,6 +1,6 @@
 // A non-blocking UDP receiver: the latest datagram on a port, as a buffer.
 //
-// Bound to `port` on every interface. Each step, `on_step()` drains whatever
+// Bound to `port` on every interface. Each step, `next()` drains whatever
 // has queued up since the last one, up to `max_drain` datagrams, and keeps only
 // the LATEST: a model reading a stream of state (a pose, a setpoint, a sensor
 // frame) wants the freshest value and never a backlog. `count` says how many
@@ -9,9 +9,10 @@
 // different node.
 //
 // REGISTERED, as a device reader must be. A socket is a `native`, so it is read
-// only in `on_step()` (§8.4), which cannot write an output; the datagram is
-// staged in a var and `output()` publishes it at the next tick. That is one
-// step of latency, and it makes this node a sort root.
+// only in `next()` (§8.4), which cannot write an output; the datagram is staged
+// in a var and `output()` publishes it at the next tick. That is one step of
+// latency, and it makes this node a sort root. `seq` is what keeps the rest of
+// the step from seeing it sooner: a node with a discrete state is held (§9.3).
 //
 // OUTPUTS LATCH. On a step with nothing new, `data` still holds the last
 // datagram and only `status` changes, to `NO_DATA`. A decoder downstream can
@@ -32,11 +33,8 @@
 // time each executable runs; loopback traffic is delivered whatever is chosen
 // there.
 //
-// The data output is copied from the staging var each time `output()` runs,
-// and a node with no state and no `rate` runs it in every output pass. The
-// copy is the datagram's size, not the capacity, so it is small for small
-// datagrams; give the instance a `rate` to hold it between its own ticks if it
-// is not.
+// The data output is copied from the staging var only on the tick after a
+// datagram arrived. An output not written keeps its value, which is the latch.
 package se.net;
 
 node UdpReceiver {
@@ -52,6 +50,8 @@ node UdpReceiver {
         count:  int(-);              // datagrams taken this step
         age:    double(s);           // since the latest was taken
     }
+
+    states { discrete seq: int(-) = 0; }   // datagrams taken since the run began
 
     vars {
         rx:     buffer(1500);
@@ -79,7 +79,7 @@ node UdpReceiver {
         log.info("receiving on UDP port {}", param.port);
     }
 
-    on_step() {
+    next() {
         const RxStatus was = var.st;
         RxStatus st = RxStatus::NO_DATA;
         int taken = 0;
@@ -104,10 +104,11 @@ node UdpReceiver {
             log.warn("receive failed on UDP port {}: {}", param.port, sock.error_text());
         var.st = st;
         var.n = taken;
+        next.seq = state.seq + taken;
     }
 
     output() {
-        out.data   = var.rx;
+        if (var.n > 0) out.data = var.rx;
         out.status = var.st;
         out.count  = var.n;
         out.age    = sim.time() - var.t_last;

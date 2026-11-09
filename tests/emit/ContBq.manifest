@@ -99,8 +99,6 @@ xd[9]     bq3.z.wd'               1/s
           bq3.z.B.c1              -           = 0.0   <- bq3.B.c1
           bq3.z.B.c0              -           = 0.0   <- bq3.B.c0
 
-[decimation]              # derived from `rate` at configuration
-
 [types]
 se.math.Poly3.c2                  -
 se.math.Poly3.c1                  -

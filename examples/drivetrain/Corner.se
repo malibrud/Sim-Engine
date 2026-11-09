@@ -20,7 +20,6 @@ node Corner {
             inertia = param.wheel_inertia;   // declarative setting flow-down
         };
         node tc : TractionController {
-            rate       = 200.0;
             slip_limit = 0.10;
         };
 

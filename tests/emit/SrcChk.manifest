@@ -16,6 +16,8 @@
           (none)
 
 [state.discrete]          # Sim::Impl::dis; offsets from Sim::Impl::discrete_map()
+          n_st.held               -           bool
+          n_rp.held               -           bool
           n_sn.u                  -           double
           n_sq.u                  -           double
           n_tr.u                  -           double
@@ -66,73 +68,50 @@
           n_st.initial            m/s^2       = -1.0
           n_st.target             m/s^2       = 3.0
           n_st.t_step             s           = 0.25
-          n_st.rate               Hz          = 1000.0
           n_rp.slope              m/s^3       = 4.0
           n_rp.initial            m/s^2       = 1.0
           n_rp.t_start            s           = 0.0
-          n_rp.rate               Hz          = 1000.0
           n_sn.amplitude          m/s^2       = 2.0
           n_sn.f                  Hz          = 50.0
           n_sn.phase              rad         = 0.0
           n_sn.offset             m/s^2       = 0.0
-          n_sn.rate               Hz          = 1000.0
           n_sq.amplitude          m/s^2       = 1.5
           n_sq.f                  Hz          = 50.0
           n_sq.duty               -           = 0.25
           n_sq.phase              rad         = 0.0
           n_sq.offset             m/s^2       = 0.0
-          n_sq.rate               Hz          = 1000.0
           n_tr.amplitude          m/s^2       = 3.0
           n_tr.f                  Hz          = 50.0
           n_tr.phase              rad         = 0.0
           n_tr.offset             m/s^2       = 0.0
-          n_tr.rate               Hz          = 1000.0
           n_sw.amplitude          m/s^2       = 1.0
           n_sw.f                  Hz          = 50.0
           n_sw.phase              rad         = 0.0
           n_sw.offset             m/s^2       = 0.5
-          n_sw.rate               Hz          = 1000.0
           n_cp.amplitude          m/s^2       = 1.0
           n_cp.f0                 Hz          = 10.0
           n_cp.f1                 Hz          = 200.0
           n_cp.sweep              s           = 0.5
           n_cp.offset             m/s^2       = 0.0
           n_cp.repeat             -           = true
-          n_cp.rate               Hz          = 1000.0
-          n_wn.rate               Hz          = 1000.0
           n_wn.sigma0             m/s^2       = 1.0
-          n_wn.psd                m^2/(Hz*s^4) = 0.002   <- ((2.0 * n_wn.sigma0) * n_wn.sigma0) / n_wn.rate
+          n_wn.psd                m^2/(Hz*s^4) = 0.002   <- ((2.0 * n_wn.sigma0) * n_wn.sigma0) / 1000.0
           n_wn.sigma              m/s^2       = 2.0
           n_wn.mean               m/s^2       = 0.5
           n_wn.seed               -           = 12345
           n_un.lo                 m/s^2       = -3.0
           n_un.hi                 m/s^2       = 1.0
           n_un.seed               -           = 777
-          n_un.rate               Hz          = 1000.0
           n_pn.sigma              m/s^2       = 1.0
           n_pn.mean               m/s^2       = 0.0
           n_pn.f_lo               Hz          = 2.0
           n_pn.f_hi               Hz          = 200.0
           n_pn.seed               -           = 12345
-          n_pn.rate               Hz          = 1000.0
           n_pr.amplitude          m/s^2       = 1.0
           n_pr.offset             m/s^2       = 0.0
           n_pr.order              -           = 9
           n_pr.seed               -           = 1
-          n_pr.rate               Hz          = 1000.0
-
-[decimation]              # derived from `rate` at configuration
-          n_st                    1000 Hz     = every 1 tick
-          n_rp                    1000 Hz     = every 1 tick
-          n_sn                    1000 Hz     = every 1 tick
-          n_sq                    1000 Hz     = every 1 tick
-          n_tr                    1000 Hz     = every 1 tick
-          n_sw                    1000 Hz     = every 1 tick
-          n_cp                    1000 Hz     = every 1 tick
-          n_wn                    1000 Hz     = every 1 tick
-          n_un                    1000 Hz     = every 1 tick
-          n_pn                    1000 Hz     = every 1 tick
-          n_pr                    1000 Hz     = every 1 tick
+          n_pr.ticks_per_bit      -           = 1
 
 [types]
 

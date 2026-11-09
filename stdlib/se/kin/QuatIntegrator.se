@@ -20,13 +20,13 @@
 // small rotation, it is not an attitude at all, and it is the one input the
 // normalisation below cannot rescue: it turns into four NaNs.
 //
-// WHY `adjust()`. For `q_dot = 1/2 q (x) w` with a pure-imaginary `w`, `q_dot`
+// WHY `next()`. For `q_dot = 1/2 q (x) w` with a pure-imaginary `w`, `q_dot`
 // is orthogonal to `q`, so `d|q|/dt` is exactly zero: the norm is a conserved
 // quantity of the flow. It is not a conserved quantity of RK4. Nothing in the
 // discrete system restores it either -- it is a free mode, neutrally stable --
 // so the norm executes a random walk that no amount of step refinement bounds,
-// only slows. `adjust()` (SPEC 6.4b) is the language's answer to exactly this:
-// a jump map applied between steps, which pins the norm back to one without
+// only slows. A jump in `next()` (SPEC 6.4) is the language's answer to exactly
+// this: applied between steps, which pins the norm back to one without
 // touching the trajectory.
 //
 // The ATTITUDE survives the drift regardless, which is worth knowing because it
@@ -38,17 +38,17 @@
 // unit sphere, and the recorded state, which stops meaning anything once `|q|`
 // has wandered.
 //
-// WHY NOT ALSO NORMALISE IN `output()`. SPEC 6.4b is explicit that `adjust()`
+// WHY NOT ALSO NORMALISE IN `output()`. SPEC 6.4 is explicit that a jump
 // does not stand in for it in general -- the published value comes from the
 // state the SOLVER left, one step off the manifold. Here that is not worth
 // paying for. One RK4 step of a rotation at `theta = |w|*h` leaves the norm off
 // by O(theta^6): at a tenth of a radian per step, seven parts in a billion,
-// which is inside any tolerance a consumer would set. `output()` runs five times per step and `adjust()` runs once, so
+// which is inside any tolerance a consumer would set. `output()` runs five times per step and `next()` runs once, so
 // normalising there would cost five square roots and twenty divides per step to
 // remove an error that is already negligible. A block whose rate genuinely
 // approaches a radian per step should shorten its step.
 //
-// `adjust()` also keeps `qw >= 0`. `q` and `-q` are the same rotation, and
+// `next()` also keeps `qw >= 0`. `q` and `-q` are the same rotation, and
 // holding the state in the half closest to identity is what `QuatLog` and the
 // leak in `QuatLeakyIntegrator` read as "the short way back to neutral". The
 // published `q` changes sign when the attitude passes a half turn.
@@ -83,15 +83,15 @@ node QuatIntegrator {
         out.q.z = state.qz;
     }
 
-    adjust() {
+    next() {
         const double n2 = state.qw*state.qw + state.qx*state.qx
                         + state.qy*state.qy + state.qz*state.qz;
 
         double k = 1.0 / std::sqrt(n2); // Force norm of 1.0
         if ( state.qw < 0 ) k *= -1;    // Force to be in branch closest to 1, i.e. keep qw positive.
-        adjust.qw = state.qw * k;
-        adjust.qx = state.qx * k;
-        adjust.qy = state.qy * k;
-        adjust.qz = state.qz * k;
+        next.qw = state.qw * k;
+        next.qx = state.qx * k;
+        next.qy = state.qy * k;
+        next.qz = state.qz * k;
     }
 }

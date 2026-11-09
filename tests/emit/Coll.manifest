@@ -37,6 +37,4 @@
           a.k                     m/s^2       = 0.0
           b.k                     m/s^2       = 0.0
 
-[decimation]              # derived from `rate` at configuration
-
 [types]

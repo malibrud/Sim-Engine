@@ -3,7 +3,7 @@
 // PHASE IS THE STATE, NORMALISED TO [0, 1) — not time, and not radians. Three
 // things fall out of that one choice:
 //
-//   * the increment is `f / rate` with no 2*pi in it at all;
+//   * the increment is `f * step` with no 2*pi in it at all;
 //   * wrapping is one exact `floor` subtraction, correct for any `f`, where a
 //     conditional single subtract silently breaks above the sample rate;
 //   * precision does not decay. `sin(2*pi*f*t)` loses mantissa bits as `t`
@@ -28,8 +28,6 @@ node Sine {
         phase:     double(rad) = 0.0;  // radians is the only declarable
                                           // angle unit (§4.5)
         offset: double(U) = 0.0;
-
-        rate: double(Hz) = sample_rate;
     }
 
     outputs { y: double(U); }
@@ -53,11 +51,12 @@ node Sine {
     // so it is worth one line to say so. Observational only: logging never
     // affects control flow and never halts a run.
     init() {
-        var.du = param.f / param.rate;
+        const double fs = 1.0 / sim.step();
+        var.du = param.f / fs;
         var.p0 = param.phase / 6.283185307179586;
-        if (param.f >= 0.5 * param.rate)
-            log.warn("f = {} Hz is at or above the Nyquist of this node's {} Hz rate",
-                     param.f, param.rate);
+        if (param.f >= 0.5 * fs)
+            log.warn("f = {} Hz is at or above the Nyquist of the {} Hz base rate",
+                     param.f, fs);
     }
 
     output() {
