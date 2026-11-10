@@ -1,12 +1,4 @@
-﻿error[SE0263]: `window:` requires `mode: realtime`
-  --> tests/emit/params.sim:10:5
-   |
-10 |     window:   5 (s);
-   |     ^^^^^^ no frames to average over
-   = note: `window` sets the rolling window for `sim.utilization` and `sim.overrun_pct`, which only exist in real time (§13.6)
-   = note: a batch run has no frame boundaries, so both metrics would record as zero
-
-error[SE0410]: incompatible units in `+`
+﻿error[SE0410]: incompatible units in `+`
  --> tests/emit/params.sim:3:51
   |
 3 |     root:     params.Params { root_need = 1.0 (m) + 2.0 (s); };
@@ -53,4 +45,4 @@ error[SE0460]: override `needy.masss` matches nothing
   = help: did you mean `needy.mass`?
   = note: overrides address a setting or a state by a dotted path from the root (§13.2, §13.4)
 
-7 errors emitted
+6 errors emitted

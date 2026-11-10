@@ -1,6 +1,6 @@
-// SE0264 — a window shorter than one frame. 1 ms over a 10 ms frame is a tenth
-// of a frame, which would round to zero and leave the two metrics reporting the
-// latest frame rather than a rolling average (§13.6).
+// SE0265 — the entries real-time pacing used to need. Pacing is the host's now
+// (§9.4), so each is reported as removed, with where it went, rather than as
+// an unknown entry with a did-you-mean.
 sim Frames {
     root:     frames.Frames;
     step:     1 (ms);
@@ -8,5 +8,5 @@ sim Frames {
 
     mode:     realtime;
     sync:     10 (ms);
-    window:   1 (ms);
+    window:   1 (s);
 }

@@ -31,7 +31,7 @@ A host makes four kinds of call, in this order.
 |---|---|---|
 | Configure | `Sim()`, `settings()`, `load_settings()`, `dump_settings()` | Settings and initial-condition overrides are collected. No node code runs. |
 | Start | `init()` | Settings are finalized, initial conditions are written, and every node's `init()` runs. |
-| Step | `inputs()`, `tick()`, `outputs()`, `done()` | One `tick()` samples the model at the current time and advances it one step. |
+| Step | `inputs()`, `tick()`, `outputs()`, `done()`, `sync_realtime()` | One `tick()` samples the model at the current time and advances it one step. It never waits; `sync_realtime()` is how a host keeps pace with wall time. |
 | Finish | `finish()` | Every node's `final()` runs, the recording and log close, and the exit code is returned. |
 
 ```cpp
@@ -48,9 +48,26 @@ return sim.finish();                      // finish
 
 `finish()` is owed even when `init()` returns false.
 
+**Pacing is the host's.** `tick()` runs as fast as it can. To keep pace with wall
+time, tick as many times as you like and then call `sync_realtime()`:
+
+```cpp
+while (!sim.done()) {
+    for (int k = 0; k < 10 && !sim.done(); ++k) sim.tick();   // 10 ms of model time
+    sim.sync_realtime();                                       // wait for the wall
+}
+```
+
+It waits until the wall time since the first `tick()` equals `time()`. If the wall
+is already past that, it returns at once, and the ticks run flat out until the
+model has caught up. Nothing is skipped and there is no limit on how far behind it
+may fall. `realtime_stats()` reports how well the run is keeping pace: utilization,
+overrun rate, the current lag, and the whole-run frame and overrun counts. The
+generated `main.cpp` paces only when given `--realtime SYNC`.
+
 A `Sim` runs once. A second `init()` on it returns false, and `error()` says so.
 To run again, construct a new `Sim`. Every piece of run state (the clock, the stop
-flag, contract failures, the real-time frame, the log) belongs to one `Sim`, so
+flag, contract failures, the pacing, the log) belongs to one `Sim`, so
 runs one after another start clean, and several `Sim`s in one process are
 independent.
 
@@ -166,7 +183,7 @@ zero, and are normally computed in `init()`.
 
 `sim.init()` does the following, in order.
 
-1. Configures logging and the real-time frame, as the sim file set them.
+1. Configures logging, as the sim file set it.
 2. Finalizes the settings ([section 2](#what-is-fixed-and-when)).
 3. If a configuration failure stands, stops here. No node runs.
 4. Writes every state's initial value (layers 1 and 2 above).
@@ -194,7 +211,9 @@ One call to `sim.tick()` at index *k*, with *t*[k] = *k* · `step`:
 | 5 | Exit | | If the run has halted, or *k* = `tick_count` |
 | 6 | Commit | | `dis = nxt`, `fin = fnx`, `x = xnx`, all at once |
 | 7 | Flow | `output()` and `derivative()` | Solver stages, below |
-| 8 | Pace | | If `mode: realtime` and this tick closes a frame |
+
+The first `tick()` also starts the clock that `sync_realtime()` measures from.
+Nothing in the tick waits on wall time.
 
 The host writes `inputs()` before calling `tick()`. `outputs()` afterwards hold
 y[k], the values computed in step 2. Steps 2 to 4 all see the state as the tick
@@ -332,7 +351,7 @@ runs, the row is still recorded, the exit is taken, and nothing commits.
 
 1. Calls `final(ctx)` in reverse init order, only on nodes whose `init()` completed.
 2. Closes the recording.
-3. Prints the real-time summary, if the run was real time.
+3. Prints the real-time summary, if the host called `sync_realtime()`.
 4. Prints the contract summary.
 5. Writes the closing log line.
 

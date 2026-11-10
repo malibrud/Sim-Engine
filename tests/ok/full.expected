@@ -6,9 +6,6 @@ sim-file Full
   step: 0.5 (ms)
   solver: rk4
   duration: 10 (s)
-  mode: realtime
-  sync: 10 (ms)
-  window: 2 (s)
   settings: "sweep.settings"
   record
     file: "run.csv"

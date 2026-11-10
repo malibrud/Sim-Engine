@@ -2104,6 +2104,53 @@ if (-not $cl) {
         }
     }
 
+    # SPEC 9.4 -- pacing is the host's, and the example host takes it from its
+    # command line. A frame that is not a whole number of steps is refused
+    # before the run starts. A paced run takes its model time in wall time,
+    # says so in the summary, and records a real utilization; the same model
+    # without the flag (every other drivetrain run in this suite) is batch.
+    if ($emitDirs.ContainsKey('drivetrain')) {
+        Push-Location $emitDirs['drivetrain']
+        $said = ((& '.\build\release\bin\Drivetrain.exe' --realtime '1.5 (ms)' 2>&1 |
+                  ForEach-Object { $_.ToString() }) -join "`n").Trim()
+        $code = $LASTEXITCODE
+        $want = 'Drivetrain: --realtime 1.5 (ms) is not a whole number of 0.001 s steps'
+        if ($code -eq 2 -and $said -eq $want) {
+            Write-Host "ok   build/emit/drivetrain --realtime '1.5 (ms)' : refused, exit 2" -ForegroundColor Green
+            $script:pass++
+        } else {
+            Write-Host "FAIL build/emit/drivetrain --realtime '1.5 (ms)' : exit $code" -ForegroundColor Red
+            Write-Host ("    want: " + $want) -ForegroundColor DarkGray
+            Write-Host ("    got : " + $said) -ForegroundColor Yellow
+            $script:fail++
+        }
+
+        $clock = [Diagnostics.Stopwatch]::StartNew()
+        $said = ((& '.\build\release\bin\Drivetrain.exe' --realtime '10 (ms)' 2>&1 |
+                  ForEach-Object { $_.ToString() }) -join "`n")
+        $code = $LASTEXITCODE
+        $clock.Stop()
+        $util = 0.0
+        $rows = @(Import-Csv 'drivetrain.csv')
+        foreach ($row in $rows) {
+            foreach ($prop in $row.PSObject.Properties) {
+                if ($prop.Name -like 'sim.utilization*') { $util = [Math]::Max($util, [double]$prop.Value) }
+            }
+        }
+        $secs = $clock.Elapsed.TotalSeconds
+        if ($code -eq 0 -and $secs -ge 4.9 -and $said -match 'realtime: 500 frames' -and $util -gt 0.0) {
+            Write-Host ("ok   build/emit/drivetrain --realtime '10 (ms)' : 5 s of model time in " +
+                        $secs.ToString('F2') + " s, 500 frames, utilization recorded") -ForegroundColor Green
+            $script:pass++
+        } else {
+            Write-Host ("FAIL build/emit/drivetrain --realtime '10 (ms)' : exit $code, " +
+                        $secs.ToString('F2') + " s, max utilization $util") -ForegroundColor Red
+            Write-Host ("    said: " + $said) -ForegroundColor Yellow
+            $script:fail++
+        }
+        Pop-Location
+    }
+
     # BwChk is the array-state feature against the case it was added for: an
     # Nth-order Butterworth as a cascade of second-order sections in ONE leaf
     # (SPEC 6.4a). The assertion is the magnitude response, which the bilinear

@@ -497,7 +497,7 @@ struct SimEntry {
     enum class Kind {
         Root,      // root: Vehicle { … };
         Value,     // step: 1 (ms);   every: 10;
-        Word,      // solver: rk4;    mode: realtime;
+        Word,      // solver: rk4;
         Text,      // settings: "file.settings";
         Record,
         Log,

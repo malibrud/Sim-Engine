@@ -577,10 +577,6 @@ struct Model {
     double step = 1e-3;                // seconds
     double duration = 0.0;             // seconds
     std::string solver = "rk4";
-    bool realtime = false;
-    double sync = 0.0;                 // seconds
-    long sync_steps = 0;
-    double window = 1.0;               // seconds
 
     RecordConfig record;
     LogConfig log;

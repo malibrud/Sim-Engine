@@ -16,10 +16,8 @@ sim Drivetrain {
     step:     1 (ms);        // the global fixed base step
     solver:   rk4;           // global, not per-node
     duration: 5 (s);
-
-    mode:     realtime;
-    sync:     10 (ms);       // real-time frame: 10 base steps free-run, then spin
-    window:   1 (s);         // trailing window for the live metrics
+    // Pacing is the host's (§9.4): `--realtime "10 (ms)"` runs 10 base steps
+    // flat out, then waits for the wall clock. Without it, the run is batch.
 
     // Same grammar as an inline settings string, just carried in a file.
     settings: "drivetrain.settings";

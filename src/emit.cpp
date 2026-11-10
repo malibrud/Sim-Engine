@@ -1099,6 +1099,10 @@ void Emitter::sim_members() {
     o_ << "    bool start();                            // Sim::init()\n";
     o_ << "    void init();\n";
     o_ << "    void tick();                             // one base step (§9.6)\n";
+    o_ << "    //  Sim::sync_realtime(): wait for the wall to reach time() (§9.4).\n";
+    o_ << "    void sync_realtime() {\n";
+    o_ << "        se_run_.realtime.sync(static_cast<double>(se_tick_) * step_seconds);\n";
+    o_ << "    }\n";
     o_ << "    bool done() const { return se_done_; }\n";
     o_ << "    void finish();\n";
     o_ << "    int  exit_code() const;                  // what Sim::finish() returns\n";
@@ -2144,7 +2148,6 @@ void Emitter::sim_run() {
     o_ << "    se_run_.clock = se_rt::RunState{0.0, step_seconds, 0};   // §10.5\n";
     o_ << "    se_inited_ = 0;\n";
     if (m_.record.present) o_ << "    record_open();\n";
-    o_ << "    se_run_.realtime.start();\n";
     for (std::size_t i = 0; i < m_.leaves.size(); ++i) {
         const Leaf& leaf = m_.leaves[i];
         o_ << "    if (se_run_.control.halted()) return;\n";
@@ -2166,6 +2169,7 @@ void Emitter::sim_run() {
     o_ << "// state moves below the exit, so a run that stops is left holding a valid\n";
     o_ << "// checkpoint (§15.5).\n";
     o_ << "void Sim::Impl::tick() {\n";
+    o_ << "    if (se_tick_ == 0) se_run_.realtime.anchor();   // §9.4: pacing counts from here\n";
     o_ << "    se_time_ = static_cast<double>(se_tick_) * step_seconds;\n";
     o_ << "    se_run_.log_time = se_time_;    // what a log record is stamped with\n";
     o_ << "    se_run_.clock.now = se_time_;   // §10.5 — the tick instant; derivatives()\n";
@@ -2192,9 +2196,6 @@ void Emitter::sim_run() {
             o_ << "    x = xnx;\n";
     }
     o_ << "    integrate(se_time_, step_seconds);\n";
-    if (m_.realtime && m_.sync_steps > 0)
-        o_ << "    if ((se_tick_ + 1) % " << m_.sync_steps
-           << " == 0) se_run_.realtime.frame_boundary();\n";
     o_ << "    ++se_tick_;\n";
     o_ << "}\n";
 
@@ -2204,7 +2205,7 @@ void Emitter::sim_run() {
     o_ << "    const se_rt::RunContext ctx = se_run_.control.context(se_time_);\n";
     o_ << "    final_all(ctx);\n";
     if (m_.record.present) o_ << "    se_rec_.close();\n";
-    if (m_.realtime) o_ << "    se_run_.realtime.summary();\n";
+    o_ << "    se_run_.realtime.summary();   // silent unless the host paced the run\n";
     // §10.6 -- after the realtime summary and before the closing line, so
     // the last thing a log carries is the run's outcome and not a contract detail.
     o_ << "    se_run_.checks.summary(se_run_.log, se_time_);\n";
@@ -2270,7 +2271,7 @@ void Emitter::sim_run() {
     o_ << "}\n";
 
     // ── the run configuration the .sim file gave ─────────────────────────────
-    o_ << "\n// Logging (§13.7) and the real-time frame (§9.4), as the .sim file set them.\n";
+    o_ << "\n// Logging (§13.7), as the .sim file set it.\n";
     o_ << "void Sim::Impl::configure_run() {\n";
     o_ << "    se_run_.log.configure(" << quote(m_.log.file) << ", se_rt::Level::";
     const std::string lvl = m_.log.level;
@@ -2290,11 +2291,6 @@ void Emitter::sim_run() {
                               : "Info")
            << ");\n";
     }
-    if (m_.realtime)
-        o_ << "    se_run_.realtime.configure(" << dbl(m_.sync) << ", " << dbl(m_.window)
-           << ");\n";
-    else
-        o_ << "    se_run_.realtime.configure(0.0, 0.0);   // mode: batch\n";
     o_ << "}\n";
 }
 
@@ -2685,11 +2681,16 @@ void Emitter::sim_facade() {
     o_ << "const char*         Sim::error() const      { return impl_->error(); }\n";
     o_ << "Sim::Inputs&        Sim::inputs()           { return impl_->sig.in; }\n";
     o_ << "void                Sim::tick()             { impl_->tick(); }\n";
+    o_ << "void                Sim::sync_realtime()    { impl_->sync_realtime(); }\n";
     o_ << "const Sim::Outputs& Sim::outputs() const    { return impl_->se_outputs_; }\n";
     o_ << "bool                Sim::done() const       { return impl_->done(); }\n";
     o_ << "std::uint64_t       Sim::tick_index() const { return impl_->tick_index(); }\n";
     o_ << "double              Sim::time() const       "
           "{ return static_cast<double>(tick_index()) * step_seconds; }\n";
+    o_ << "Sim::RealtimeStats  Sim::realtime_stats() const {\n";
+    o_ << "    const se_rt::Realtime& r = impl_->se_run_.realtime;\n";
+    o_ << "    return {r.utilization(), r.overrun_pct(), r.lag(), r.frames(), r.overruns()};\n";
+    o_ << "}\n";
     o_ << "int                 Sim::finish()           "
           "{ impl_->finish(); return impl_->exit_code(); }\n";
 }
@@ -2910,6 +2911,15 @@ void Emitter::public_class() {
     emit_rows("Inputs", inputs, "the root declares no inputs");
     o_ << "    //  Its outputs, as of the last tick().\n";
     emit_rows("Outputs", outputs, "the root declares no outputs");
+    o_ << "    //  What sync_realtime() measures (§13.6), over the last 1 s of model time\n";
+    o_ << "    //  except where it says the whole run.\n";
+    o_ << "    struct RealtimeStats {\n";
+    o_ << "        double        utilization = 0.0;   // %, of the model time spent computing\n";
+    o_ << "        double        overrun_pct = 0.0;   // %, of calls that found the wall ahead\n";
+    o_ << "        double        lag         = 0.0;   // s, the wall was ahead at the last call\n";
+    o_ << "        std::uint64_t frames      = 0;     // sync_realtime() calls, the whole run\n";
+    o_ << "        std::uint64_t overruns    = 0;     // of which overran, the whole run\n";
+    o_ << "    };\n";
     o_ << "\n";
     const std::string step = dbl(m_.step) + ";", ticks = std::to_string(tick_count()) + ";";
     const std::size_t wv = std::max(step.size(), ticks.size());
@@ -2945,13 +2955,21 @@ void Emitter::public_class() {
 
     o_ << "    // ---- 3. step " << std::string(59, '-') << "\n";
     o_ << "    //  tick() samples the model at time(), with inputs() as the host left\n";
-    o_ << "    //  them, then advances one step. outputs() hold what it sampled.\n";
+    o_ << "    //  them, then advances one step. outputs() hold what it sampled. It\n";
+    o_ << "    //  never waits: the host paces the run.\n";
     o_ << "    Inputs&        inputs();\n";
     o_ << "    void           tick();\n";
     o_ << "    const Outputs& outputs() const;\n";
     o_ << "    bool           done() const;         // the run is over: tick_count, or stopped\n";
     o_ << "    double         time() const;         // s, the instant the next tick() samples\n";
     o_ << "    std::uint64_t  tick_index() const;   // the next tick(); time() / step_seconds\n\n";
+    o_ << "    //  To keep pace with wall time, tick() as many times as you like, then\n";
+    o_ << "    //  sync_realtime(): it waits until the wall time since the first tick()\n";
+    o_ << "    //  equals time(). If the wall is already past it, it returns at once,\n";
+    o_ << "    //  and the ticks run flat out until the model has caught up.\n";
+    o_ << "    void           sync_realtime();\n";
+    o_ << "    //  How well the run is keeping pace. Zero until sync_realtime() is called.\n";
+    o_ << "    RealtimeStats  realtime_stats() const;\n\n";
 
     o_ << "    // ---- 4. finish " << std::string(57, '-') << "\n";
     o_ << "    //  Runs every node's final(), closes the recording and the log. 0 for a\n";
@@ -2998,6 +3016,7 @@ std::string Emitter::public_hpp() {
         if (!m_.boundary_in.empty())
             ex.push_back({"    sim.inputs()." + m_.boundary_in.front().ident + " = ...;", ""});
         ex.push_back({"    sim.tick();", ""});
+        ex.push_back({"    sim.sync_realtime();", "   only to keep pace with wall time"});
         if (!m_.root_outputs.empty())
             ex.push_back({"    ...sim.outputs()." + m_.root_outputs.front().name + "...", ""});
         ex.push_back({"}", ""});
@@ -3119,7 +3138,8 @@ std::string Emitter::main_cpp() {
     t << "//  same four things; copy this file to start one.\n";
     t << "// " << std::string(76, '-') << "\n";
     t << "#include " << quote(hdr_) << "\n\n";
-    t << "#include <cstdio>\n#include <fstream>\n#include <iterator>\n#include <string>\n\n";
+    t << "#include <cmath>\n#include <cstdint>\n#include <cstdio>\n#include <cstdlib>\n"
+         "#include <fstream>\n#include <iterator>\n#include <string>\n\n";
 
     {
         // The --set example is a real path of this model, at its real value.
@@ -3138,7 +3158,8 @@ std::string Emitter::main_cpp() {
         };
         t << "static const char* const usage =\n";
         t << "    " << line("usage: " + m_.name +
-                            " [--settings FILE]... [--set PATH=VALUE]... [--dump-settings]")
+                            " [--settings FILE]... [--set PATH=VALUE]... [--dump-settings]"
+                            " [--realtime SYNC]")
           << "\n";
         t << "    " << line("  --settings FILE    load a .settings file (section 14); "
                             "repeatable, in order")
@@ -3147,6 +3168,9 @@ std::string Emitter::main_cpp() {
           << "\n";
         t << "    " << line("  --dump-settings    print every setting and initial condition, "
                             "and stop")
+          << "\n";
+        t << "    " << line("  --realtime SYNC    keep pace with wall time, catching up every "
+                            "SYNC, as --realtime \"10 (ms)\"")
           << ";\n\n";
     }
 
@@ -3156,6 +3180,20 @@ std::string Emitter::main_cpp() {
     t << "    if (!f) return false;\n";
     t << "    out.assign(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());\n";
     t << "    return true;\n";
+    t << "}\n\n";
+
+    t << "// A time in seconds, written `0.01`, `10ms` or `10 (ms)`; negative if it is not one.\n";
+    t << "static double read_time(const std::string& text) {\n";
+    t << "    char* end = nullptr;\n";
+    t << "    const double v = std::strtod(text.c_str(), &end);\n";
+    t << "    if (end == text.c_str()) return -1.0;\n";
+    t << "    std::string unit;\n";
+    t << "    for (; *end; ++end)\n";
+    t << "        if (*end != ' ' && *end != '(' && *end != ')') unit += *end;\n";
+    t << "    if (unit.empty() || unit == \"s\") return v;\n";
+    t << "    if (unit == \"ms\") return v * 1e-3;\n";
+    t << "    if (unit == \"us\") return v * 1e-6;\n";
+    t << "    return -1.0;\n";
     t << "}\n\n";
 
     t << "int main(int argc, char** argv) {\n";
@@ -3179,6 +3217,8 @@ std::string Emitter::main_cpp() {
     t << "    //    A settings source reaches any setting or initial condition by path,\n";
     t << "    //    and here it comes from the command line (section 14.1).\n";
     t << "    bool dump = false;\n";
+    t << "    bool realtime = false;     // --realtime: keep pace with wall time\n";
+    t << "    std::uint64_t frame = 1;   // ticks between sync_realtime() calls\n";
     t << "    for (int i = 1; i < argc; ++i) {\n";
     t << "        const std::string arg = argv[i];\n";
     t << "        std::string text;\n";
@@ -3195,6 +3235,19 @@ std::string Emitter::main_cpp() {
     t << "            if (text.empty() || text.back() != ';') text += ';';\n";
     t << "        } else if (arg == \"--dump-settings\") {\n";
     t << "            dump = true;\n";
+    t << "            continue;\n";
+    t << "        } else if (arg == \"--realtime\" && i + 1 < argc) {\n";
+    t << "            const double sync = read_time(argv[++i]);\n";
+    t << "            const double n = std::round(sync / " << sim_t << "::step_seconds);\n";
+    t << "            if (!(sync > 0.0) || n < 1.0 ||\n";
+    t << "                std::fabs(n * " << sim_t << "::step_seconds - sync) > 1e-9 * sync) {\n";
+    t << "                std::fprintf(stderr, \"" << who
+      << ": --realtime %s is not a whole number of %g s steps\\n\",\n";
+    t << "                             argv[i], " << sim_t << "::step_seconds);\n";
+    t << "                return 2;\n";
+    t << "            }\n";
+    t << "            realtime = true;\n";
+    t << "            frame = static_cast<std::uint64_t>(n);\n";
     t << "            continue;\n";
     t << "        } else {\n";
     t << "            std::fputs(usage, arg == \"--help\" ? stdout : stderr);\n";
@@ -3216,15 +3269,22 @@ std::string Emitter::main_cpp() {
     t << "        return sim.finish();\n";
     t << "    }\n\n";
 
+    t << "    // 3. Step. Flat out, or with --realtime, `frame` ticks at a time and then\n";
+    t << "    //    wait for the wall clock: tick() itself never waits.";
     if (!m_.boundary_in.empty()) {
         std::string names;
         for (const BoundaryIn& b : m_.boundary_in) names += (names.empty() ? "" : ", ") + b.ident;
-        t << "    // 3. Step. " << m_.name << ".sim has no way to drive the root inputs, so\n";
-        t << "    //    this run holds them at zero; a host of your own writes them before\n";
-        t << "    //    every tick().\n";
+        t << " " << m_.name << ".sim has\n";
+        t << "    //    no way to drive the root inputs, so this run holds them at zero; a\n";
+        t << "    //    host of your own writes them before every tick().\n";
         t << "    std::fprintf(stderr, \"" << who << ": nothing drives the root inputs, \"\n";
         t << "                         \"so they stay at zero: " << names << "\\n\");\n";
-        t << "    while (!sim.done()) {\n";
+    } else {
+        t << "\n";
+    }
+    t << "    while (!sim.done()) {\n";
+    t << "        for (std::uint64_t k = 0; k < frame && !sim.done(); ++k) {\n";
+    if (!m_.boundary_in.empty()) {
         auto zero = [](const Type& ty) {
             return (ty.is_record ? std::string("{}") : literal(0.0, ty.scalar, ty.enm)) + ";";
         };
@@ -3234,19 +3294,18 @@ std::string Emitter::main_cpp() {
             wz = std::max(wz, zero(b.type).size());
         }
         for (const BoundaryIn& b : m_.boundary_in)
-            t << "        sim.inputs()." << pad(b.ident, w) << " = " << pad(zero(b.type), wz)
+            t << "            sim.inputs()." << pad(b.ident, w) << " = " << pad(zero(b.type), wz)
               << "   // " << type_label(b.type) << "\n";
-    } else {
-        t << "    // 3. Step.\n";
-        t << "    while (!sim.done()) {\n";
     }
-    t << "        sim.tick();\n";
+    t << "            sim.tick();\n";
     if (!m_.root_outputs.empty()) {
         std::string names;
         for (const RootOutput& r : m_.root_outputs) names += (names.empty() ? "" : ", ") + r.name;
-        t << "        // sim.outputs() now holds " << names << "\n";
-        t << "        // at the instant this tick() sampled.\n";
+        t << "            // sim.outputs() now holds " << names << "\n";
+        t << "            // at the instant this tick() sampled.\n";
     }
+    t << "        }\n";
+    t << "        if (realtime) sim.sync_realtime();\n";
     t << "    }\n\n";
     t << "    // 4. Finish: every node's final(), then the recording and the log close.\n";
     t << "    //    0 for a clean run; 1 if it was aborted, failed, or broke a contract.\n";

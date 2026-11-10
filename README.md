@@ -48,8 +48,9 @@ and the node code written directly in C++.
   elaboration, scheduling and emission. Given a `.sim` file it writes C++20 that
   compiles warning-free at `/W4` and runs.
 - The language has units, records, composites, flow-down settings, continuous
-  and discrete states, array states, real-time pacing,
-  CSV recording, logging, contracts, and node-level unit tests.
+  and discrete states, array states, CSV recording, logging, contracts, and
+  node-level unit tests. A generated model keeps pace with wall time when its
+  host asks it to.
 - A standard library of about 60 nodes: math, kinematics, filters and signal
   sources.
 - Two worked examples: a small drivetrain, and a classical motion-cueing
@@ -154,8 +155,6 @@ sim Drivetrain {
     step:     1 (ms);
     solver:   rk4;
     duration: 5 (s);
-    mode:     realtime;
-    sync:     10 (ms);
 
     record: {
         file:  "drivetrain.csv";
@@ -210,8 +209,16 @@ Visual Studio by itself, so this step works from any PowerShell:
 .\out\drivetrain\build.ps1 run
 ```
 
-The run takes about 5 seconds, because the example runs in real time. It
-writes `drivetrain.csv` and `drivetrain.log` into `out\drivetrain\`. Read
+The run is a batch run and finishes at once. To watch the same run keep pace
+with the wall clock, waiting every 10 ms of model time, pass `--realtime`
+through to it:
+
+```powershell
+.\out\drivetrain\build.ps1 run --realtime "10 (ms)"
+```
+
+That takes 5 seconds. Either way it writes `drivetrain.csv` and `drivetrain.log`
+into `out\drivetrain\`. Read
 `out\drivetrain\Drivetrain.hpp` and `out\drivetrain\main.cpp` to see what a
 generated model looks like from outside.
 

@@ -12,7 +12,7 @@ error[SE0261]: unknown `sim` entry `duratoin`
 7 |     duratoin: 10 (s);
   |     ^^^^^^^^
   = help: did you mean `duration`?
-  = note: the entries are root, step, solver, duration, mode, sync, window, settings, record, log (§13.1)
+  = note: the entries are root, step, solver, duration, settings, record, log (§13.1)
 
 error[SE0261]: unknown `record` key `evrey`
   --> tests/err/dup_entry.sim:12:9

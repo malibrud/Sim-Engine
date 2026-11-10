@@ -71,9 +71,15 @@ const std::vector<const char*>& platform_atoms() {
 }
 
 const std::vector<const char*>& sim_keys() {
-    static const std::vector<const char*> v = {"root",   "step",   "solver", "duration",
-                                               "mode",   "sync",   "window", "settings",
-                                               "record", "log"};
+    static const std::vector<const char*> v = {"root",     "step",   "solver", "duration",
+                                               "settings", "record", "log"};
+    return v;
+}
+
+// §9.4 — entries earlier versions had. Pacing is the host's now, and an old
+// `.sim` is told so rather than offered a did-you-mean.
+const std::vector<const char*>& removed_sim_keys() {
+    static const std::vector<const char*> v = {"mode", "sync", "window"};
     return v;
 }
 
@@ -2596,13 +2602,21 @@ bool Parser::parse_sim_entry(ast::SimFile& out) {
         }
     }
 
-    // Unknown keys still parse (§17), so the diagnostic can be a good one.
-    if (!contains(sim_keys(), e.key)) {
+    // Unknown and removed keys still parse (§17), so the diagnostic can be a
+    // good one.
+    if (contains(removed_sim_keys(), e.key)) {
+        err("SE0265", e.key_loc, "the `" + e.key + "` entry was removed", "not a `sim` entry",
+            {note("real-time pacing is the host's, not the sim file's: `tick()` never "
+                  "waits, and a host keeps pace by calling `sync_realtime()` "
+                  "(\xc2\xa7""9.4)"),
+             help("delete it; the generated exe takes `--realtime SYNC`, as "
+                  "`--realtime \"10 (ms)\"`")});
+    } else if (!contains(sim_keys(), e.key)) {
         std::vector<Attachment> att;
         const std::string did = closest(e.key, sim_keys());
         if (!did.empty()) att.push_back(help("did you mean `" + did + "`?"));
-        att.push_back(note("the entries are root, step, solver, duration, mode, sync, "
-                           "window, settings, record, log (\xc2\xa7""13.1)"));
+        att.push_back(note("the entries are root, step, solver, duration, settings, "
+                           "record, log (\xc2\xa7""13.1)"));
         err("SE0261", e.key_loc, "unknown `sim` entry `" + e.key + "`", "", std::move(att));
     }
 
@@ -2644,7 +2658,7 @@ bool Parser::parse_sim_entry(ast::SimFile& out) {
         e.text = tok_.text;
         advance();
     } else if (tok_.is_word() && peek().kind == Tok::Semi) {
-        // A bare word value: `solver: rk4;`, `mode: realtime;`.
+        // A bare word value: `solver: rk4;`.
         e.kind = ast::SimEntry::Kind::Word;
         e.word = tok_.text;
         advance();

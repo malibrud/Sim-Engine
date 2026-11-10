@@ -14,6 +14,9 @@
 //    4. A Sim runs once, and a run's state is the model's own: a fresh Sim
 //       runs after a finished one, and of two models side by side, stopping
 //       one or breaking its contract leaves the other untouched.
+//    5. Pacing is the host's (§9.4): tick() never waits, sync_realtime()
+//       waits for the wall to reach time() counting from the first tick, a
+//       late call is caught up, and realtime_stats() reports all of it.
 //
 //  3 is about Sim::Impl, which the public header leaves incomplete, so
 //  this program #includes Drivetrain.cpp and is compiled on its own: the white
@@ -28,11 +31,13 @@
 // ─────────────────────────────────────────────────────────────────────────────
 #include "Drivetrain.cpp"
 
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <memory>
 #include <string>
+#include <thread>
 
 namespace {
 
@@ -42,6 +47,12 @@ void check(bool ok, const char* what) {
     if (ok) return;
     std::fprintf(stderr, "host: FAIL %s\n", what);
     ++failures;
+}
+
+using wall = std::chrono::steady_clock;
+
+double seconds_since(wall::time_point t0) {
+    return std::chrono::duration<double>(wall::now() - t0).count();
 }
 
 // The boundary the main section drives, for a whole run on a fresh Sim.
@@ -101,6 +112,7 @@ int main() {
     // ── the public interface, exactly as a host sees it ──────────────────────
     //  Units are the header's: axle_torque in N*m, ground_speed in m/s.
     drivetrain::Sim sim;
+    const wall::time_point run_began = wall::now();
     check(sim.settings().wheel_inertia == 0.95, "settings() start at the .sim's values");
     check(sim.init(), "init() starts the run");
     check(sim.time() == 0.0, "time starts at zero");
@@ -126,6 +138,15 @@ int main() {
         }
     }
     check(sim.finish() == 0, "a clean run finishes with 0");
+    // Generous on purpose: the point is that tick() did not spin, not how fast
+    // this machine is. A 5 s model that waited on the wall would take 5 s.
+    check(seconds_since(run_began) < 2.5, "tick() never waits on the wall clock");
+    {
+        const drivetrain::Sim::RealtimeStats st = sim.realtime_stats();
+        check(st.frames == 0 && st.overruns == 0 && st.utilization == 0.0 &&
+                  st.overrun_pct == 0.0 && st.lag == 0.0,
+              "a run that never called sync_realtime() reports no pacing");
+    }
 
     check(clock_slips == 0, "time() is the instant the next tick() samples");
     check(changes_total > 0, "the traction controller actually did something");
@@ -166,9 +187,6 @@ int main() {
         auto p = std::make_unique<drivetrain::Sim::Impl>();
         auto q = std::make_unique<drivetrain::Sim::Impl>();
         check(p->start() && q->start(), "two models start side by side");
-        // Drivetrain.sim syncs to wall time; these two need not spin through it.
-        p->se_run_.realtime.configure(0.0, 0.0);
-        q->se_run_.realtime.configure(0.0, 0.0);
 
         const se_rt::Level before = q->se_run_.log.level_for("whl");
         const se_rt::Level other =
@@ -200,6 +218,52 @@ int main() {
         q->finish();
         check(p->exit_code() == 1, "the model with a broken contract fails");
         check(q->exit_code() == 0, "and the other finishes clean");
+    }
+
+    // ── pacing is the host's (§9.4, §13.6) ───────────────────────────────────
+    {
+        const double step = drivetrain::Sim::step_seconds;
+        drivetrain::Sim s;
+        check(s.init(), "a Sim to pace starts");
+
+        // The anchor is the first tick, not init(): this delay is not lateness.
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        const wall::time_point t0 = wall::now();
+        for (int k = 0; k < 20; ++k) s.tick();
+        s.sync_realtime();
+        // The anchor is taken inside the first tick, after t0, so the wait
+        // covers at least 20 steps (less a clock tick of rounding).
+        check(seconds_since(t0) >= 20 * step - 1e-6,
+              "20 ticks then sync_realtime() take 20 steps of wall time");
+        drivetrain::Sim::RealtimeStats st = s.realtime_stats();
+        check(st.frames == 1, "one sync_realtime() is one frame");
+        check(st.overruns == 0 && st.lag == 0.0,
+              "a delay between init() and the first tick() is not an overrun");
+        s.sync_realtime();
+        check(s.realtime_stats().frames == 1, "a call with no tick since the last does nothing");
+
+        // A stall well past one frame: the next call finds the wall ahead.
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        for (int k = 0; k < 10; ++k) s.tick();
+        s.sync_realtime();
+        st = s.realtime_stats();
+        check(st.overruns == 1, "a call that finds the wall ahead is an overrun");
+        check(st.lag > 0.05, "and reports how far ahead the wall is");
+        check(st.overrun_pct > 0.0, "and shows in the overrun rate");
+
+        // It catches up: frames run without waiting until the lag is gone.
+        int calls = 0;
+        while (s.realtime_stats().lag > 0.0 && !s.done() && calls < 400) {
+            for (int k = 0; k < 10 && !s.done(); ++k) s.tick();
+            s.sync_realtime();
+            ++calls;
+        }
+        check(s.realtime_stats().lag == 0.0, "the model catches up with the wall");
+        check(s.realtime_stats().overruns > 1,
+              "and the calls that caught up were late, not waited on");
+        check(std::fabs(seconds_since(t0) - s.time()) < 0.05,
+              "once caught up, wall time since the first tick matches time()");
+        check(s.finish() == 0, "a paced run finishes clean");
     }
 
     if (failures == 0) std::printf("host: all checks passed\n");

@@ -1,7 +1,7 @@
 package frames;
 
-// A minimal real-time model, existing only so the `sync` / `window` frame
-// arithmetic of §13.6 has something to be checked against.
+// A minimal model, existing only so a `.sim` with the entries §9.4 removed
+// (`mode`, `sync`, `window`) has something to name as its root.
 node Frames {
     settings {
         gain: double(-) = 1.0;

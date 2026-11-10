@@ -3680,8 +3680,9 @@ model, and the model would stop being the thing under test.
 
 Each entry may appear at most once (`SE0260`). Whether a run keeps pace with wall
 time is not an entry: it is the host's choice (§9.4), and the `mode`, `sync` and
-`window` entries of earlier versions are rejected as removed (`SE0265`). Block-valued entries (`record:`,
-`log:`) take **no trailing semicolon**; scalar entries require one.
+`window` entries of earlier versions are rejected as removed (`SE0265`).
+Block-valued entries (`record:`, `log:`) take **no trailing semicolon**; scalar
+entries require one.
 
 The `root` entry is what makes a model runnable: it names the single top-level
 node to instantiate, and may bind its settings exactly as an instance in a

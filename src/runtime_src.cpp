@@ -37,11 +37,11 @@ const char kRuntime[] =
 //      log.*          section 10.1 — qualitative, observational
 //      sim.stop/abort section 10.2 — the only way a run ends early
 //      the recorder   section 13.5 — quantitative, an aligned numeric table
-//      the frame      section 9.4  — free-run the batch, then spin
+//      pacing         section 9.4  — wait for the wall, when the host asks
 //      settings       section 14.1 — units, and reading and dumping a source
 //
 //  None of it is a process global. Everything a run accumulates (the clock,
-//  the stop flag, the contract registry, the frame, the log) lives in one
+//  the stop flag, the contract registry, the pacing, the log) lives in one
 //  `Run` per model, so a program can run a model again, or run several, and
 //  no two runs see each other.
 //
@@ -676,73 +676,79 @@ private:
     std::uint64_t rows_ = 0;
 };
 
-// ─── The real-time frame (section 9.4, section 13.6) ─────────────────────────
+// ─── Real-time pacing (section 9.4, section 13.6) ────────────────────────────
 //
-// Two-clock: free-run every base step in the frame as fast as it can, then
-// busy-wait on the high-resolution timer until the frame boundary. An overrun
-// starts the next batch immediately with no spin, so SIM TIME DRIFTS BEHIND
-// WALL TIME. Every base step always runs — dropping one would punch a hole in
-// a fixed-step integration, and drift is the honest failure mode.
+// The host paces, not the model. tick() never waits; a host that wants to keep
+// up with wall time calls sync() between ticks, passing time(), the instant the
+// next tick samples. sync() busy-waits on the high-resolution timer until the
+// wall time since the FIRST TICK (anchor()) equals that instant.
 //
-// Overrun is INSTRUMENTED, NOT POLICED: there is no abort escalation here.
+// A call that finds the wall already past it returns at once, and so do the
+// calls after it until the model is level again: the model CATCHES UP, with no
+// limit, and every base step still runs. Dropping steps to keep pace would
+// punch a hole in a fixed-step integration; catching up is only late.
+//
+// Overrun is INSTRUMENTED, NOT POLICED: there is no abort escalation here. The
+// metrics average the calls in the last second of model time, so they mean the
+// same thing whatever number of ticks the host puts between calls.
 
 class Realtime {
 public:
     using clock = std::chrono::steady_clock;
+    static constexpr double window_seconds = 1.0;   // of model time (section 13.6)
 
-    void configure(double frame_seconds, double window_seconds) {
-        frame_ = frame_seconds;
-        enabled_ = frame_seconds > 0.0;
-        std::size_t n = 1;
-        if (enabled_ && window_seconds > 0.0)
-            n = static_cast<std::size_t>(window_seconds / frame_seconds + 0.5);
-        window_frames_ = n < 1 ? 1 : n;
-        deadline_ = clock::now();
+    // The first tick: what every later sync() measures from.
+    void anchor() {
+        start_ = last_ = clock::now();
+        anchored_ = true;
     }
 
-    void start() { deadline_ = clock::now(); }
-
-    void frame_boundary() {
-        if (!enabled_) return;
+    void sync(double sim_time) {
+        if (!anchored_ || sim_time <= last_sim_) return;   // no tick since the last call
         const clock::time_point target =
-            deadline_ + std::chrono::duration_cast<clock::duration>(
-                            std::chrono::duration<double>(frame_));
-        const clock::time_point done = clock::now();
-        const double compute = std::chrono::duration<double>(done - deadline_).count();
-        const bool overran = done > target;
+            start_ + std::chrono::duration_cast<clock::duration>(
+                         std::chrono::duration<double>(sim_time));
+        const clock::time_point now = clock::now();
+        const double compute = std::chrono::duration<double>(now - last_).count();
+        const bool overran = now > target;
+        lag_ = overran ? std::chrono::duration<double>(now - target).count() : 0.0;
+
+        window_.push_back({sim_time, compute / (sim_time - last_sim_) * 100.0, overran});
+        while (window_.front().sim_time <= sim_time - window_seconds) window_.pop_front();
+        ++frames_;
+        if (overran) ++overruns_;
+        last_sim_ = sim_time;
 
         if (!overran) {
             while (clock::now() < target) {
             }
-            deadline_ = target;
-        } else {
-            deadline_ = done;   // no spin; sim time falls behind wall time
         }
-
-        window_.push_back({compute / frame_ * 100.0, overran});
-        if (window_.size() > window_frames_) window_.pop_front();
-        ++frames_;
-        if (overran) ++overruns_;
+        last_ = clock::now();
     }
 
     double utilization() const {
         if (window_.empty()) return 0.0;
         double sum = 0.0;
-        for (const auto& f : window_) sum += f.first;
+        for (const Call& c : window_) sum += c.utilization;
         return sum / static_cast<double>(window_.size());
     }
 
     double overrun_pct() const {
         if (window_.empty()) return 0.0;
         std::size_t n = 0;
-        for (const auto& f : window_)
-            if (f.second) ++n;
+        for (const Call& c : window_)
+            if (c.overran) ++n;
         return 100.0 * static_cast<double>(n) / static_cast<double>(window_.size());
     }
 
-    // The whole-run cumulative summary, free off the same counters.
+    double        lag() const { return lag_; }             // s the wall was ahead, last call
+    std::uint64_t frames() const { return frames_; }       // sync() calls, the whole run
+    std::uint64_t overruns() const { return overruns_; }   // of which overran
+
+    // The whole-run cumulative summary, free off the same counters. Silent
+    // when the host never paced the run.
     void summary() const {
-        if (!enabled_ || frames_ == 0) return;
+        if (frames_ == 0) return;
         std::fprintf(stderr,
                      "realtime: %llu frames, %llu overran (%.2f%% of the run)\n",
                      static_cast<unsigned long long>(frames_),
@@ -752,13 +758,19 @@ public:
     }
 
 private:
-    bool enabled_ = false;
-    double frame_ = 0.0;
-    std::size_t window_frames_ = 1;
-    std::deque<std::pair<double, bool>> window_;
+    struct Call {
+        double sim_time;      // s, the instant the call caught up to
+        double utilization;   // % of the model time it covered, spent computing
+        bool   overran;
+    };
+    bool anchored_ = false;
+    clock::time_point start_;
+    clock::time_point last_;   // when the previous call returned
+    double last_sim_ = 0.0;
+    double lag_ = 0.0;
+    std::deque<Call> window_;
     std::uint64_t frames_ = 0;
     std::uint64_t overruns_ = 0;
-    clock::time_point deadline_;
 };
 
 )SERT"
@@ -768,7 +780,7 @@ private:
 // leaf points at. Nothing here is a process global, which is the whole point:
 // a finished run leaves nothing behind for the next `Sim`, and two models in
 // one program have two of these and cannot see each other's stop flag,
-// contracts, frame or log.
+// contracts, pacing or log.
 //
 // A leaf holds `Run* const`, not a const pointer, because a contract check in
 // a pure method records into `checks`. The pointer is what makes that legal;
@@ -778,7 +790,7 @@ struct Run {
     RunState clock;              // section 10.5 — what `sim.time()` reads
     Control  control;            // section 10.2 — how the run ends, first writer wins
     Checks   checks;             // section 10.6 — every violated contract
-    Realtime realtime;           // section 9.4  — the frame, when the .sim syncs
+    Realtime realtime;           // section 9.4  — pacing, when the host syncs
     LogSink  log;                // section 13.7 — this model's file and levels
     double   log_time = 0.0;     // the tick instant a record is stamped with
 };

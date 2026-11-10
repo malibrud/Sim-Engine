@@ -902,21 +902,13 @@ bool Elaborator::load_settings_file(const std::string& path, const Source& from,
 }
 
 bool Elaborator::read_sim_entries(const ast::SimFile& sim, const Source& src, Model& m) {
-    bool have_step = false, have_duration = false, have_root = false, have_sync = false;
-    bool have_window = false;
-    Loc sync_loc, window_loc;
+    bool have_step = false, have_duration = false, have_root = false;
 
     for (const ast::SimEntry& e : sim.entries) {
         if (e.key == "step") have_step = time_value(e.value.get(), src, "step", m.step);
         else if (e.key == "duration")
             have_duration = time_value(e.value.get(), src, "duration", m.duration);
-        else if (e.key == "sync") {
-            have_sync = time_value(e.value.get(), src, "sync", m.sync);
-            sync_loc = e.loc;
-        } else if (e.key == "window") {
-            have_window = time_value(e.value.get(), src, "window", m.window);
-            window_loc = e.loc;
-        } else if (e.key == "root")
+        else if (e.key == "root")
             have_root = true;
         else if (e.key == "solver") {
             m.solver = e.word;
@@ -925,11 +917,6 @@ bool Elaborator::read_sim_entries(const ast::SimFile& sim, const Source& src, Mo
                             "not a solver",
                             {note("the solver is global, not per-node: `euler`, `rk2` "
                                   "or `rk4` (§9.5)")});
-        } else if (e.key == "mode") {
-            if (e.word == "realtime") m.realtime = true;
-            else if (e.word != "batch")
-                diag_.error("SE0264", src, e.loc, "unknown mode `" + e.word + "`",
-                            "not a mode", {note("`batch` or `realtime` (§13.1)")});
         }
     }
 
@@ -943,60 +930,6 @@ bool Elaborator::read_sim_entries(const ast::SimFile& sim, const Source& src, Mo
         diag_.error("SE0262", src, sim.loc, "`sim` has no `duration:` entry",
                     "required here");
 
-    if (m.realtime && !have_sync)
-        diag_.error("SE0262", src, sim.loc, "`mode: realtime` requires a `sync:` entry",
-                    "required here",
-                    {note("the frame is the third integer quantity alongside the base "
-                          "step (§9.4)")});
-    if (!m.realtime && have_sync)
-        diag_.error("SE0263", src, sync_loc, "`sync:` requires `mode: realtime`",
-                    "no frame to synchronise to");
-
-    // §13.6 — `window` scales real-time instrumentation and nothing else, so in
-    // a batch run it would be read and then ignored. Saying so beats leaving a
-    // recorded `sim.utilization` column of zeros to be puzzled over.
-    if (!m.realtime && have_window)
-        diag_.error("SE0263", src, window_loc, "`window:` requires `mode: realtime`",
-                    "no frames to average over",
-                    {note("`window` sets the rolling window for `sim.utilization` and "
-                          "`sim.overrun_pct`, which only exist in real time (§13.6)"),
-                     note("a batch run has no frame boundaries, so both metrics would "
-                          "record as zero")});
-
-    if (have_sync && have_step && m.step > 0.0) {
-        const double ratio = m.sync / m.step;
-        const double r = std::floor(ratio + 0.5);
-        if (std::fabs(ratio - r) > 1e-9 || r < 1.0) {
-            diag_.error("SE0451", src, sync_loc,
-                        "`sync` is not an integer multiple of `step`",
-                        "sync/step = " + std::to_string(ratio),
-                        {note("the frame free-runs a whole number of base steps, then "
-                              "spins to the boundary (§9.4)")});
-        } else {
-            m.sync_steps = static_cast<long>(r);
-        }
-    }
-
-    // §13.6 — the window is a whole number of frames, and rounding to one is
-    // honest. Rounding to ZERO is not: the metrics would then report the latest
-    // frame rather than a rolling average, which is a different quantity
-    // wearing the same name.
-    if (have_sync && have_window && m.sync > 0.0) {
-        const double frames = m.window / m.sync;
-        if (frames < 0.5) {
-            char buf[96];
-            std::snprintf(buf, sizeof buf, "window/sync = %g, which rounds to %ld frames",
-                          frames, static_cast<long>(std::floor(frames + 0.5)));
-            diag_.error("SE0264", src, window_loc,
-                        "`window` is shorter than one `sync` frame", buf,
-                        {note("the metrics are averaged over whole frames, so a window "
-                              "this short would report the latest frame, not a rolling "
-                              "average (§13.6)"),
-                         note("the window also sets the resolution of `sim.overrun_pct`: "
-                              "N frames means steps of 100/N percent"),
-                         help("`window` must be at least `sync`")});
-        }
-    }
     // §10.4 — what every node's `sample_rate` reads.
     base_rate_ = m.step > 0.0 ? 1.0 / m.step : 0.0;
     return have_root && have_step && have_duration;
