@@ -107,8 +107,9 @@ column in §16.4 gives the detecting stage.
   recomputed (§6.2). Elaboration decides what *may* be configured;
   configuration decides what it *is*.
 - **Base step** — the global fixed time step. **Tick** — one base step.
-- **Frame** — the real-time synchronisation interval (`sync`), an integer
-  multiple of the base step.
+- **Frame** — the ticks a host runs between two `sync_realtime()` calls when it
+  paces a run against wall time (§9.4). The host chooses it; the model does not
+  know it.
 - **Sample instant** — a tick on which a given node is active.
 
 ---
@@ -382,9 +383,9 @@ includes:
 
 - the build primitives `link`, `include_dir`, `define`, `cflag`, the tag keyword
   `when`, and the platform atoms — contextual inside `build`;
-- every sim-file key (`root`, `step`, `solver`, `duration`, `mode`, `sync`,
-  `window`, `record`, `log`, `file`, `every`, `signals`, `level`, `levels`) —
-  contextual inside `sim`;
+- every sim-file key (`root`, `step`, `solver`, `duration`, `settings`,
+  `record`, `log`, `file`, `every`, `signals`, `level`, `levels`) — contextual
+  inside `sim`;
 - annotation names and their keys (`diagram`, `collapsed`, `expanded`) —
   recognised only after an `@` (§6.15);
 - the type name `buffer` — recognised as a one-segment type, as the scalar
@@ -3043,31 +3044,51 @@ output()  { out.cmd = state.cmd; }
 output(err)  { out.cmd = param.kp * in.err; }
 ```
 
-### 9.4 The real-time frame
+### 9.4 Real-time pacing
 
-Real-time execution introduces a **second integer quantity** alongside the base
-step:
+**Pacing belongs to the host, not to the model.** `tick()` computes one base step
+and returns; it never waits. A host that wants the model to keep pace with wall
+time ticks it some number of times and then calls `sync_realtime()`:
 
+```cpp
+while (!sim.done()) {
+    for (int k = 0; k < 10 && !sim.done(); ++k) sim.tick();   // 10 ms of model time
+    sim.sync_realtime();                                       // wait for the wall
+}
 ```
-step: 1 (ms);
-sync: 10 (ms);     // must be an integer multiple of step
-```
 
-The execution model is two-clock: a dedicated thread **free-runs every base step
-in the frame as fast as it can, then busy-waits on the high-resolution timer**
-until the frame boundary. At 1 ms `step` and 10 ms `sync`, that is ten steps flat
+`sync_realtime()` busy-waits on the high-resolution timer until the wall time
+since the **first `tick()`** equals `time()`, the instant the next tick will
+sample. How many ticks go between calls is the host's choice, and need not be
+the same every time. At 1 ms `step` and ten ticks a call, that is ten steps flat
 out, then spin.
 
-- `sync` not being an integer multiple of `step` is an elaboration error
-  (`SE0451`).
-- An **overrun** is a batch that missed its frame boundary. The next batch then
-  starts immediately with no spin, so **sim time drifts behind wall time**.
+- **The anchor is the first tick, not `init()`.** A host that does slow work
+  between `init()` and its loop does not start the run behind.
+- An **overrun** is a call that finds wall time already past `time()`: the ticks
+  since the last call took longer than the model time they covered. It returns
+  without waiting, and so do the calls after it until the model is level with
+  the wall again. **The model catches up**; it does not drift.
+- **Catching up has no limit.** A stall of any length — a breakpoint, a host that
+  stopped ticking — is followed by ticks run flat out until the lost time is
+  made good. There is no call to move the anchor; one is additive if a host
+  that pauses on purpose ever needs it.
 - **Every base step always runs.** Dropping steps to catch up was rejected: it
   would punch a hole in a fixed-step integration, advancing state by one `dt`
-  while wall time advanced by several. Drift is the honest failure mode; a
-  corrupted trajectory is not.
-- **Overrun is instrumented, not policed** — no abort escalation and no policy
-  key. See §13.6 for the metrics.
+  while wall time advanced by several. Catching up is late; a corrupted
+  trajectory is wrong.
+- **Overrun is instrumented, not policed** — no abort escalation and no policy.
+  See §13.6 for the metrics.
+
+**Why not in the sim file.** Earlier versions put `mode: realtime`, `sync` and
+`window` in the `.sim`, and the generated `tick()` waited at every frame
+boundary. A host could then not run a real-time model flat out — in a test, say
+— without editing the experiment, nor pace a batch one, nor choose its own
+frame. Whether a run keeps pace with the wall is a property of how it is run,
+not of the model or the experiment, so it moved to the host. The three keys
+are now an error (`SE0265`) rather than unknown entries, so an old `.sim`
+says what happened to them. The emitted example host takes the frame from its
+command line as `--realtime SYNC` (§12.4).
 
 ### 9.5 The solver
 
@@ -3109,8 +3130,9 @@ One base tick at index *k*, normatively:
    it published in step 2, which is what makes the hold a hold, and `sim.time()`
    moves for the others alone (§10.5). `derivative()` runs at every stage on every
    node that has one, held or not.
-8. If `mode: realtime` and this tick closes a frame, spin to the frame boundary
-   and update the metrics.
+
+A tick never waits on wall time. Keeping pace is a separate call the host makes
+between ticks (§9.4).
 
 Two properties are load-bearing, and both come from moving state last.
 
@@ -3563,7 +3585,9 @@ external build tool:
     outputs as typed structs (with the record types they use), and the calls a
     host makes in order — `settings()` / `load_settings()` /
     `dump_settings()` (§14.1), `init()`, `inputs()` / `tick()` / `outputs()` /
-    `done()`, `finish()`. The model itself is `Sim::Impl`,
+    `done()`, `finish()` — and, for a host that paces its run against wall
+    time, `sync_realtime()` and `realtime_stats()` (§9.4, §13.6). `tick()`
+    never waits. The model itself is `Sim::Impl`,
     incomplete in the header, so a host depends on no layout it cannot see.
     A `Sim` runs once: a second `init()` is refused, and a fresh `Sim` is how
     a host runs again. Nothing outlives a `Sim`, so a program may run a model
@@ -3574,8 +3598,10 @@ external build tool:
     model's flat call sequence is compiled in one piece.
   - `main.cpp` is an example host that uses the header alone. It is what the
     `run` and `exe` modes build, and `--no-main` suppresses it. It takes a
-    settings source from its command line (§14.1), and `run` and `test` pass
-    any arguments after the script's own through to it.
+    settings source from its command line (§14.1). It runs flat out unless
+    given `--realtime SYNC`, a time that is a whole number of base steps, and
+    then calls `sync_realtime()` after every `SYNC` of ticks. `run` and `test`
+    pass any arguments after the script's own through to it.
 - **Two scripts, one set of modes.** `build.ps1` for Windows and `build.sh` for
   a POSIX shell. They differ in quoting and in how an exit code is read, and
   take the same modes: `run` (build the exe and run it as the `.sim`
@@ -3612,9 +3638,6 @@ sim Demo {
     step:     1 (ms);
     solver:   rk4;
     duration: 10 (s);
-    mode:     realtime;
-    sync:     10 (ms);
-    window:   1 (s);
 
     settings: "vehicle_heavy.settings";
 
@@ -3638,8 +3661,8 @@ sim Demo {
 }
 ```
 
-**Why separate from the model:** one model gets run many ways — 1 ms real-time on
-target versus 0.1 ms batch offline, a 10-second manoeuvre versus a 10-minute soak.
+**Why separate from the model:** one model gets run many ways — 1 ms on target
+versus 0.1 ms offline, a 10-second manoeuvre versus a 10-minute soak.
 If configuration lived in the node, swapping experiments would mean editing the
 model, and the model would stop being the thing under test.
 
@@ -3651,14 +3674,13 @@ model, and the model would stop being the thing under test.
 | `step:` | time expression | required |
 | `solver:` | `euler` · `rk2` · `rk4` | `rk4` |
 | `duration:` | time expression | required |
-| `mode:` | `batch` · `realtime` | `batch` |
-| `sync:` | time expression, an integer multiple of `step` | required iff `realtime` |
-| `window:` | time expression, at least `sync`; `realtime` only | `1 (s)` |
 | `settings:` | string — a `.settings` path | none |
 | `record:` | block, §13.5 | no recording |
 | `log:` | block, §13.7 | console only |
 
-Each entry may appear at most once (`SE0260`). Block-valued entries (`record:`,
+Each entry may appear at most once (`SE0260`). Whether a run keeps pace with wall
+time is not an entry: it is the host's choice (§9.4), and the `mode`, `sync` and
+`window` entries of earlier versions are rejected as removed (`SE0265`). Block-valued entries (`record:`,
 `log:`) take **no trailing semicolon**; scalar entries require one.
 
 The `root` entry is what makes a model runnable: it names the single top-level
@@ -3846,31 +3868,32 @@ self-documenting in a CSV header, and `-` in the manifest either way:
 
 | Metric | Meaning |
 |---|---|
-| `sim.overrun_pct` | Percentage of frames that overran. **A rate, not a count.** |
-| `sim.utilization` | Percentage of the frame spent computing rather than spinning. |
+| `sim.overrun_pct` | Percentage of `sync_realtime()` calls that overran (§9.4). **A rate, not a count.** |
+| `sim.utilization` | Time spent computing, as a percentage of the model time those ticks covered. |
 
-- Both are computed over a **rolling window** (`window:`, default 1 s), not
-  cumulatively. A since-start percentage is a lagging indicator: a fault starting
-  twenty minutes into a run is buried under a long clean history — exactly the
-  case a live value must catch. The window sets resolution: 10 ms frames over 1 s
-  is 100 frames, so 1% steps.
-- The window is **a whole number of frames**, `round(window / sync)`. Rounding is
-  the honest behaviour — unlike `sync / step`, where §9.4 demands an exact
-  multiple because sample instants have to land — but rounding to *zero* is not:
-  the metrics would then report the latest frame rather than a rolling average,
-  which is a different quantity under the same name. A `window` shorter than one
-  frame is therefore an error (`SE0264`), not a silent collapse to one frame.
-- `window:` only means anything in real time, so giving it under `mode: batch` is
-  an error (`SE0263`) rather than a value that is read and ignored. Recording
-  `sim.*` in a batch run would otherwise produce a column of zeros with nothing
-  said.
+- **`sync_realtime()` measures them**, because it is the only place the engine
+  meets the wall clock. A run whose host never calls it — any batch run — reads
+  zero in both. That is said here rather than diagnosed, because whether a host
+  paces its run is no longer anything the sim file knows (§9.4).
+- Both are computed over a **rolling window of the last second of model time**,
+  not cumulatively. A since-start percentage is a lagging indicator: a fault
+  starting twenty minutes into a run is buried under a long clean history —
+  exactly the case a live value must catch. The window is counted in model time,
+  not in calls, so it means the same thing whatever number of ticks the host puts
+  between calls. At 10 ticks of 1 ms a call that is 100 calls, so 1% steps.
+- Utilization can exceed 100: a call that overran spent longer computing than
+  the model time it covered. Catching up does not inflate it, since a call that
+  returns without waiting has still only computed for as long as it computed.
 - **Both are recordable signals**, addressable as `sim.*` paths in `signals`, so
   they land in the CSV beside model signals. That is what identifies *which*
-  manoeuvre blows the timing budget, not merely that something did. Per-frame
-  values recorded at base rate are held, which §13.5's rule already covers at no
-  extra cost.
+  manoeuvre blows the timing budget, not merely that something did. Values
+  between calls are held, which §13.5's rule already covers at no extra cost.
+- **The host can read them too**, through `Sim::realtime_stats()`: the two
+  metrics, the whole-run frame and overrun counts, and the **lag** — how far wall
+  time was ahead of `time()` at the last call, zero when the model is keeping
+  pace. A host driving hardware watches its margin live without recording it.
 - A **whole-run cumulative summary** is emitted at teardown, free off the same
-  counters.
+  counters, when the host called `sync_realtime()` at all.
 
 ### 13.7 Logging
 
@@ -4181,7 +4204,7 @@ nothing but the verbatim body.
 `se_run_` points at a member of the enclosing `Sim`, not at a global. Everything
 a run accumulates lives there, in one `se_rt::Run` per model: the clock that
 `sim.time()` reads, the stop flag (§10.2), the contract registry (§10.6), the
-real-time frame (§9.4) and the log sink with its levels and timestamp (§13.7).
+real-time pacing (§9.4) and the log sink with its levels and timestamp (§13.7).
 The engine keeps no process-wide state at all. So two models in one process
 share none of it, a finished run leaves nothing behind for the next `Sim`, and
 the clock can be moved to a solver stage's instant without disturbing anything
@@ -4623,8 +4646,9 @@ of thing wearing the same name.
 | `SE0260` | 2 | Duplicate entry in `sim` |
 | `SE0261` | 2 | Unknown entry in `sim` |
 | `SE0262` | 2 | Missing required `sim` entry |
-| `SE0263` | 2 | `sync` or `window` requires `mode: realtime` |
-| `SE0264` | 4 | Bad value for a `sim` entry (solver, mode, log level, `window` shorter than one frame) |
+| `SE0263` | — | *Retired.* `sync` or `window` requires `mode: realtime` — the entries were removed with §9.4's host pacing. The number stays burned; codes are stable. |
+| `SE0264` | 4 | Bad value for a `sim` entry (solver, log level) |
+| `SE0265` | 2 | A removed `sim` entry (`mode`, `sync`, `window`): pacing is the host's (§9.4) |
 | `SE0270` | 2 | Duplicate entry in `tests` |
 | `SE0271` | 2 | Unknown entry in `tests` |
 | `SE0272` | 2 | `~=` with no `within`, or `=` with one |
@@ -4707,7 +4731,7 @@ of thing wearing the same name.
 | `SE0442` | 4 | Fan-in: two sources into one input |
 | `SE0443` | 4 | Wire direction is invalid |
 | `SE0445` | 4 | A buffer port on the root node |
-| `SE0451` | 4 | `sync` is not an integer multiple of `step` |
+| `SE0451` | — | *Retired.* `sync` is not an integer multiple of `step` — the frame is the host's now (§9.4). The number stays burned; codes are stable. |
 | `SE0460` | 4 | Override target is ambiguous, or is an output |
 | `SE0461` | 4 | Recorded signal path is ambiguous |
 | `SE0470` | 4 | A set reaches a rate-derived setting with no `step` |
@@ -5047,7 +5071,7 @@ Recorded so that their absence is visibly deliberate.
    modeller fixes with an explicit transform node, never a silent conversion.
    Deliberately unresolved; the standard library documents one convention (SAE)
    instead. **If it is ever taken up, do not call it `frame`** — that word is the
-   real-time `sync`/`window` machinery of §13.6. `basis` or `axes`.
+   host's real-time pacing of §9.4. `basis` or `axes`.
 5. **Platform atom vocabulary** (§12.2) — the exact set, and how extensible it is.
 6. **The fixed-step solver menu** (§9.5) beyond `euler`/`rk2`/`rk4`.
 7. **`name:` display metadata** — an optional human-readable label distinct from
