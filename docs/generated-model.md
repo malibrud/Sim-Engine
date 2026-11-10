@@ -48,6 +48,12 @@ return sim.finish();                      // finish
 
 `finish()` is owed even when `init()` returns false.
 
+A `Sim` runs once. A second `init()` on it returns false, and `error()` says so.
+To run again, construct a new `Sim`. Every piece of run state (the clock, the stop
+flag, contract failures, the real-time frame, the log) belongs to one `Sim`, so
+runs one after another start clean, and several `Sim`s in one process are
+independent.
+
 ## 2. How settings are finalized
 
 ### The layers

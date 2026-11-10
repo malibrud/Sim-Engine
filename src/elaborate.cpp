@@ -2393,8 +2393,8 @@ void Elaborator::resolve_record(const ast::RecordBlock& block, const Source& src
             Unit pct;
             lookup_unit_symbol("%", pct);
             s.unit = pct;
-            if (p.segs[1] == "utilization") s.expr = "se_rt::realtime().utilization()";
-            else if (p.segs[1] == "overrun_pct") s.expr = "se_rt::realtime().overrun_pct()";
+            if (p.segs[1] == "utilization") s.expr = "se_run_.realtime.utilization()";
+            else if (p.segs[1] == "overrun_pct") s.expr = "se_run_.realtime.overrun_pct()";
             else {
                 diag_.error("SE0304", src, p.loc, "unknown engine metric `" + path + "`",
                             "not a metric",

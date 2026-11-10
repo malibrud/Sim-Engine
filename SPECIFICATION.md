@@ -3565,6 +3565,9 @@ external build tool:
     `dump_settings()` (§14.1), `init()`, `inputs()` / `tick()` / `outputs()` /
     `done()`, `finish()`. The model itself is `Sim::Impl`,
     incomplete in the header, so a host depends on no layout it cannot see.
+    A `Sim` runs once: a second `init()` is refused, and a fresh `Sim` is how
+    a host runs again. Nothing outlives a `Sim`, so a program may run a model
+    any number of times, or several models side by side (§15.4).
   - `<name>.cpp` holds everything behind it: the engine runtime, the node
     classes, `Sim::Impl` and the schedule. It is ONE translation unit — the
     whole model — which keeps the unity-build property that matters: the
@@ -4157,11 +4160,11 @@ struct Wheel {
     const Param           param;          // set at construction; never writable
     const char* const     se_path_;
     const char* const     se_type_;
-    const se_rt::RunState* const se_run_;  // the enclosing Sim's clock (§10.5)
+    se_rt::Run* const     se_run_;        // the enclosing Sim's run (§10.5)
     State                 state;
     Var                   var{};
     const se_rt::RunView  sim{se_run_, se_path_, se_type_};   // reflection only
-    const se_rt::TraceLog log{se_path_};  // log.trace only (§10.1)
+    const se_rt::TraceLog log{se_run_, se_path_};  // log.trace only (§10.1)
 
     void init();                                              // mutating
     void derivative(const In_derivative& in, Der& der) const; // pure
@@ -4175,11 +4178,16 @@ trace-only `log` and the reflection-only `sim` are members, and everything else
 they may touch is already const through `this`, so between their braces there is
 nothing but the verbatim body.
 
-`se_run_` is a pointer to a member of the enclosing `Sim`, not a global. The
-engine keeps one global sim time for stamping log records, but what a body reads
-belongs to one model — so two models in one process do not share a clock, and
-the value can be moved to a solver stage's instant without disturbing anything
-else (§10.5).
+`se_run_` points at a member of the enclosing `Sim`, not at a global. Everything
+a run accumulates lives there, in one `se_rt::Run` per model: the clock that
+`sim.time()` reads, the stop flag (§10.2), the contract registry (§10.6), the
+real-time frame (§9.4) and the log sink with its levels and timestamp (§13.7).
+The engine keeps no process-wide state at all. So two models in one process
+share none of it, a finished run leaves nothing behind for the next `Sim`, and
+the clock can be moved to a solver stage's instant without disturbing anything
+else (§10.5). The pointer is not to const because a contract check in a pure
+method records into the registry. What a body may *call* is still decided by
+the handle it is given, as above.
 
 ### 15.5 The three blocks
 

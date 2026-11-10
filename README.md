@@ -66,9 +66,9 @@ and the node code written directly in C++.
 - **The generated interface is mid-redesign.** It is being built out in phases,
   listed under [Roadmap](#roadmap). Among the pieces that do not exist yet:
   choosing recorded signals at run time, and a C interface / DLL build.
-- **Run control is process-global.** A finished run cannot be restarted in the
-  same process, and two models in one process share a stop flag. This is the
-  next thing to be fixed.
+- **Two copies of one model running at once share a log file.** Each `Sim`
+  has its own run state and its own log, but both copies open the file their
+  `.sim` names, and the run-time configuration cannot change that path yet.
 - **Windows and MSVC are the only toolchain actually exercised.** `build.sh` is
   generated for GCC/Clang but has not been run on Linux or macOS.
 - **The sim file cannot drive a model's root inputs.** A model with root inputs
@@ -476,9 +476,9 @@ In rough order. Each step is decided on its own, so this list changes.
 
 1. ~~**The public interface.** A header that is only the interface, an example
    host, and build modes.~~ Done.
-2. **Per-instance run control.** Each model gets its own stop flag, contract
+2. ~~**Per-instance run control.** Each model gets its own stop flag, contract
    checks and clocks, so a program can run a model more than once, or run
-   several models.
+   several models.~~ Done.
 3. ~~**Settings at run time.** `load_settings` / `dump_settings` in the compiled
    model (§14.1), and an application with `--settings`, `--set` and
    `--dump-settings`.~~ Done.

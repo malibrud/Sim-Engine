@@ -14,8 +14,8 @@
 //    5. dump_settings() reads back through load_settings() to the same text.
 //
 //  Like host.cpp it #includes Drivetrain.cpp, so it can look at the members a
-//  binding lands in. Everything that would start a run comes LAST: §10.2's
-//  control is a process global, and a refused init() would poison it.
+//  binding lands in. Each check builds its own model, and a model's run state
+//  is its own, so a refused init() in one check cannot reach the next.
 //
 //  Built and run by tests/run.ps1. Exit status 0 means every check passed.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -52,9 +52,6 @@ std::string refusal(const char* text) {
 }  // namespace
 
 int main() {
-    se_rt::logs().configure("", se_rt::Level::Warn);
-    se_rt::realtime().configure(0.0, 0.0);
-
     // ── 1. converted to the canonical unit, and pinned ───────────────────────
     {
         static Impl m;

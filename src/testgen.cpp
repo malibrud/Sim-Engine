@@ -617,6 +617,7 @@ bool TestGen::run(const std::string& fq, const Source& req_src, Loc req_loc) {
                  << "            bool ok = true;\n"
                  << checks.str()
                  << "            if (!ok) ++failed;\n"
+                 << "            if (s.se_run_.checks.any()) g_contract_failed = true;\n"
                  << "            }\n"
                  << "        }\n";
         }
@@ -651,7 +652,8 @@ bool TestGen::run(const std::string& fq, const Source& req_src, Loc req_loc) {
       << "#include <limits>\n#include <memory>\n\n"
       << "namespace {\n\n"
       << "const char* const kNode = " << cpp_str(info_->fq) << ";\n"
-      << "int g_failed_sets = 0;\n\n"
+      << "int g_failed_sets = 0;\n"
+      << "bool g_contract_failed = false;   // any row's model recorded one (10.6)\n\n"
       << "// `=` is bitwise (6.13): -0.0 is not 0.0, and a NaN equals only itself.\n"
       << "bool se_same(double a, double b) {\n"
       << "    std::uint64_t x = 0, y = 0;\n"
@@ -686,7 +688,7 @@ bool TestGen::run(const std::string& fq, const Source& req_src, Loc req_loc) {
       << body.str()
       << "    // A contract a method reports is a failure of the node, whichever row\n"
       << "    // tripped it; the report itself was already written, with the path.\n"
-      << "    if (se_rt::checks().any()) {\n"
+      << "    if (g_contract_failed) {\n"
       << "        std::printf(\"FAIL %s : a contract failed during the tests\\n\", kNode);\n"
       << "        ++g_failed_sets;\n"
       << "    }\n"

@@ -508,7 +508,7 @@ void Emitter::preamble(const NodeInfo& node, ast::Method::Which which, const cha
         o_ << ind << "const se_rt::RunControl sim{se_run_, se_path_, se_type_};"
            << "   // adds sim.stop / sim.abort, §10.2\n";
     // Shadows the leaf's trace-only member with the full set of levels.
-    o_ << ind << "[[maybe_unused]] const se_rt::Log log{se_path_};"
+    o_ << ind << "[[maybe_unused]] const se_rt::Log log{se_run_, se_path_};"
        << "   // every level is legal here, §10.1\n";
 
     // §6.2b made the member writable so `Sim::resolve_settings` can assign it.
@@ -835,11 +835,11 @@ void Emitter::leaf_class(const NodeInfo& node) {
     std::vector<Row> mem;
     mem.push_back({"Param", "param;", "// written by Sim::Impl::resolve_settings"});
     mem.push_back({"const char* const", "se_path_;", "// model path, for the log tag"});
-    // §10.5 - the reflection surface's backing. `se_run_` points at the one
-    // RunState the enclosing Sim owns, so `sim.time()` is a member read and not
-    // a global: two models in one process do not share a clock.
+    // §10.5 - `se_run_` points at the one se_rt::Run the enclosing Sim owns:
+    // its clock, stop flag, contracts and log. `sim.time()` is a member read and
+    // not a global, and two models in one process share none of it.
     mem.push_back({"const char* const", "se_type_;", "// fq node type, §10.5"});
-    mem.push_back({"const se_rt::RunState* const", "se_run_;", "// this model's clock"});
+    mem.push_back({"se_rt::Run* const", "se_run_;", "// this model's run"});
     // `{}` even though Sim::bind() points every view before anything reads one:
     // the leaf is aggregate-initialised through `se_run_` and no further, and a
     // trailing member with no initialiser of its own is what g++'s
@@ -857,7 +857,7 @@ void Emitter::leaf_class(const NodeInfo& node) {
     }
     mem.push_back({"const se_rt::RunView", "sim{se_run_, se_path_, se_type_};",
                    "// reflection only; §10.5"});
-    mem.push_back({"const se_rt::TraceLog", "log{se_path_};",
+    mem.push_back({"const se_rt::TraceLog", "log{se_run_, se_path_};",
                    "// log.trace only; §10.1"});
     {
         std::size_t wt = 0, wd = 0;
@@ -1254,10 +1254,11 @@ void Emitter::sim_members() {
     o_ << "    void derivatives(double t);              // reads x, fills xd\n\n";
 
     o_ << "    // ---- machinery " << std::string(57, '-') << "\n";
-    // §10.5 — the reflection surface every leaf points at. Declared ahead of
-    // the leaves because their initialisers take its address, and owned by the
-    // Sim rather than by the process so two models never share a clock.
-    o_ << "    se_rt::RunState se_run_{};   // what `sim.time()` reads, §10.5\n";
+    // The run every leaf points at: clock, stop flag, contracts, frame and log.
+    // Declared ahead of the leaves because their initialisers take its address,
+    // and owned by the Sim rather than by the process so two models never share
+    // any of it.
+    o_ << "    se_rt::Run se_run_{};   // this model's run: clock, control, checks, log\n";
     o_ << "    //  Leaf instances. Their settings are NOT baked in here: they are\n";
     o_ << "    //  assigned by resolve_settings() (§6.2b), so a settings source can\n";
     o_ << "    //  move them in a binary that has already been compiled. Any unit\n";
@@ -1411,6 +1412,7 @@ void Emitter::sim_members() {
     o_ << "    std::string se_load_error_;   // a refused settings source; it stands (§14.1)\n";
     o_ << "    std::string se_dump_;         // what dump_settings() last returned\n";
     o_ << "    bool        se_started_ = false;\n";
+    o_ << "    std::string se_rerun_error_;  // a second init() on this Sim, refused\n";
     o_ << "\n    double        se_time_ = 0.0;\n";
     o_ << "    std::uint64_t se_tick_ = 0;\n";
     o_ << "    std::size_t   se_inited_ = 0;\n";
@@ -1948,7 +1950,7 @@ void Emitter::sim_derivatives() {
     o_ << "\n// The external solver's entry point: reads x, fills xd. Sim owns both,\n";
     o_ << "// so a solver with its own vector does one memcpy each way per call.\n";
     o_ << "void Sim::Impl::derivatives(double t) {\n";
-    o_ << "    se_run_.now = t;   // the minor-step instant, §10.5\n";
+    o_ << "    se_run_.clock.now = t;   // the minor-step instant, §10.5\n";
     o_ << "    output_pass_minor();\n";
     for (const Leaf& leaf : m_.leaves) {
         const ast::Method* r = leaf.node->method(ast::Method::Which::Derivative);
@@ -2084,8 +2086,8 @@ void Emitter::sim_record() {
     o_ << "// carries units, because the values themselves no longer do.\n";
     o_ << "void Sim::Impl::record_open() {\n";
     o_ << "    if (!se_rec_.open(" << quote(m_.record.file) << ")) {\n";
-    o_ << "        se_rt::logs().write(se_rt::Level::Error, \"sim\", 0.0,\n";
-    o_ << "                            \"cannot open " << m_.record.file
+    o_ << "        se_run_.log.write(se_rt::Level::Error, \"sim\", 0.0,\n";
+    o_ << "                          \"cannot open " << m_.record.file
        << " for writing\");\n        return;\n    }\n";
     o_ << "    se_rec_.header({";
     for (std::size_t i = 0; i < m_.record.signals.size(); ++i) {
@@ -2120,17 +2122,17 @@ void Emitter::sim_run() {
     o_ << "\nvoid Sim::Impl::init() {\n";
     o_ << "    // §6.2b — configuration precedes init(), so a value it refused stops\n";
     o_ << "    // the run here, before any node sees state it was never compiled for.\n";
-    o_ << "    if (!se_cfg_error_.empty()) { se_rt::control().fail(se_cfg_error_); return; }\n";
+    o_ << "    if (!se_cfg_error_.empty()) { se_run_.control.fail(se_cfg_error_); return; }\n";
     if (m_.dynamic_states) {
         // §15.5a — the buffers are the host's, so their absence is the one
         // failure the handshake makes possible after a clean configuration.
         o_ << "    if (n_states && !se_bound_x_) {\n";
-        o_ << "        se_rt::control().fail(" << quote("bind_state() was not called; "
+        o_ << "        se_run_.control.fail(" << quote("bind_state() was not called; "
               "this model's state buffers are the host's (§15.5a)") << ");\n";
         o_ << "        return;\n    }\n";
         if (m_.n_disc_arr_slots) {
             o_ << "    if (n_dstates && !se_bound_da_) {\n";
-            o_ << "        se_rt::control().fail("
+            o_ << "        se_run_.control.fail("
                << quote("bind_discrete_array() was not called (§15.5a)") << ");\n";
             o_ << "        return;\n    }\n";
         }
@@ -2139,13 +2141,13 @@ void Emitter::sim_run() {
     o_ << "    // so each init() starts from the IC this run was configured with.\n";
     o_ << "    apply_initial_conditions();\n";
     o_ << "    se_tick_ = 0;\n    se_time_ = 0.0;\n    se_done_ = false;\n";
-    o_ << "    se_run_ = se_rt::RunState{0.0, step_seconds, 0};   // §10.5\n";
+    o_ << "    se_run_.clock = se_rt::RunState{0.0, step_seconds, 0};   // §10.5\n";
     o_ << "    se_inited_ = 0;\n";
     if (m_.record.present) o_ << "    record_open();\n";
-    o_ << "    se_rt::realtime().start();\n";
+    o_ << "    se_run_.realtime.start();\n";
     for (std::size_t i = 0; i < m_.leaves.size(); ++i) {
         const Leaf& leaf = m_.leaves[i];
-        o_ << "    if (se_rt::control().halted()) return;\n";
+        o_ << "    if (se_run_.control.halted()) return;\n";
         if (leaf.node->method(ast::Method::Which::Init))
             o_ << "    " << leaf.ident << ".init();\n";
         else
@@ -2165,19 +2167,19 @@ void Emitter::sim_run() {
     o_ << "// checkpoint (§15.5).\n";
     o_ << "void Sim::Impl::tick() {\n";
     o_ << "    se_time_ = static_cast<double>(se_tick_) * step_seconds;\n";
-    o_ << "    se_rt::sim_time() = se_time_;\n";
-    o_ << "    se_run_.now = se_time_;   // §10.5 — the tick instant; derivatives()\n";
-    o_ << "    se_run_.tick = se_tick_;  // moves it again at every minor step\n";
+    o_ << "    se_run_.log_time = se_time_;    // what a log record is stamped with\n";
+    o_ << "    se_run_.clock.now = se_time_;   // §10.5 — the tick instant; derivatives()\n";
+    o_ << "    se_run_.clock.tick = se_tick_;  // moves it again at every minor step\n";
     o_ << "    output_pass();\n";
     o_ << "    publish_outputs();\n";
-    if (any_next()) o_ << "    if (!se_rt::control().halted()) next_tick();\n";
+    if (any_next()) o_ << "    if (!se_run_.control.halted()) next_tick();\n";
     if (m_.record.present) {
         if (m_.record.every > 1)
             o_ << "    if (se_tick_ % " << m_.record.every << " == 0) record_row();\n";
         else
             o_ << "    record_row();\n";
     }
-    o_ << "    if (se_rt::control().halted() || se_tick_ >= tick_count) {\n";
+    o_ << "    if (se_run_.control.halted() || se_tick_ >= tick_count) {\n";
     o_ << "        se_done_ = true;\n        return;\n    }\n";
     // §9.6 — the commit: below the exit, so a halted run keeps the state its
     // last row reported; above the flow, so the solver starts from the jump.
@@ -2192,23 +2194,23 @@ void Emitter::sim_run() {
     o_ << "    integrate(se_time_, step_seconds);\n";
     if (m_.realtime && m_.sync_steps > 0)
         o_ << "    if ((se_tick_ + 1) % " << m_.sync_steps
-           << " == 0) se_rt::realtime().frame_boundary();\n";
+           << " == 0) se_run_.realtime.frame_boundary();\n";
     o_ << "    ++se_tick_;\n";
     o_ << "}\n";
 
     // ── finish ───────────────────────────────────────────────────────────────
     o_ << "\nvoid Sim::Impl::finish() {\n";
-    o_ << "    se_rt::control().complete();\n";
-    o_ << "    const se_rt::RunContext ctx = se_rt::control().context(se_time_);\n";
+    o_ << "    se_run_.control.complete();\n";
+    o_ << "    const se_rt::RunContext ctx = se_run_.control.context(se_time_);\n";
     o_ << "    final_all(ctx);\n";
     if (m_.record.present) o_ << "    se_rec_.close();\n";
-    if (m_.realtime) o_ << "    se_rt::realtime().summary();\n";
+    if (m_.realtime) o_ << "    se_run_.realtime.summary();\n";
     // §10.6 -- after the realtime summary and before the closing line, so
     // the last thing a log carries is the run's outcome and not a contract detail.
-    o_ << "    se_rt::checks().summary();\n";
-    o_ << "    se_rt::logs().write(se_rt::Level::Info, \"sim\", se_time_,\n";
-    o_ << "                        se_rt::format(\"run {}: {}\", ctx.reason,\n";
-    o_ << "                                      ctx.message.empty() ? \"-\" "
+    o_ << "    se_run_.checks.summary(se_run_.log, se_time_);\n";
+    o_ << "    se_run_.log.write(se_rt::Level::Info, \"sim\", se_time_,\n";
+    o_ << "                      se_rt::format(\"run {}: {}\", ctx.reason,\n";
+    o_ << "                                    ctx.message.empty() ? \"-\" "
           ": ctx.message.c_str()));\n";
     o_ << "}\n";
 
@@ -2218,13 +2220,14 @@ void Emitter::sim_run() {
     // instead of something a harness has to go grepping the log for.
     o_ << "\n// 0 for a clean run; 1 if it was aborted, failed, or broke a contract (§10.6).\n";
     o_ << "int Sim::Impl::exit_code() const {\n";
-    o_ << "    const se_rt::Reason r = se_rt::control().reason();\n";
+    o_ << "    const se_rt::Reason r = se_run_.control.reason();\n";
     o_ << "    const bool failed = r == se_rt::Reason::Aborted || r == se_rt::Reason::Error;\n";
-    o_ << "    return failed || se_rt::checks().any() ? 1 : 0;\n";
+    o_ << "    return failed || se_run_.checks.any() ? 1 : 0;\n";
     o_ << "}\n";
 
     o_ << "\nconst char* Sim::Impl::error() const {\n";
-    o_ << "    const std::string& m = se_rt::control().message();\n";
+    o_ << "    if (!se_rerun_error_.empty()) return se_rerun_error_.c_str();\n";
+    o_ << "    const std::string& m = se_run_.control.message();\n";
     o_ << "    if (!m.empty()) return m.c_str();\n";
     o_ << "    return se_load_error_.empty() ? se_cfg_error_.c_str() : se_load_error_.c_str();\n";
     o_ << "}\n";
@@ -2233,6 +2236,15 @@ void Emitter::sim_run() {
     o_ << "\n// Sim::init(): the run configuration from the .sim, the host's settings,\n";
     o_ << "// everything derived from them (§6.2b), then every node's init().\n";
     o_ << "bool Sim::Impl::start() {\n";
+    o_ << "    // A Sim runs once. A second run on the same object would start from\n";
+    o_ << "    // whatever the first left in every node's private storage, which no\n";
+    o_ << "    // init() promises to reset; a fresh Sim is the clean slate. The first\n";
+    o_ << "    // run's outcome stands, so this does not touch se_run_.\n";
+    o_ << "    if (se_started_) {\n";
+    o_ << "        se_rerun_error_ = \"init() was already called: a Sim runs once; \"\n";
+    o_ << "                          \"construct a new one to run again\";\n";
+    o_ << "        return false;\n";
+    o_ << "    }\n";
     o_ << "    se_started_ = true;\n";
     o_ << "    configure_run();\n";
     o_ << "    const std::string refused = accept_settings();\n";
@@ -2254,13 +2266,13 @@ void Emitter::sim_run() {
         }
     }
     o_ << "    init();\n";
-    o_ << "    return !se_rt::control().halted();\n";
+    o_ << "    return !se_run_.control.halted();\n";
     o_ << "}\n";
 
     // ── the run configuration the .sim file gave ─────────────────────────────
     o_ << "\n// Logging (§13.7) and the real-time frame (§9.4), as the .sim file set them.\n";
     o_ << "void Sim::Impl::configure_run() {\n";
-    o_ << "    se_rt::logs().configure(" << quote(m_.log.file) << ", se_rt::Level::";
+    o_ << "    se_run_.log.configure(" << quote(m_.log.file) << ", se_rt::Level::";
     const std::string lvl = m_.log.level;
     o_ << (lvl == "trace"   ? "Trace"
            : lvl == "debug" ? "Debug"
@@ -2270,7 +2282,7 @@ void Emitter::sim_run() {
        << ");\n";
     for (const auto& kv : m_.log.levels) {
         const std::string& l = kv.second;
-        o_ << "    se_rt::logs().set_path_level(" << quote(kv.first) << ", se_rt::Level::"
+        o_ << "    se_run_.log.set_path_level(" << quote(kv.first) << ", se_rt::Level::"
            << (l == "trace"   ? "Trace"
                : l == "debug" ? "Debug"
                : l == "warn"  ? "Warn"
@@ -2279,10 +2291,10 @@ void Emitter::sim_run() {
            << ");\n";
     }
     if (m_.realtime)
-        o_ << "    se_rt::realtime().configure(" << dbl(m_.sync) << ", " << dbl(m_.window)
+        o_ << "    se_run_.realtime.configure(" << dbl(m_.sync) << ", " << dbl(m_.window)
            << ");\n";
     else
-        o_ << "    se_rt::realtime().configure(0.0, 0.0);   // mode: batch\n";
+        o_ << "    se_run_.realtime.configure(0.0, 0.0);   // mode: batch\n";
     o_ << "}\n";
 }
 
@@ -2926,7 +2938,8 @@ void Emitter::public_class() {
     o_ << "    // ---- 2. start " << std::string(58, '-') << "\n";
     o_ << "    //  Applies settings(), sets every initial condition and runs every\n";
     o_ << "    //  node's init(). False if a setting was refused or a node stopped the\n";
-    o_ << "    //  run: error() says why, and finish() is still owed.\n";
+    o_ << "    //  run: error() says why, and finish() is still owed. A Sim runs once:\n";
+    o_ << "    //  a second init() is refused, and a fresh Sim is how to run again.\n";
     o_ << "    bool        init();\n";
     o_ << "    const char* error() const;\n\n";
 

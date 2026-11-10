@@ -25,7 +25,7 @@
 // Both bounds are asserted, and each catches a different regression:
 //
 //   ct < 1e-7   fails if the minor-step pass stops re-running continuous
-//               nodes, or if `se_run_.now` stops being written in
+//               nodes, or if `se_run_.clock.now` stops being written in
 //               derivatives() -- the ct column would decay to the dt column.
 //   dt > 1e-4   fails if a HELD node starts seeing minor-step time, which
 //               would improve this column and mean ZOH had been lost. That is

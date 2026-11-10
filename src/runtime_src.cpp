@@ -40,6 +40,11 @@ const char kRuntime[] =
 //      the frame      section 9.4  — free-run the batch, then spin
 //      settings       section 14.1 — units, and reading and dumping a source
 //
+//  None of it is a process global. Everything a run accumulates (the clock,
+//  the stop flag, the contract registry, the frame, the log) lives in one
+//  `Run` per model, so a program can run a model again, or run several, and
+//  no two runs see each other.
+//
 //  The generator emits `se_rt::Log log{...}` into the preamble of the methods
 //  where logging is legal and simply does not emit it elsewhere, which is how
 //  confinement is enforced: by name withholding, not by an analyser
@@ -69,18 +74,6 @@ const char kRuntime[] =
 
 namespace se_rt {
 inline namespace @VER@ {
-
-// The tick time a log record is stamped with. A global because a LogSink is a
-// global: every record carries a time and no caller passes one.
-//
-// This is NOT what a body reads. `sim.time()` comes from the model's own
-// RunState (below), which advances at every minor step and belongs to one Sim
-// rather than to the process. The two agree at tick boundaries and are
-// deliberately different objects.
-inline double& sim_time() {
-    static double t = 0.0;
-    return t;
-}
 
 // ─── `{}` positional formatting (section 10.1) ───────────────────────────────
 // The engine auto-tags every record with sim time, node path and level, so
@@ -201,51 +194,8 @@ private:
     std::vector<std::pair<std::string, Level>> paths_;
 };
 
-inline LogSink& logs() {
-    static LogSink s;
-    return s;
-}
-
-// The `log` object the generator puts in scope of init(), next() and final().
-//
-// It holds the node path and NOTHING else — the sim time is read at call time,
-// from sim_time(). That is what lets the restricted form below be a class
-// member rather than a line of preamble in every method.
-struct Log {
-    const char* path;
-
-    template <class... A> void trace(const char* f, const A&... a) const {
-        logs().write(Level::Trace, path, sim_time(), se_rt::format(f, a...));
-    }
-    template <class... A> void debug(const char* f, const A&... a) const {
-        logs().write(Level::Debug, path, sim_time(), se_rt::format(f, a...));
-    }
-    template <class... A> void info(const char* f, const A&... a) const {
-        logs().write(Level::Info, path, sim_time(), se_rt::format(f, a...));
-    }
-    template <class... A> void warn(const char* f, const A&... a) const {
-        logs().write(Level::Warn, path, sim_time(), se_rt::format(f, a...));
-    }
-    template <class... A> void error(const char* f, const A&... a) const {
-        logs().write(Level::Error, path, sim_time(), se_rt::format(f, a...));
-    }
-};
-
-// The restricted form for the pure methods: `log.trace` alone (section
-// 10.1). `log.info` there is "no such member".
-//
-// Every leaf holds one of these as a member called `log`, so a pure method
-// needs no preamble at all. The mutating methods declare a local `Log log`
-// which shadows it, widening what is legal exactly where section 8.4 says it is.
-struct TraceLog {
-    const char* path;
-
-    template <class... A> void trace(const char* f, const A&... a) const {
-        if (!logs().trace_enabled) return;
-        logs().write(Level::Trace, path, sim_time(),
-                     se_rt::format(f, a...) + "  [minor step]");
-    }
-};
+// The `log` objects a body writes through are below, after `Run`: each one
+// reaches its model's sink, and a sink belongs to a run, not to the process.
 
 )SERT"
     // MSVC caps a single string literal at 16380 bytes, and this text passed
@@ -575,11 +525,6 @@ private:
     std::string message_;
 };
 
-inline Control& control() {
-    static Control c;
-    return c;
-}
-
 )SERT"
     R"SERT(// ─── Contract checks (section 10.6) ──────────────────────────────────────────
 //
@@ -622,7 +567,9 @@ public:
     // cause. The count keeps rising after the reports stop.
     static constexpr std::uint64_t report_limit = 5;
 
-    void fail(const char* path, const char* type, const char* contract,
+    // Reports go to `log`, the sink of the run this registry belongs to; the
+    // two sit side by side in one `Run`, and the caller passes it.
+    void fail(LogSink& log, const char* path, const char* type, const char* contract,
               const std::string& detail, double t, std::uint64_t tick) {
         CheckSite& s = site(path, contract);
         if (s.count == 0) {
@@ -632,14 +579,14 @@ public:
         }
         ++s.count;
         if (s.count > report_limit) return;
-        logs().write(Level::Error, path, t,
-                     se_rt::format("contract failed: {}; {}  ({}, tick {})",
-                                   contract, detail, type, tick));
+        log.write(Level::Error, path, t,
+                  se_rt::format("contract failed: {}; {}  ({}, tick {})",
+                                contract, detail, type, tick));
         if (s.count == report_limit)
-            logs().write(Level::Error, path, t,
-                         se_rt::format("contract failed: {}; further reports "
-                                       "suppressed, the total is in the summary",
-                                       contract));
+            log.write(Level::Error, path, t,
+                      se_rt::format("contract failed: {}; further reports "
+                                    "suppressed, the total is in the summary",
+                                    contract));
     }
 
     bool any() const { return !sites_.empty(); }
@@ -647,13 +594,13 @@ public:
     // The report a reader actually acts on, one line per violated site: the
     // first failure locates the cause in time, and the count says whether it
     // was a transient or the whole run.
-    void summary() const {
+    void summary(LogSink& log, double t) const {
         if (sites_.empty()) return;
-        logs().write(Level::Error, "sim", sim_time(),
-                     se_rt::format("{} contract(s) violated", sites_.size()));
+        log.write(Level::Error, "sim", t,
+                  se_rt::format("{} contract(s) violated", sites_.size()));
         for (const CheckSite& s : sites_)
-            logs().write(Level::Error, "sim", sim_time(),
-                         se_rt::format("  {}: {} -- {} time(s), first at "
+            log.write(Level::Error, "sim", t,
+                      se_rt::format("  {}: {} -- {} time(s), first at "
                                        "t = {} s (tick {}); {}",
                                        s.path, s.contract, s.count,
                                        s.first_time, s.first_tick,
@@ -674,14 +621,9 @@ private:
     std::vector<CheckSite> sites_;
 };
 
-inline Checks& checks() {
-    static Checks c;
-    return c;
-}
-
-// ─── The run view (section 10.5) ─────────────────────────────────────────────
+// ─── The clock (section 10.5) ────────────────────────────────────────────────
 //
-// The engine's per-evaluation state, one instance per model. `now` is the
+// What `sim.time()` reads, one per model, inside its `Run`. `now` is the
 // instant of the CURRENT evaluation, not of the current tick: derivatives()
 // rewrites it at every minor step, which is the whole reason a continuous
 // source can be written at all.
@@ -689,116 +631,6 @@ struct RunState {
     double        now  = 0.0;   // the instant this evaluation is at
     double        step = 0.0;   // the global base step
     std::uint64_t tick = 0;     // base tick index
-};
-
-// The `sim` object every body sees. Reflection only: every member is a
-// function of the current instant or of the node itself, never of run
-// history. That is the admission rule, and it is what lets `sim.time()` in
-// while keeping `sim.overrun_count` out (section 10.2) — the latter's value
-// depends on when you look, which is the objection that was never about time.
-//
-// Every leaf holds one of these as a member called `sim`, so a pure method
-// needs no preamble at all. The mutating methods declare a local `RunControl`
-// which shadows it, widening what is legal exactly where section 8.4 says it
-// is. Same shape as TraceLog / Log above, for the same reason.
-struct RunView {
-    const RunState* run;
-    const char*     node_path;
-    const char*     node_type;
-
-    double        time() const { return run->now; }
-    double        step() const { return run->step; }
-    std::uint64_t tick() const { return run->tick; }
-    const char*   path() const { return node_path; }
-    const char*   type() const { return node_type; }
-
-    // ── Contracts (section 10.6) ────────────────────────────────────────────
-    //
-    // Legal in every body, observational everywhere, and each returns the
-    // condition — so a body that cannot proceed on bad input can say
-    //
-    //     if (!sim.check_finite(in.a, "acceleration is finite")) return;
-    //
-    // The overloads that take VALUES are the point of the family. A body can
-    // always write `check(fabs(n - 1.0) < tol, "unit norm")`, but the report
-    // can then only say the condition was false; `check_near(n, 1.0, tol,
-    // "unit norm")` says what `n` was and by how much it missed, which is the
-    // difference between a diagnostic and a notification.
-    bool check(bool ok, const char* contract) const {
-        if (!ok) contract_failed(contract, "condition is false");
-        return ok;
-    }
-    bool check(bool ok, const char* contract, double v) const {
-        if (!ok) contract_failed(contract, se_rt::format("value {}", v));
-        return ok;
-    }
-    bool check_finite(double v, const char* contract) const {
-        const bool ok = std::isfinite(v);
-        if (!ok)
-            contract_failed(contract,
-                            se_rt::format("got {}, want a finite value", v));
-        return ok;
-    }
-    bool check_range(double v, double lo, double hi, const char* contract) const {
-        // NaN fails this, and says so through the same channel: neither
-        // comparison holds, and the overshoot below prints as nan too.
-        const bool ok = v >= lo && v <= hi;
-        if (!ok)
-            contract_failed(
-                contract, se_rt::format("got {}, want [{}, {}], outside by {}",
-                                        v, lo, hi, v < lo ? lo - v : v - hi));
-        return ok;
-    }
-    bool check_near(double a, double b, double tol, const char* contract) const {
-        const double e  = std::fabs(a - b);
-        const bool   ok = e <= tol;
-        if (!ok)
-            contract_failed(contract,
-                            se_rt::format("got {}, want {}, |err| {} > tol {}",
-                                          a, b, e, tol));
-        return ok;
-    }
-
-protected:
-    // Off the caller's path on purpose: every check above is a branch that does
-    // no work at all when the contract holds, and the message is built only
-    // here. RunControl::require reaches it for the halting form.
-    void contract_failed(const char* contract, const std::string& detail) const {
-        checks().fail(node_path, node_type, contract, detail, run->now, run->tick);
-    }
-};
-
-// The widened form for init(), next() and final(): everything above plus
-// the two calls that end a run (section 10.2). `sim.stop` in output() is "no
-// member named stop" — a compile error at the .se line, not a runtime rule.
-struct RunControl : RunView {
-    RunControl(const RunState* r, const char* p, const char* t) : RunView{r, p, t} {}
-
-    void stop(const std::string& m) const { control().stop(m); }
-    void abort(const std::string& m) const { control().abort(m); }
-
-    // section 10.6 — the halting form of a contract, confined here for exactly
-    // the reason stop/abort are. A claim that must not be survived belongs in a
-    // mutating method; in `output()` this is "no member named require", a
-    // compile error at the .se line, while `sim.check_*` there still works.
-    bool require(bool ok, const char* contract) const {
-        if (!ok) require_failed(contract, "condition is false");
-        return ok;
-    }
-    bool require(bool ok, const char* contract, double v) const {
-        if (!ok) require_failed(contract, se_rt::format("value {}", v));
-        return ok;
-    }
-
-private:
-    // Reported through the same registry as a check, so the summary counts it
-    // and the exit code follows, and THEN the run is ended. Control::fail is
-    // first-writer-wins, so the first violated contract is the one named.
-    void require_failed(const char* contract, const std::string& detail) const {
-        contract_failed(contract, detail);
-        control().fail(se_rt::format("contract failed: {} at {}",
-                                     contract, node_path));
-    }
 };
 
 )SERT"
@@ -929,10 +761,186 @@ private:
     clock::time_point deadline_;
 };
 
-inline Realtime& realtime() {
-    static Realtime r;
-    return r;
-}
+)SERT"
+    R"SERT(// ─── The run (one per model) ─────────────────────────────────────────────────
+//
+// Everything a run accumulates, in one object that `Sim::Impl` owns and every
+// leaf points at. Nothing here is a process global, which is the whole point:
+// a finished run leaves nothing behind for the next `Sim`, and two models in
+// one program have two of these and cannot see each other's stop flag,
+// contracts, frame or log.
+//
+// A leaf holds `Run* const`, not a const pointer, because a contract check in
+// a pure method records into `checks`. The pointer is what makes that legal;
+// what a body may CALL is still decided by the handle it is given (RunView,
+// RunControl, TraceLog, Log), exactly as before.
+struct Run {
+    RunState clock;              // section 10.5 — what `sim.time()` reads
+    Control  control;            // section 10.2 — how the run ends, first writer wins
+    Checks   checks;             // section 10.6 — every violated contract
+    Realtime realtime;           // section 9.4  — the frame, when the .sim syncs
+    LogSink  log;                // section 13.7 — this model's file and levels
+    double   log_time = 0.0;     // the tick instant a record is stamped with
+};
+
+// `log_time` is NOT what a body reads. `sim.time()` is `clock.now`, which moves
+// to a solver stage's instant at every minor step; a log record is stamped with
+// the tick it was written in. The two agree at tick boundaries and are
+// deliberately different values.
+
+// The `log` object the generator puts in scope of init(), next() and final().
+//
+// It holds its model's run and the node path, and reads the time when it is
+// called. That is what lets the restricted form below be a class member rather
+// than a line of preamble in every method.
+struct Log {
+    Run*        run;
+    const char* path;
+
+    template <class... A> void trace(const char* f, const A&... a) const {
+        run->log.write(Level::Trace, path, run->log_time, se_rt::format(f, a...));
+    }
+    template <class... A> void debug(const char* f, const A&... a) const {
+        run->log.write(Level::Debug, path, run->log_time, se_rt::format(f, a...));
+    }
+    template <class... A> void info(const char* f, const A&... a) const {
+        run->log.write(Level::Info, path, run->log_time, se_rt::format(f, a...));
+    }
+    template <class... A> void warn(const char* f, const A&... a) const {
+        run->log.write(Level::Warn, path, run->log_time, se_rt::format(f, a...));
+    }
+    template <class... A> void error(const char* f, const A&... a) const {
+        run->log.write(Level::Error, path, run->log_time, se_rt::format(f, a...));
+    }
+};
+
+// The restricted form for the pure methods: `log.trace` alone (section
+// 10.1). `log.info` there is "no such member".
+//
+// Every leaf holds one of these as a member called `log`, so a pure method
+// needs no preamble at all. The mutating methods declare a local `Log log`
+// which shadows it, widening what is legal exactly where section 8.4 says it is.
+struct TraceLog {
+    Run*        run;
+    const char* path;
+
+    template <class... A> void trace(const char* f, const A&... a) const {
+        if (!run->log.trace_enabled) return;
+        run->log.write(Level::Trace, path, run->log_time,
+                       se_rt::format(f, a...) + "  [minor step]");
+    }
+};
+
+// The `sim` object every body sees. Reflection only: every member is a
+// function of the current instant or of the node itself, never of run
+// history. That is the admission rule, and it is what lets `sim.time()` in
+// while keeping `sim.overrun_count` out (section 10.2) — the latter's value
+// depends on when you look, which is the objection that was never about time.
+//
+// Every leaf holds one of these as a member called `sim`, so a pure method
+// needs no preamble at all. The mutating methods declare a local `RunControl`
+// which shadows it, widening what is legal exactly where section 8.4 says it
+// is. Same shape as TraceLog / Log above, for the same reason.
+struct RunView {
+    Run*            run;
+    const char*     node_path;
+    const char*     node_type;
+
+    double        time() const { return run->clock.now; }
+    double        step() const { return run->clock.step; }
+    std::uint64_t tick() const { return run->clock.tick; }
+    const char*   path() const { return node_path; }
+    const char*   type() const { return node_type; }
+
+    // ── Contracts (section 10.6) ────────────────────────────────────────────
+    //
+    // Legal in every body, observational everywhere, and each returns the
+    // condition — so a body that cannot proceed on bad input can say
+    //
+    //     if (!sim.check_finite(in.a, "acceleration is finite")) return;
+    //
+    // The overloads that take VALUES are the point of the family. A body can
+    // always write `check(fabs(n - 1.0) < tol, "unit norm")`, but the report
+    // can then only say the condition was false; `check_near(n, 1.0, tol,
+    // "unit norm")` says what `n` was and by how much it missed, which is the
+    // difference between a diagnostic and a notification.
+    bool check(bool ok, const char* contract) const {
+        if (!ok) contract_failed(contract, "condition is false");
+        return ok;
+    }
+    bool check(bool ok, const char* contract, double v) const {
+        if (!ok) contract_failed(contract, se_rt::format("value {}", v));
+        return ok;
+    }
+    bool check_finite(double v, const char* contract) const {
+        const bool ok = std::isfinite(v);
+        if (!ok)
+            contract_failed(contract,
+                            se_rt::format("got {}, want a finite value", v));
+        return ok;
+    }
+    bool check_range(double v, double lo, double hi, const char* contract) const {
+        // NaN fails this, and says so through the same channel: neither
+        // comparison holds, and the overshoot below prints as nan too.
+        const bool ok = v >= lo && v <= hi;
+        if (!ok)
+            contract_failed(
+                contract, se_rt::format("got {}, want [{}, {}], outside by {}",
+                                        v, lo, hi, v < lo ? lo - v : v - hi));
+        return ok;
+    }
+    bool check_near(double a, double b, double tol, const char* contract) const {
+        const double e  = std::fabs(a - b);
+        const bool   ok = e <= tol;
+        if (!ok)
+            contract_failed(contract,
+                            se_rt::format("got {}, want {}, |err| {} > tol {}",
+                                          a, b, e, tol));
+        return ok;
+    }
+
+protected:
+    // Off the caller's path on purpose: every check above is a branch that does
+    // no work at all when the contract holds, and the message is built only
+    // here. RunControl::require reaches it for the halting form.
+    void contract_failed(const char* contract, const std::string& detail) const {
+        run->checks.fail(run->log, node_path, node_type, contract, detail,
+                         run->clock.now, run->clock.tick);
+    }
+};
+
+// The widened form for init(), next() and final(): everything above plus
+// the two calls that end a run (section 10.2). `sim.stop` in output() is "no
+// member named stop" — a compile error at the .se line, not a runtime rule.
+struct RunControl : RunView {
+    RunControl(Run* r, const char* p, const char* t) : RunView{r, p, t} {}
+
+    void stop(const std::string& m) const { run->control.stop(m); }
+    void abort(const std::string& m) const { run->control.abort(m); }
+
+    // section 10.6 — the halting form of a contract, confined here for exactly
+    // the reason stop/abort are. A claim that must not be survived belongs in a
+    // mutating method; in `output()` this is "no member named require", a
+    // compile error at the .se line, while `sim.check_*` there still works.
+    bool require(bool ok, const char* contract) const {
+        if (!ok) require_failed(contract, "condition is false");
+        return ok;
+    }
+    bool require(bool ok, const char* contract, double v) const {
+        if (!ok) require_failed(contract, se_rt::format("value {}", v));
+        return ok;
+    }
+
+private:
+    // Reported through the same registry as a check, so the summary counts it
+    // and the exit code follows, and THEN the run is ended. Control::fail is
+    // first-writer-wins, so the first violated contract is the one named.
+    void require_failed(const char* contract, const std::string& detail) const {
+        contract_failed(contract, detail);
+        run->control.fail(se_rt::format("contract failed: {} at {}",
+                                        contract, node_path));
+    }
+};
 
 )SERT"
     R"SERT(// ─── Units at configuration (section 14.1) ──────────────────────────────────
