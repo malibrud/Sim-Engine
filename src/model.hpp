@@ -532,6 +532,33 @@ struct RecordConfig {
     std::string file;
     long every = 1;
     std::vector<RecordedSignal> signals;
+    // §14.1 — the same selection as rows of `Model::channels`, which is what
+    // the compiled model starts from and a settings source then edits.
+    struct Column {
+        std::size_t row = 0;
+        std::size_t index = 0;
+        std::string written;           // the path as the .sim wrote it
+    };
+    std::vector<Column> columns;
+};
+
+// §13.5, §14.1 — one channel the compiled model can record: every path the
+// .sim could name, resolved once here so the runtime only looks it up.
+struct Channel {
+    std::string path;                  // canonical; an array state without its index
+    RecordedSignal sig;                // how to read it; an array's reads element `i`
+    bool array = false;
+    std::size_t leaf = 0;              // an array: the state whose extent bounds `i`
+    std::size_t state = 0;
+};
+
+// A bare spelling of a leaf member (§13.5), `whl.omega` for `whl.state.omega`.
+// `other` non-empty: the spelling is ambiguous, `row` is the state and `other`
+// the output it might also mean (SE0461).
+struct ChannelAlias {
+    std::string spelling;
+    std::size_t row = 0;
+    std::string other;
 };
 
 struct Model {
@@ -591,6 +618,8 @@ struct Model {
 
     RecordConfig record;
     LogConfig log;
+    std::vector<Channel> channels;
+    std::vector<ChannelAlias> channel_aliases;
 
     // §6.9.3 — every `group` of every composite instance, diagram-only. A
     // composite instantiated twice contributes its groups twice, once per

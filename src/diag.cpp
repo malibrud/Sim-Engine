@@ -131,6 +131,7 @@ void Diagnostics::paint(const char* seq) {
 void Diagnostics::report(Severity sev, const char* code, const Source& src, Loc loc,
                          std::string message, std::string caret_label,
                          std::vector<Attachment> attachments) {
+    if (muted_ > 0) return;
     if (sev == Severity::Error) {
         if (errors_ >= limit_) {
             if (!announced_limit_) {

@@ -2736,20 +2736,156 @@ void Elaborator::resolve_record(const std::vector<RecordLayer>& layers, Model& m
             }
         }
     }
-    // §6.4a — only the channels that survived name an element configuration
-    // must check.
-    for (const RecordedSignal& s : sel) {
-        if (!s.element) continue;
-        Model::ElementRef ref;
-        ref.path = s.path;
-        ref.continuous = s.elem_continuous;
-        ref.index = s.elem_index;
-        m.element_refs.push_back(std::move(ref));
-        element_sites_.push_back({m.element_refs.size() - 1, s.elem_leaf, s.elem_state});
-    }
+    // §6.4a — a channel's element index is checked when the run starts, by
+    // the compiled model, since a run-time source may have removed it.
     m.record.signals = std::move(sel);
     // §13.5 — a table is written only when it would have a channel in it.
     m.record.present = !m.record.signals.empty();
+}
+
+// §13.5, §14.1 — every channel the compiled model can record. Each candidate
+// path is resolved exactly as a written one would be, but quietly: one that
+// fails here (an undriven port) is simply not a channel. The order is the
+// tree's, so a listing reads top-down: each composite's ports before the
+// leaves inside it, then each leaf's inputs, outputs, states and vars, then the
+// engine's metrics.
+void Elaborator::build_channels(const Source& src, Model& m) {
+    // An array state is resolved at a sentinel index, and the index in the
+    // expression becomes the runtime's `i`.
+    static const std::string kSentinel = "987654321";
+    struct Cand {
+        std::string path;
+        std::string leaf;              // a leaf member: its leaf, kind and member
+        std::string kind;
+        std::string member;            // "omega", "ws.slip"; empty for a port
+    };
+    std::vector<Cand> cands;
+    auto join = [](const std::string& a, const std::string& b) {
+        return a.empty() ? b : a + "." + b;
+    };
+    std::function<void(const std::string&, const Type&, const Cand&)> scalars =
+        [&](const std::string& p, const Type& t, const Cand& like) {
+            if (!t.is_record) {
+                Cand c = like;
+                c.path = p;
+                cands.push_back(c);
+                return;
+            }
+            if (!t.record) return;   // never resolved, and already reported
+            for (const Field& f : t.record->fields) {
+                Cand c = like;
+                if (!c.member.empty()) c.member += "." + f.name;
+                scalars(p + "." + f.name, field_type(t, f), c);
+            }
+        };
+    std::set<std::string> done;
+    auto composite = [&](const std::string& path) {
+        if (!done.insert(path).second) return;
+        const std::vector<Field>* ins = nullptr;
+        const std::vector<Field>* outs = nullptr;
+        if (path.empty()) {
+            ins = &m.root->inputs;
+            outs = &m.root->outputs;
+        } else {
+            auto it = m.composite_ports.find(path);
+            if (it == m.composite_ports.end()) return;
+            ins = &it->second.ins;
+            outs = &it->second.outs;
+        }
+        for (const Field& f : *ins) scalars(join(path, f.name), f.type, Cand{});
+        for (const Field& f : *outs) scalars(join(path, f.name), f.type, Cand{});
+    };
+    for (const Leaf& leaf : m.leaves) {
+        if (m.root->composite) composite("");
+        for (std::size_t dot = leaf.path.find('.'); dot != std::string::npos;
+             dot = leaf.path.find('.', dot + 1)) {
+            const std::string up = leaf.path.substr(0, dot);
+            auto it = instances_.find(up);
+            if (it != instances_.end() && it->second->composite) composite(up);
+        }
+        for (const Field& f : leaf.ports_in) scalars(join(leaf.path, f.name), f.type, Cand{});
+        for (const Field& f : leaf.ports_out)
+            scalars(join(leaf.path, "out." + f.name), f.type, Cand{"", leaf.path, "out", f.name});
+        for (const StateSlot& st : leaf.states)
+            cands.push_back(Cand{join(leaf.path, "state." + st.name) +
+                                     (st.extent.present ? "[" + kSentinel + "]" : ""),
+                                 leaf.path, "state", st.name});
+        for (const Field& v : leaf.node->vars) {
+            bool array = false;
+            for (const ArrayVar& av : leaf.array_vars) array = array || av.name == v.name;
+            if (!array)   // §6.5 — an array var is node-private, with no path
+                scalars(join(leaf.path, "var." + v.name), v.type,
+                        Cand{"", leaf.path, "var", v.name});
+        }
+    }
+    cands.push_back(Cand{"sim.utilization", "", "", ""});
+    cands.push_back(Cand{"sim.overrun_pct", "", "", ""});
+
+    const bool failed = failed_;
+    diag_.mute(true);
+    std::vector<const Cand*> made;
+    for (const Cand& c : cands) {
+        ast::Path p;
+        for (std::size_t at = 0;;) {
+            const std::size_t dot = c.path.find('.', at);
+            p.segs.push_back(c.path.substr(at, dot == std::string::npos ? std::string::npos
+                                                                          : dot - at));
+            if (dot == std::string::npos) break;
+            at = dot + 1;
+        }
+        RecordedSignal s;
+        if (!resolve_signal(p, src, m, s)) continue;
+        Channel ch;
+        if (s.element) {
+            ch.array = true;
+            ch.path = s.key.substr(0, s.key.rfind('['));
+            ch.leaf = s.elem_leaf;
+            ch.state = s.elem_state;
+            const std::size_t at = s.expr.find(kSentinel);
+            if (at != std::string::npos) s.expr.replace(at, kSentinel.size(), "i");
+        } else {
+            ch.path = s.key;
+        }
+        ch.sig = std::move(s);
+        m.channels.push_back(std::move(ch));
+        made.push_back(&c);
+    }
+    diag_.mute(false);
+    failed_ = failed;
+
+    // The bare spellings. A state and an output of one name make the bare
+    // form ambiguous, and the runtime says so as SE0461 does.
+    auto row_of = [&](const std::string& path) {
+        for (std::size_t r = 0; r < m.channels.size(); ++r)
+            if (m.channels[r].path == path) return r;
+        return m.channels.size();
+    };
+    std::set<std::string> taken;
+    for (const Channel& ch : m.channels) taken.insert(ch.path);
+    for (std::size_t r = 0; r < made.size(); ++r) {
+        const Cand& c = *made[r];
+        if (c.kind.empty()) continue;
+        const std::string bare = join(c.leaf, c.member);
+        if (taken.count(bare)) continue;
+        const std::string first = c.member.substr(0, c.member.find('.'));
+        const NodeInfo* node = m.leaves[leaf_by_path_[c.leaf]].node;
+        const bool both = node->state(first) && node->output(first);
+        if (!both) {
+            m.channel_aliases.push_back({bare, r, ""});
+        } else if (c.kind == "out") {
+            const std::size_t st = row_of(join(c.leaf, "state." + first));
+            if (st < m.channels.size())
+                m.channel_aliases.push_back({bare, st, m.channels[r].path});
+        }
+        taken.insert(bare);
+    }
+
+    // The .sim's selection, as rows.
+    for (const RecordedSignal& s : m.record.signals) {
+        const std::string key = s.element ? s.key.substr(0, s.key.rfind('[')) : s.key;
+        const std::size_t r = row_of(key);
+        if (r < m.channels.size()) m.record.columns.push_back({r, s.elem_index, s.path});
+    }
 }
 
 // §13.7 — the same layering for the log: `file` and `level` are single values,
@@ -3000,6 +3136,9 @@ bool Elaborator::run(const ast::SimFile& sim, const Source& sim_src,
     }
     resolve_record(record_layers, m);
     resolve_log(log_layers, m);
+    // Only a model that elaborated cleanly has a table worth building: a type
+    // that failed to resolve has no fields to walk.
+    if (diag_.error_count() == before && !failed_) build_channels(sim_src, m);
 
     // Every element reference the model made, now that the offset table it
     // indexes into exists.

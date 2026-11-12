@@ -284,6 +284,8 @@ private:
     };
     void resolve_record(const std::vector<RecordLayer>& layers, Model& m);
     void resolve_log(const std::vector<LogLayer>& layers, Model& m);
+    // §14.1 — every recordable channel, and the selection as rows of them.
+    void build_channels(const Source& src, Model& m);
     // §13.3 — `sim.duration` and its kin, from a settings source.
     void sim_binding(const ast::Override& o, const Source& src, Model& m);
 

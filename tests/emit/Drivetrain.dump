@@ -1,4 +1,5 @@
-// Drivetrain: every setting and initial condition, as configured (section 14.1).
+// Drivetrain: how the run is configured (section 14.1): every setting and initial
+// condition, then the recording and the log.
 
 // settings
 wheel_inertia = 0.95 (kg*m^2);
@@ -10,3 +11,25 @@ tc.gain       = 400 (N*m);
 // initial conditions
 whl.omega     = 5 (rad/s);
 tc.cut        = 0 (N*m);
+
+// the recording (section 13.5)
+record {
+    clear;
+    file  = "drivetrain.csv";
+    every = 10;
+    whl.state.omega;
+    whl.out.ws.slip;
+    tc.state.cut;
+    tc.out.torque_cut;
+    sim.utilization;
+    sim.overrun_pct;
+}
+
+// the log (section 13.7)
+log {
+    file  = "drivetrain.log";
+    level = info;
+    levels {
+        tc = debug;
+    }
+}

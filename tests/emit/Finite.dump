@@ -1,4 +1,5 @@
-// Finite: every setting and initial condition, as configured (section 14.1).
+// Finite: how the run is configured (section 14.1): every setting and initial
+// condition, then the recording and the log.
 
 // settings
 cl.accel     = 50 (rad/s^2);
@@ -16,3 +17,22 @@ pi.integ     = 0;
 pi.ctl       = MANUAL;
 tx.range     = DRIVE;
 tx.gear      = 1;
+
+// the recording (section 13.5)
+record {
+    clear;
+    file  = "finite.csv";
+    every = 1;
+    cl.state.w_clutch;
+    cl.state.locked;
+    integ.out.y;
+    pi.u;
+    tx.state.range;
+    tx.state.gear;
+}
+
+// the log (section 13.7)
+log {
+    file  = "";
+    level = info;
+}

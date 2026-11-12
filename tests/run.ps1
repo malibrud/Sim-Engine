@@ -2151,6 +2151,69 @@ if (-not $cl) {
         Pop-Location
     }
 
+    # SPEC 13.3, 14.1 -- a run assembled from a list of settings files, left to
+    # right, the way a user writes it: a baseline of channels, then a file that
+    # turns one off and moves the rate. The list is given comma-separated in
+    # one argument, as cmd and bash pass it; PowerShell's array form arrives
+    # as separate arguments, which the exe takes the same way.
+    if ($emitDirs.ContainsKey('drivetrain')) {
+        Push-Location $emitDirs['drivetrain']
+        [IO.File]::WriteAllText((Join-Path (Get-Location) 'base.settings'),
+            "record { clear; file = `"layered.csv`"; whl.omega; tc.out.torque_cut; ground_speed; }`n")
+        [IO.File]::WriteAllText((Join-Path (Get-Location) 'off.settings'),
+            "record { -whl.state.omega; every = 100; }`n")
+        & '.\build\release\bin\Drivetrain.exe' --settings 'base.settings, off.settings' 2>&1 | Out-Null
+        $code = $LASTEXITCODE
+        $lines = @(Get-Content 'layered.csv' -ErrorAction SilentlyContinue)
+        $want = 'time (s),tc.out.torque_cut [N*m],ground_speed [m/s]'
+        if ($code -eq 0 -and $lines.Count -eq 52 -and $lines[0] -eq $want) {
+            Write-Host "ok   build/emit/drivetrain --settings 'base.settings, off.settings' : layered, left to right" -ForegroundColor Green
+            $script:pass++
+        } else {
+            Write-Host ("FAIL build/emit/drivetrain --settings 'base.settings, off.settings' : exit $code, " +
+                        $lines.Count + " lines") -ForegroundColor Red
+            if ($lines.Count) { Write-Host ("    header: " + $lines[0]) -ForegroundColor Yellow }
+            $script:fail++
+        }
+
+        # The menu is a settings file: saved, loaded back, it lists the same.
+        $menu = ((& '.\build\release\bin\Drivetrain.exe' --list-signals) -join "`n") + "`n"
+        [IO.File]::WriteAllText((Join-Path (Get-Location) 'menu.settings'), $menu)
+        $again = ((& '.\build\release\bin\Drivetrain.exe' --settings menu.settings --list-signals) -join "`n") + "`n"
+        if ($menu -eq $again -and $menu -match '(?m)^    // whl\.drive_torque;' -and $menu -match '(?m)^    whl\.state\.omega;') {
+            Write-Host "ok   build/emit/drivetrain --list-signals : the menu loads back to itself" -ForegroundColor Green
+            $script:pass++
+        } else {
+            Write-Host "FAIL build/emit/drivetrain --list-signals : the menu does not read back" -ForegroundColor Red
+            Write-Host $menu
+            $script:fail++
+        }
+        Pop-Location
+    }
+
+    # An array element is a channel by index, and an index past the extent
+    # configuration settles stops the run before it starts (SPEC 13.5).
+    if ($emitDirs.ContainsKey('ArrSt')) {
+        Push-Location $emitDirs['ArrSt']
+        $menu = ((& '.\build\release\bin\ArrSt.exe' --list-signals) -join "`n")
+        [IO.File]::WriteAllText((Join-Path (Get-Location) 'past.settings'), "record { state.h[5]; }`n")
+        $said = ((& '.\build\release\bin\ArrSt.exe' --settings past.settings 2>&1 |
+                  ForEach-Object { $_.ToString() }) -join "`n").Trim()
+        $code = $LASTEXITCODE
+        $want = 'ArrSt: state.h[5] is past the configured extent (3 elements)'
+        if ($menu -match '(?m)^    state\.x\[2\];' -and $menu -notmatch 'state\.x\[3\]' -and
+            $code -eq 2 -and $said -eq $want) {
+            Write-Host "ok   build/emit/ArrSt : array channels by index, at the configured extent" -ForegroundColor Green
+            $script:pass++
+        } else {
+            Write-Host "FAIL build/emit/ArrSt : array channels, exit $code" -ForegroundColor Red
+            Write-Host ("    want: " + $want) -ForegroundColor DarkGray
+            Write-Host ("    got : " + $said) -ForegroundColor Yellow
+            $script:fail++
+        }
+        Pop-Location
+    }
+
     # BwChk is the array-state feature against the case it was added for: an
     # Nth-order Butterworth as a cascade of second-order sections in ONE leaf
     # (SPEC 6.4a). The assertion is the magnitude response, which the bilinear
@@ -2525,6 +2588,34 @@ if (-not $cl) {
             $script:pass++
         } else {
             Write-Host "FAIL tests/emit/settings_host.cpp" -ForegroundColor Red
+            if (-not $built) { Write-Host $out } else { Write-Host $said }
+            $script:fail++
+        }
+    }
+
+    # tests/emit/record_host.cpp is the run's own configuration (SPEC 13.3,
+    # 13.5, 13.7, 14.1) against the same model: the channel table, the channel
+    # calls, layered sections, the dump and the menu read back, and two copies
+    # of one model writing their own tables and logs.
+    if ($emitDirs.ContainsKey('drivetrain')) {
+        $hostDir = $emitDirs['drivetrain']
+        Copy-Item (Join-Path $root 'tests\emit\record_host.cpp') $hostDir -Force
+        Push-Location $hostDir
+        $out = (& cl /nologo /std:c++20 /EHsc /W4 /permissive- /utf-8 /O2 /MD `
+                    /D_CRT_SECURE_NO_WARNINGS /Fe:record_host.exe record_host.cpp 2>&1 | Out-String)
+        $built = ($LASTEXITCODE -eq 0 -and $out -notmatch 'warning')
+        $said = ''
+        $ran = $false
+        if ($built) {
+            $said = (& '.\record_host.exe' 2>&1 | Out-String)
+            $ran = ($LASTEXITCODE -eq 0)
+        }
+        Pop-Location
+        if ($built -and $ran) {
+            Write-Host "ok   tests/emit/record_host.cpp : recording and logging chosen at run time" -ForegroundColor Green
+            $script:pass++
+        } else {
+            Write-Host "FAIL tests/emit/record_host.cpp" -ForegroundColor Red
             if (-not $built) { Write-Host $out } else { Write-Host $said }
             $script:fail++
         }

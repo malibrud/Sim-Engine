@@ -92,6 +92,10 @@ public:
                std::move(caret_label), std::move(attachments));
     }
 
+    // While muted nothing is reported or counted: the elaborator resolves
+    // candidate paths this way, and a candidate that fails is simply not one.
+    void mute(bool on) { muted_ += on ? 1 : -1; }
+
     int error_count() const { return errors_; }
     int warning_count() const { return warnings_; }
 
@@ -109,6 +113,7 @@ private:
     int errors_ = 0;
     int warnings_ = 0;
     bool announced_limit_ = false;
+    int muted_ = 0;
 };
 
 }  // namespace se

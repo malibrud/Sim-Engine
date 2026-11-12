@@ -1421,7 +1421,13 @@ void Emitter::sim_members() {
     o_ << "    std::uint64_t se_tick_ = 0;\n";
     o_ << "    std::size_t   se_inited_ = 0;\n";
     o_ << "    bool          se_done_ = false;\n";
-    if (m_.record.present) o_ << "    se_rt::Recorder se_rec_;\n";
+    o_ << "\n    // §13.3 — the run's own configuration: what is recorded, where and how\n";
+    o_ << "    // often, and the log. The .sim's entries, edited by every source loaded.\n";
+    o_ << "    se_rt::RunConfig    se_config_ = default_config();\n";
+    o_ << "    se_rt::Recorder     se_rec_;\n";
+    o_ << "    std::vector<double> se_row_;          // one row's values, reused every row\n";
+    o_ << "    std::string         se_list_;         // what list_signals() last returned\n";
+    o_ << "    std::string         se_call_error_;   // the last refused configuration call\n";
 
     if (m_.dynamic_states) {
         // Solver scratch, sized once at configuration. It is not a published
@@ -1483,7 +1489,23 @@ void Emitter::sim_members() {
     if (any_next()) o_ << "    void seed_next();\n    void next_tick();\n";
     o_ << "    void integrate(double t, double h);\n";
     o_ << "    void final_all(const se_rt::RunContext& ctx) const;\n";
-    if (m_.record.present) o_ << "    void record_open();\n    void record_row();\n";
+    o_ << "\n    // §13.5, §14.1 — the channels, and the calls that configure the run.\n";
+    o_ << "    static se_rt::RunConfig default_config();\n";
+    o_ << "    static se_rt::Tables    tables();\n";
+    o_ << "    double      channel(std::size_t row, std::size_t i);\n";
+    o_ << "    std::size_t channel_extent(std::size_t row);\n";
+    o_ << "    void        check_columns();\n";
+    o_ << "    void        record_open();\n";
+    o_ << "    void        record_row();\n";
+    o_ << "    const char* list_signals();\n";
+    o_ << "    std::vector<Sim::ChannelInfo> channels_list();\n";
+    o_ << "    bool        configuring(const char* call);\n";
+    o_ << "    bool        record(const char* path, bool add);\n";
+    o_ << "    void        record_clear();\n";
+    o_ << "    bool        record_file(const char* file);\n";
+    o_ << "    bool        record_every(std::uint64_t n);\n";
+    o_ << "    bool        log_file(const char* file);\n";
+    o_ << "    bool        log_level(const char* path, const char* level);\n";
 }
 
 // The C++ object holding a node's settings. A leaf keeps them in its own
@@ -2084,36 +2106,268 @@ void Emitter::sim_integrate_dynamic() {
     o_ << "}\n";
 }
 
-void Emitter::sim_record() {
-    if (!m_.record.present) return;
-    o_ << "\n// Recording is quantitative: an aligned numeric table. The header\n";
-    o_ << "// carries units, because the values themselves no longer do.\n";
-    o_ << "void Sim::Impl::record_open() {\n";
-    o_ << "    if (!se_rec_.open(" << quote(m_.record.file) << ")) {\n";
-    o_ << "        se_run_.log.write(se_rt::Level::Error, \"sim\", 0.0,\n";
-    o_ << "                          \"cannot open " << m_.record.file
-       << " for writing\");\n        return;\n    }\n";
-    o_ << "    se_rec_.header({";
-    for (std::size_t i = 0; i < m_.record.signals.size(); ++i) {
-        if (i) o_ << ",";
-        const RecordedSignal& s = m_.record.signals[i];
-        o_ << "\n                "
-           << quote(s.path + " [" +
-                    (!s.label.empty() ? s.label : s.enm ? s.enm->fq : s.unit.str()) + "]");
-    }
-    o_ << "});\n}\n";
+namespace {
 
-    o_ << "\nvoid Sim::Impl::record_row() {\n    se_rec_.row(se_time_, {";
-    for (std::size_t i = 0; i < m_.record.signals.size(); ++i) {
-        if (i) o_ << ",";
+const char* level_enum(const std::string& l) {
+    return l == "trace"   ? "se_rt::Level::Trace"
+           : l == "debug" ? "se_rt::Level::Debug"
+           : l == "warn"  ? "se_rt::Level::Warn"
+           : l == "error" ? "se_rt::Level::Error"
+                          : "se_rt::Level::Info";
+}
+
+// The header's bracket for a channel: its unit, its finite type, or
+// `buffer(N)` for a buffer's size (§13.5).
+std::string channel_label(const RecordedSignal& s) {
+    return !s.label.empty() ? s.label : s.enm ? s.enm->fq : s.unit.str();
+}
+
+}  // namespace
+
+// §13.5, §14.1 — the channels, and the run's own configuration. Recording is
+// quantitative: an aligned numeric table whose header carries units, because
+// the values themselves no longer do. What it holds is a run-time choice: the
+// .sim's `record:` is only where a run starts.
+void Emitter::sim_record() {
+    // ── the table ────────────────────────────────────────────────────────────
+    o_ << "\n// §13.5 — every channel this model can record, in tree order, with the\n";
+    o_ << "// bracket its CSV header carries; then the bare spellings of leaf members.\n";
+    o_ << "// An array state is one row, its elements named by index.\n";
+    o_ << "se_rt::Tables Sim::Impl::tables() {\n";
+    {
+        std::vector<std::array<std::string, 3>> cells;
+        for (const Channel& c : m_.channels)
+            cells.push_back({"{" + quote(c.path) + ",", quote(channel_label(c.sig)) + ",",
+                             std::string(c.array ? "true" : "false") + "},"});
+        std::array<std::size_t, 3> w{0, 0, 0};
+        for (const auto& c : cells)
+            for (std::size_t k = 0; k < 3; ++k) w[k] = std::max(w[k], c[k].size());
+        o_ << "    static const se_rt::ChannelRow channels[] = {\n";
+        o_ << "        // path, header bracket, array\n";
+        for (const auto& c : cells)
+            o_ << "        " << pad(c[0], w[0] + 1) << pad(c[1], w[1] + 1) << c[2] << "\n";
+        o_ << "    };\n";
+    }
+    if (m_.channel_aliases.empty()) {
+        o_ << "    static const se_rt::ChannelAlias* const aliases = nullptr;   // no bare spellings\n";
+        o_ << "    const std::size_t n_aliases = 0;\n";
+    } else {
+        std::size_t w = 0;
+        for (const ChannelAlias& a : m_.channel_aliases)
+            w = std::max(w, quote(a.spelling).size() + 2);
+        o_ << "    static const se_rt::ChannelAlias aliases[] = {\n";
+        o_ << "        // spelling, row, the output it might also mean (ambiguous: SE0461)\n";
+        for (const ChannelAlias& a : m_.channel_aliases)
+            o_ << "        {" << pad(quote(a.spelling) + ",", w) << " " << a.row << ", "
+               << (a.other.empty() ? std::string("nullptr") : quote(a.other)) << "},\n";
+        o_ << "    };\n";
+        o_ << "    const std::size_t n_aliases = sizeof aliases / sizeof aliases[0];\n";
+    }
+    o_ << "    std::size_t n = 0;\n";
+    o_ << "    const se_rt::SettingRow* rows = setting_rows(n);\n";
+    o_ << "    return {rows, n, channels, sizeof channels / sizeof channels[0], aliases, n_aliases};\n";
+    o_ << "}\n";
+
+    // ── one channel's value ──────────────────────────────────────────────────
+    bool any_array = false;
+    for (const Channel& c : m_.channels) any_array = any_array || c.array;
+    o_ << "\n// One channel's value now, as a double; `i` is an array state's element.\n";
+    o_ << "double Sim::Impl::channel(std::size_t row, std::size_t i) {\n";
+    if (!any_array) o_ << "    (void)i;\n";
+    o_ << "    switch (row) {\n";
+    for (std::size_t r = 0; r < m_.channels.size(); ++r) {
         // §13.5 — a port path that ended on a setting could not be rendered at
         // elaboration, because a setting reference needs an identifier this
         // stage assigns. Everything else arrives already written.
-        const RecordedSignal& s = m_.record.signals[i];
-        o_ << "\n                       static_cast<double>("
-           << (s.code.empty() ? s.expr : render_expr(s.code)) << ")";
+        const RecordedSignal& s = m_.channels[r].sig;
+        o_ << "        case " << r << ": return static_cast<double>("
+           << (s.code.empty() ? s.expr : render_expr(s.code)) << ");   // "
+           << m_.channels[r].path << "\n";
     }
-    o_ << "});\n}\n";
+    o_ << "        default: return 0.0;\n";
+    o_ << "    }\n}\n";
+
+    o_ << "\n// An array channel's element count, at the extent configuration settles.\n";
+    o_ << "std::size_t Sim::Impl::channel_extent(std::size_t row) {\n";
+    if (!any_array) {
+        o_ << "    (void)row;   // no array states\n";
+        o_ << "    return 1;\n}\n";
+    } else {
+        o_ << "    std::size_t n = 0;\n";
+        o_ << "    switch (row) {\n";
+        for (std::size_t r = 0; r < m_.channels.size(); ++r) {
+            const Channel& c = m_.channels[r];
+            if (!c.array) continue;
+            const StateSlot& st = m_.leaves[c.leaf].states[c.state];
+            o_ << "        case " << r << ": se_rt::extent_of(static_cast<double>("
+               << render_expr(st.extent.expr) << "), n); return n;   // " << c.path << "\n";
+        }
+        o_ << "        default: return 1;\n";
+        o_ << "    }\n}\n";
+    }
+
+    // ── where a run starts ───────────────────────────────────────────────────
+    o_ << "\n// §13.3 — the .sim's `record:` and `log:`, as rows of the table above.\n";
+    o_ << "se_rt::RunConfig Sim::Impl::default_config() {\n";
+    o_ << "    se_rt::RunConfig c;\n";
+    o_ << "    c.record_file = " << quote(m_.record.file) << ";\n";
+    o_ << "    c.every       = " << m_.record.every << ";\n";
+    if (m_.record.columns.empty()) {
+        o_ << "    // no channels: nothing is recorded unless a source selects some\n";
+    } else {
+        o_ << "    c.columns = {\n";
+        for (const RecordConfig::Column& k : m_.record.columns)
+            o_ << "        {" << k.row << ", " << k.index << ", " << quote(k.written) << "},\n";
+        o_ << "    };\n";
+    }
+    o_ << "    c.log_file    = " << quote(m_.log.file) << ";\n";
+    o_ << "    c.level       = " << level_enum(m_.log.level) << ";\n";
+    for (const auto& kv : m_.log.levels)
+        o_ << "    c.levels.emplace_back(" << quote(kv.first) << ", " << level_enum(kv.second)
+           << ");\n";
+    o_ << "    return c;\n";
+    o_ << "}\n";
+
+    // ── a selected element past its extent ───────────────────────────────────
+    o_ << "\n// §13.5 — a selected element past its array's extent, which only\n";
+    o_ << "// configuration settles: checked when a source loads and when the run\n";
+    o_ << "// starts, as an override's index is (§13.4).\n";
+    o_ << "void Sim::Impl::check_columns() {\n";
+    if (!any_array) {
+        o_ << "    // no array states, so no index to check\n";
+    } else {
+        o_ << "    for (const se_rt::Column& c : se_config_.columns)\n";
+        o_ << "        if (tables().channels[c.row].array && c.index >= channel_extent(c.row) &&\n";
+        o_ << "            se_cfg_error_.empty())\n";
+        o_ << "            se_cfg_error_ = se_rt::index_error(c.written.c_str(), channel_extent(c.row));\n";
+    }
+    o_ << "}\n";
+
+    // ── the table on disk ────────────────────────────────────────────────────
+    o_ << "\n// §13.5 — the header, once configuration is over. No channel, no table.\n";
+    o_ << "void Sim::Impl::record_open() {\n";
+    o_ << "    if (se_config_.columns.empty()) return;\n";
+    o_ << "    if (!se_rec_.open(se_config_.record_file)) {\n";
+    o_ << "        se_run_.log.write(se_rt::Level::Error, \"sim\", 0.0,\n";
+    o_ << "                          \"cannot open \" + se_config_.record_file + \" for writing\");\n";
+    o_ << "        return;\n";
+    o_ << "    }\n";
+    o_ << "    const se_rt::Tables t = tables();\n";
+    o_ << "    std::vector<std::string> head;\n";
+    o_ << "    for (const se_rt::Column& c : se_config_.columns)\n";
+    o_ << "        head.push_back(c.written + \" [\" + t.channels[c.row].label + \"]\");\n";
+    o_ << "    se_rec_.header(head);\n";
+    o_ << "    se_row_.assign(se_config_.columns.size(), 0.0);\n";
+    o_ << "}\n";
+
+    o_ << "\nvoid Sim::Impl::record_row() {\n";
+    o_ << "    for (std::size_t k = 0; k < se_row_.size(); ++k)\n";
+    o_ << "        se_row_[k] = channel(se_config_.columns[k].row, se_config_.columns[k].index);\n";
+    o_ << "    se_rec_.row(se_time_, se_row_);\n";
+    o_ << "}\n";
+
+    // ── the menu, and the list ───────────────────────────────────────────────
+    o_ << "\n// §14.1 — every channel as a `record` section, the unselected ones\n";
+    o_ << "// commented out: edit it, and load it back.\n";
+    o_ << "const char* Sim::Impl::list_signals() {\n";
+    o_ << "    const se_rt::Tables t = tables();\n";
+    o_ << "    std::vector<std::size_t> extents(t.n_channels, 1);\n";
+    o_ << "    for (std::size_t r = 0; r < t.n_channels; ++r)\n";
+    o_ << "        if (t.channels[r].array) extents[r] = channel_extent(r);\n";
+    o_ << "    se_list_ = se_rt::list_source(" << quote(m_.name)
+       << ", t.channels, t.n_channels, extents.data(), se_config_);\n";
+    o_ << "    return se_list_.c_str();\n";
+    o_ << "}\n";
+
+    o_ << "\nstd::vector<Sim::ChannelInfo> Sim::Impl::channels_list() {\n";
+    o_ << "    const se_rt::Tables t = tables();\n";
+    o_ << "    std::vector<Sim::ChannelInfo> out;\n";
+    o_ << "    for (std::size_t r = 0; r < t.n_channels; ++r) {\n";
+    o_ << "        const std::size_t count = t.channels[r].array ? channel_extent(r) : 1;\n";
+    o_ << "        for (std::size_t i = 0; i < count; ++i) {\n";
+    o_ << "            Sim::ChannelInfo c;\n";
+    o_ << "            c.path = t.channels[r].path;\n";
+    o_ << "            if (t.channels[r].array) c.path += \"[\" + std::to_string(i) + \"]\";\n";
+    o_ << "            c.unit = t.channels[r].label;\n";
+    o_ << "            for (const se_rt::Column& k : se_config_.columns)\n";
+    o_ << "                c.selected = c.selected || (k.row == r && k.index == i);\n";
+    o_ << "            out.push_back(std::move(c));\n";
+    o_ << "        }\n";
+    o_ << "    }\n";
+    o_ << "    return out;\n";
+    o_ << "}\n";
+
+    // ── one call per line of a section ───────────────────────────────────────
+    o_ << "\n// §14.1 — the run's configuration one call at a time, each exactly one\n";
+    o_ << "// line of a `record` or `log` section. A refused call changes nothing and\n";
+    o_ << "// does not stop the run; error() says why until the next call.\n";
+    o_ << "bool Sim::Impl::configuring(const char* call) {\n";
+    o_ << "    if (se_started_) {\n";
+    o_ << "        se_call_error_ = std::string(call) + \"() comes before init(): \"\n";
+    o_ << "                         \"configuration is over (§6.2b)\";\n";
+    o_ << "        return false;\n";
+    o_ << "    }\n";
+    o_ << "    se_call_error_.clear();\n";
+    o_ << "    return true;\n";
+    o_ << "}\n";
+
+    o_ << "\nbool Sim::Impl::record(const char* path, bool add) {\n";
+    o_ << "    if (!configuring(add ? \"record\" : \"unrecord\")) return false;\n";
+    o_ << "    se_rt::Column c{0, 0, std::string()};\n";
+    o_ << "    std::string why;\n";
+    o_ << "    if (!se_rt::channel_text(tables(), path, c, why)) {\n";
+    o_ << "        se_call_error_ = std::string(path ? path : \"\") + \": \" + why;\n";
+    o_ << "        return false;\n";
+    o_ << "    }\n";
+    o_ << "    if (add) se_config_.add(c);\n";
+    o_ << "    else se_config_.remove(c.row, c.index);\n";
+    o_ << "    return true;\n";
+    o_ << "}\n";
+
+    o_ << "\nvoid Sim::Impl::record_clear() {\n";
+    o_ << "    if (configuring(\"record_clear\")) se_config_.columns.clear();\n";
+    o_ << "}\n";
+
+    o_ << "\nbool Sim::Impl::record_file(const char* file) {\n";
+    o_ << "    if (!configuring(\"record_file\")) return false;\n";
+    o_ << "    if (!file || !*file) {\n";
+    o_ << "        se_call_error_ = \"record_file: a file name is required; record_clear() \"\n";
+    o_ << "                         \"turns recording off\";\n";
+    o_ << "        return false;\n";
+    o_ << "    }\n";
+    o_ << "    se_config_.record_file = file;\n";
+    o_ << "    return true;\n";
+    o_ << "}\n";
+
+    o_ << "\nbool Sim::Impl::record_every(std::uint64_t n) {\n";
+    o_ << "    if (!configuring(\"record_every\")) return false;\n";
+    o_ << "    if (n < 1) {\n";
+    o_ << "        se_call_error_ = \"record_every: a whole number of base steps, 1 or more\";\n";
+    o_ << "        return false;\n";
+    o_ << "    }\n";
+    o_ << "    se_config_.every = n;\n";
+    o_ << "    return true;\n";
+    o_ << "}\n";
+
+    o_ << "\nbool Sim::Impl::log_file(const char* file) {\n";
+    o_ << "    if (!configuring(\"log_file\")) return false;\n";
+    o_ << "    se_config_.log_file = file ? file : \"\";\n";
+    o_ << "    return true;\n";
+    o_ << "}\n";
+
+    o_ << "\n// `path` null: the global threshold; otherwise one node path's.\n";
+    o_ << "bool Sim::Impl::log_level(const char* path, const char* level) {\n";
+    o_ << "    if (!configuring(\"log_level\")) return false;\n";
+    o_ << "    se_rt::Level l = se_rt::Level::Info;\n";
+    o_ << "    if (!level || !se_rt::level_of(level, l)) {\n";
+    o_ << "        se_call_error_ = std::string(\"log_level: `\") + (level ? level : \"\") +\n";
+    o_ << "                         \"` is not a level: trace, debug, info, warn or error\";\n";
+    o_ << "        return false;\n";
+    o_ << "    }\n";
+    o_ << "    if (path) se_config_.path_level(path, l);\n";
+    o_ << "    else se_config_.level = l;\n";
+    o_ << "    return true;\n";
+    o_ << "}\n";
 }
 
 void Emitter::sim_run() {
@@ -2147,7 +2401,7 @@ void Emitter::sim_run() {
     o_ << "    se_tick_ = 0;\n    se_time_ = 0.0;\n    se_done_ = false;\n";
     o_ << "    se_run_.clock = se_rt::RunState{0.0, step_seconds, 0};   // §10.5\n";
     o_ << "    se_inited_ = 0;\n";
-    if (m_.record.present) o_ << "    record_open();\n";
+    o_ << "    record_open();\n";
     for (std::size_t i = 0; i < m_.leaves.size(); ++i) {
         const Leaf& leaf = m_.leaves[i];
         o_ << "    if (se_run_.control.halted()) return;\n";
@@ -2177,12 +2431,7 @@ void Emitter::sim_run() {
     o_ << "    output_pass();\n";
     o_ << "    publish_outputs();\n";
     if (any_next()) o_ << "    if (!se_run_.control.halted()) next_tick();\n";
-    if (m_.record.present) {
-        if (m_.record.every > 1)
-            o_ << "    if (se_tick_ % " << m_.record.every << " == 0) record_row();\n";
-        else
-            o_ << "    record_row();\n";
-    }
+    o_ << "    if (se_rec_.active() && se_tick_ % se_config_.every == 0) record_row();\n";
     o_ << "    if (se_run_.control.halted() || se_tick_ >= tick_count) {\n";
     o_ << "        se_done_ = true;\n        return;\n    }\n";
     // §9.6 — the commit: below the exit, so a halted run keeps the state its
@@ -2204,7 +2453,7 @@ void Emitter::sim_run() {
     o_ << "    se_run_.control.complete();\n";
     o_ << "    const se_rt::RunContext ctx = se_run_.control.context(se_time_);\n";
     o_ << "    final_all(ctx);\n";
-    if (m_.record.present) o_ << "    se_rec_.close();\n";
+    o_ << "    se_rec_.close();\n";
     o_ << "    se_run_.realtime.summary();   // silent unless the host paced the run\n";
     // §10.6 -- after the realtime summary and before the closing line, so
     // the last thing a log carries is the run's outcome and not a contract detail.
@@ -2230,7 +2479,8 @@ void Emitter::sim_run() {
     o_ << "    if (!se_rerun_error_.empty()) return se_rerun_error_.c_str();\n";
     o_ << "    const std::string& m = se_run_.control.message();\n";
     o_ << "    if (!m.empty()) return m.c_str();\n";
-    o_ << "    return se_load_error_.empty() ? se_cfg_error_.c_str() : se_load_error_.c_str();\n";
+    o_ << "    if (!se_load_error_.empty()) return se_load_error_.c_str();\n";
+    o_ << "    return se_cfg_error_.empty() ? se_call_error_.c_str() : se_cfg_error_.c_str();\n";
     o_ << "}\n";
 
     // ── start ────────────────────────────────────────────────────────────────
@@ -2253,6 +2503,7 @@ void Emitter::sim_run() {
     o_ << "    if (!refused.empty() && se_cfg_error_.empty()) se_cfg_error_ = refused;\n";
     o_ << "    // §14.1 — a refused settings source stands, and came first.\n";
     o_ << "    if (!se_load_error_.empty()) se_cfg_error_ = se_load_error_;\n";
+    o_ << "    check_columns();\n";
     o_ << "    publish_settings();\n";
     if (m_.dynamic_states) {
         // §15.5a — the buffers are the host's, and here the host is Sim.
@@ -2270,27 +2521,14 @@ void Emitter::sim_run() {
     o_ << "    return !se_run_.control.halted();\n";
     o_ << "}\n";
 
-    // ── the run configuration the .sim file gave ─────────────────────────────
-    o_ << "\n// Logging (§13.7), as the .sim file set it.\n";
+    // ── the log, as configuration left it ────────────────────────────────────
+    o_ << "\n// Logging (§13.7): the .sim's `log:`, as every source loaded has edited it.\n";
+    o_ << "// The file opens here, when the run starts, so a host that gives two copies\n";
+    o_ << "// of one model a file each gets two logs.\n";
     o_ << "void Sim::Impl::configure_run() {\n";
-    o_ << "    se_run_.log.configure(" << quote(m_.log.file) << ", se_rt::Level::";
-    const std::string lvl = m_.log.level;
-    o_ << (lvl == "trace"   ? "Trace"
-           : lvl == "debug" ? "Debug"
-           : lvl == "warn"  ? "Warn"
-           : lvl == "error" ? "Error"
-                            : "Info")
-       << ");\n";
-    for (const auto& kv : m_.log.levels) {
-        const std::string& l = kv.second;
-        o_ << "    se_run_.log.set_path_level(" << quote(kv.first) << ", se_rt::Level::"
-           << (l == "trace"   ? "Trace"
-               : l == "debug" ? "Debug"
-               : l == "warn"  ? "Warn"
-               : l == "error" ? "Error"
-                              : "Info")
-           << ");\n";
-    }
+    o_ << "    se_run_.log.configure(se_config_.log_file.c_str(), se_config_.level);\n";
+    o_ << "    for (const auto& p : se_config_.levels)\n";
+    o_ << "        se_run_.log.set_path_level(p.first.c_str(), p.second);\n";
     o_ << "}\n";
 }
 
@@ -2619,11 +2857,10 @@ void Emitter::sim_settings_source() {
     o_ << "        return false;\n";
     o_ << "    }\n";
     o_ << "    if (!se_load_error_.empty()) return false;   // an earlier refusal stands\n";
-    o_ << "    std::size_t n = 0;\n";
-    o_ << "    const se_rt::SettingRow* rows = setting_rows(n);\n";
     o_ << "    se_rt::SourceReader reader(text, origin);\n";
     o_ << "    std::vector<se_rt::Assignment> got;\n";
-    o_ << "    if (!reader.check(rows, n, got)) {\n";
+    o_ << "    std::vector<se_rt::RunEdit> edits;\n";
+    o_ << "    if (!reader.check(tables(), got, edits)) {\n";
     o_ << "        se_load_error_ = reader.error();\n";
     o_ << "        return false;\n";
     o_ << "    }\n";
@@ -2631,6 +2868,7 @@ void Emitter::sim_settings_source() {
     o_ << "    // later writer (§13.3).\n";
     o_ << "    const std::string refused = accept_settings();\n";
     o_ << "    for (const se_rt::Assignment& a : got) assign(a);\n";
+    o_ << "    for (const se_rt::RunEdit& e : edits) se_rt::apply(se_config_, e);\n";
     o_ << "    settle();\n";
     o_ << "    if (!refused.empty()) se_load_error_ = refused;\n";
     o_ << "    return se_load_error_.empty() && se_cfg_error_.empty();\n";
@@ -2640,14 +2878,16 @@ void Emitter::sim_settings_source() {
     o_ << "\n// §6.2b step 3 onwards, then the root settings back out to settings().\n";
     o_ << "std::string Sim::Impl::settle() {\n";
     o_ << "    " << settle << "\n";
+    o_ << "    check_columns();\n";
     o_ << "    publish_settings();\n";
     o_ << "    return se_cfg_error_;\n";
     o_ << "}\n";
 
     // ── dump ─────────────────────────────────────────────────────────────────
-    o_ << "\n// §14.1 — every setting and initial condition as a §14 source, which\n";
-    o_ << "// load_settings() reads back. Before init() it first takes the host's\n";
-    o_ << "// pending edits, so the dump is what init() would run with.\n";
+    o_ << "\n// §14.1 — the recipe for the run: every setting and initial condition,\n";
+    o_ << "// the recording and the log, as a §14 source that load_settings() reads\n";
+    o_ << "// back. Before init() it first takes the host's pending edits, so the\n";
+    o_ << "// dump is what init() would run with.\n";
     o_ << "const char* Sim::Impl::dump_settings() {\n";
     o_ << "    if (!se_started_) {\n";
     o_ << "        const std::string refused = accept_settings();\n";
@@ -2659,7 +2899,8 @@ void Emitter::sim_settings_source() {
     o_ << "    std::vector<double> values(n, 0.0);\n";
     o_ << "    for (std::size_t r = 0; r < n; ++r) values[r] = value_of(r);\n";
     o_ << "    se_dump_ = se_rt::dump_source(" << quote(m_.name)
-       << ", rows, n, values.data(), se_ic_elements_);\n";
+       << ", rows, n, values.data(), se_ic_elements_) +\n"
+          "               se_rt::dump_run(se_config_);\n";
     o_ << "    return se_dump_.c_str();\n";
     o_ << "}\n";
 }
@@ -2677,6 +2918,20 @@ void Emitter::sim_facade() {
     o_ << "    return impl_->load_settings(text, origin);\n";
     o_ << "}\n";
     o_ << "const char*         Sim::dump_settings()    { return impl_->dump_settings(); }\n";
+    o_ << "const char*         Sim::list_signals()     { return impl_->list_signals(); }\n";
+    o_ << "std::vector<Sim::ChannelInfo> Sim::channels_list() { return impl_->channels_list(); }\n";
+    o_ << "bool          Sim::record(const char* path)    { return impl_->record(path, true); }\n";
+    o_ << "bool          Sim::unrecord(const char* path)  { return impl_->record(path, false); }\n";
+    o_ << "void          Sim::record_clear()              { impl_->record_clear(); }\n";
+    o_ << "bool          Sim::record_file(const char* f)  { return impl_->record_file(f); }\n";
+    o_ << "const char*   Sim::record_file() const         "
+          "{ return impl_->se_config_.record_file.c_str(); }\n";
+    o_ << "bool          Sim::record_every(std::uint64_t n) { return impl_->record_every(n); }\n";
+    o_ << "std::uint64_t Sim::record_every() const        { return impl_->se_config_.every; }\n";
+    o_ << "bool          Sim::log_file(const char* f)     { return impl_->log_file(f); }\n";
+    o_ << "bool          Sim::log_level(const char* l)    { return impl_->log_level(nullptr, l); }\n";
+    o_ << "bool          Sim::log_level(const char* p, const char* l) "
+          "{ return impl_->log_level(p, l); }\n";
     o_ << "bool                Sim::init()             { return impl_->start(); }\n";
     o_ << "const char*         Sim::error() const      { return impl_->error(); }\n";
     o_ << "Sim::Inputs&        Sim::inputs()           { return impl_->sig.in; }\n";
@@ -2920,6 +3175,12 @@ void Emitter::public_class() {
     o_ << "        std::uint64_t frames      = 0;     // sync_realtime() calls, the whole run\n";
     o_ << "        std::uint64_t overruns    = 0;     // of which overran, the whole run\n";
     o_ << "    };\n";
+    o_ << "    //  One channel the run can record (§13.5), and whether it is selected.\n";
+    o_ << "    struct ChannelInfo {\n";
+    o_ << "        std::string path;               // \"whl.state.omega\", \"bw.state.w1[3]\"\n";
+    o_ << "        std::string unit;               // the CSV header's bracket: a unit, a type\n";
+    o_ << "        bool        selected = false;\n";
+    o_ << "    };\n";
     o_ << "\n";
     const std::string step = dbl(m_.step) + ";", ticks = std::to_string(tick_count()) + ";";
     const std::size_t wv = std::max(step.size(), ticks.size());
@@ -2941,9 +3202,30 @@ void Emitter::public_class() {
     o_ << "    //  line was refused, and error() says which and why. A refusal stands,\n";
     o_ << "    //  so init() will not run.\n";
     o_ << "    bool        load_settings(const char* text, const char* origin = \"settings\");\n";
-    o_ << "    //  Every setting and initial condition as a §14 source, which\n";
-    o_ << "    //  load_settings() reads back. Valid until the next call.\n";
-    o_ << "    const char* dump_settings();\n\n";
+    o_ << "    //  The recipe for the run as a §14 source: every setting and initial\n";
+    o_ << "    //  condition, the recording and the log. load_settings() reads it back.\n";
+    o_ << "    //  Valid until the next call.\n";
+    o_ << "    const char* dump_settings();\n";
+    o_ << "    //  Every channel as a `record` section, the unselected ones commented\n";
+    o_ << "    //  out: save it, edit it, load it back. Valid until the next call.\n";
+    o_ << "    const char* list_signals();\n\n";
+    o_ << "    //  The recording one line of a `record` section at a time (§13.5):\n";
+    o_ << "    //  record() is `path;`, unrecord() is `-path;`, record_clear() is\n";
+    o_ << "    //  `clear;`. A refused call returns false, changes nothing, and does\n";
+    o_ << "    //  not stop the run; error() says why.\n";
+    o_ << "    std::vector<ChannelInfo> channels_list();\n";
+    o_ << "    bool          record(const char* path);\n";
+    o_ << "    bool          unrecord(const char* path);\n";
+    o_ << "    void          record_clear();\n";
+    o_ << "    bool          record_file(const char* file);\n";
+    o_ << "    const char*   record_file() const;\n";
+    o_ << "    bool          record_every(std::uint64_t ticks);\n";
+    o_ << "    std::uint64_t record_every() const;\n";
+    o_ << "    //  The log (§13.7): its file, \"\" for the console only, then the threshold,\n";
+    o_ << "    //  overall or for one node path: trace, debug, info, warn or error.\n";
+    o_ << "    bool          log_file(const char* file);\n";
+    o_ << "    bool          log_level(const char* level);\n";
+    o_ << "    bool          log_level(const char* path, const char* level);\n\n";
 
     o_ << "    // ---- 2. start " << std::string(58, '-') << "\n";
     o_ << "    //  Applies settings(), sets every initial condition and runs every\n";
@@ -3033,7 +3315,7 @@ std::string Emitter::public_hpp() {
     o_ << "//  schedule — is in " << gen_ << " and is not part of this interface.\n";
     o_ << "// " << std::string(76, '-') << "\n";
     o_ << "#pragma once\n\n";
-    o_ << "#include <cstdint>\n#include <memory>\n\n";
+    o_ << "#include <cstdint>\n#include <memory>\n#include <string>\n#include <vector>\n\n";
 
     const std::set<const EnumInfo*> pub_e = public_enums();
     if (!pub_e.empty()) {
@@ -3158,15 +3440,17 @@ std::string Emitter::main_cpp() {
         };
         t << "static const char* const usage =\n";
         t << "    " << line("usage: " + m_.name +
-                            " [--settings FILE]... [--set PATH=VALUE]... [--dump-settings]"
-                            " [--realtime SYNC]")
+                            " [--settings FILE...]... [--set PATH=VALUE]... [--dump-settings]"
+                            " [--list-signals] [--realtime SYNC]")
           << "\n";
-        t << "    " << line("  --settings FILE    load a .settings file (section 14); "
-                            "repeatable, in order")
+        t << "    " << line("  --settings FILE... load settings files (section 14), left to "
+                            "right; a comma-separated list too")
           << "\n";
         t << "    " << line("  --set PATH=VALUE   load one binding, as --set \"" + eg + "\"")
           << "\n";
-        t << "    " << line("  --dump-settings    print every setting and initial condition, "
+        t << "    " << line("  --dump-settings    print how the run is configured, and stop")
+          << "\n";
+        t << "    " << line("  --list-signals     print every channel as a record section, "
                             "and stop")
           << "\n";
         t << "    " << line("  --realtime SYNC    keep pace with wall time, catching up every "
@@ -3215,8 +3499,10 @@ std::string Emitter::main_cpp() {
     else
         t << "\n";
     t << "    //    A settings source reaches any setting or initial condition by path,\n";
-    t << "    //    and here it comes from the command line (section 14.1).\n";
+    t << "    //    the recording and the log, and here it comes from the command line\n";
+    t << "    //    (section 14.1).\n";
     t << "    bool dump = false;\n";
+    t << "    bool list = false;\n";
     t << "    bool realtime = false;     // --realtime: keep pace with wall time\n";
     t << "    std::uint64_t frame = 1;   // ticks between sync_realtime() calls\n";
     t << "    for (int i = 1; i < argc; ++i) {\n";
@@ -3224,17 +3510,38 @@ std::string Emitter::main_cpp() {
     t << "        std::string text;\n";
     t << "        const char* origin = nullptr;\n";
     t << "        if (arg == \"--settings\" && i + 1 < argc) {\n";
-    t << "            origin = argv[++i];\n";
-    t << "            if (!read_file(origin, text)) {\n";
-    t << "                std::fprintf(stderr, \"" << who << ": cannot read %s\\n\", origin);\n";
-    t << "                return 2;\n";
+    t << "            // Every argument up to the next option, each split at its commas, so\n";
+    t << "            // `--settings a.settings, b.settings` reads the same from any shell.\n";
+    t << "            while (i + 1 < argc && std::string(argv[i + 1]).compare(0, 2, \"--\") != 0) {\n";
+    t << "                const std::string list_arg = argv[++i];\n";
+    t << "                for (std::size_t at = 0; at <= list_arg.size();) {\n";
+    t << "                    std::size_t comma = list_arg.find(',', at);\n";
+    t << "                    if (comma == std::string::npos) comma = list_arg.size();\n";
+    t << "                    std::string file = list_arg.substr(at, comma - at);\n";
+    t << "                    at = comma + 1;\n";
+    t << "                    while (!file.empty() && file.front() == ' ') file.erase(0, 1);\n";
+    t << "                    while (!file.empty() && file.back() == ' ') file.pop_back();\n";
+    t << "                    if (file.empty()) continue;\n";
+    t << "                    if (!read_file(file.c_str(), text)) {\n";
+    t << "                        std::fprintf(stderr, \"" << who << ": cannot read %s\\n\", file.c_str());\n";
+    t << "                        return 2;\n";
+    t << "                    }\n";
+    t << "                    if (!sim.load_settings(text.c_str(), file.c_str())) {\n";
+    t << "                        std::fprintf(stderr, \"" << who << ": %s\\n\", sim.error());\n";
+    t << "                        return 2;\n";
+    t << "                    }\n";
+    t << "                }\n";
     t << "            }\n";
+    t << "            continue;\n";
     t << "        } else if (arg == \"--set\" && i + 1 < argc) {\n";
     t << "            origin = \"--set\";\n";
     t << "            text = argv[++i];\n";
     t << "            if (text.empty() || text.back() != ';') text += ';';\n";
     t << "        } else if (arg == \"--dump-settings\") {\n";
     t << "            dump = true;\n";
+    t << "            continue;\n";
+    t << "        } else if (arg == \"--list-signals\") {\n";
+    t << "            list = true;\n";
     t << "            continue;\n";
     t << "        } else if (arg == \"--realtime\" && i + 1 < argc) {\n";
     t << "            const double sync = read_time(argv[++i]);\n";
@@ -3258,8 +3565,8 @@ std::string Emitter::main_cpp() {
     t << "            return 2;\n";
     t << "        }\n";
     t << "    }\n";
-    t << "    if (dump) {\n";
-    t << "        std::fputs(sim.dump_settings(), stdout);\n";
+    t << "    if (dump || list) {\n";
+    t << "        std::fputs(dump ? sim.dump_settings() : sim.list_signals(), stdout);\n";
     t << "        return 0;\n";
     t << "    }\n\n";
 

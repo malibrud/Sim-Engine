@@ -18,10 +18,11 @@ example host).
 1. [The life of a run](#1-the-life-of-a-run)
 2. [How settings are finalized](#2-how-settings-are-finalized)
 3. [How initial conditions are finalized](#3-how-initial-conditions-are-finalized)
-4. [Starting the run](#4-starting-the-run)
-5. [The tick](#5-the-tick)
-6. [The end of a run](#6-the-end-of-a-run)
-7. [Where the data lives](#7-where-the-data-lives)
+4. [What is recorded and logged](#4-what-is-recorded-and-logged)
+5. [Starting the run](#5-starting-the-run)
+6. [The tick](#6-the-tick)
+7. [The end of a run](#7-the-end-of-a-run)
+8. [Where the data lives](#8-where-the-data-lives)
 
 ## 1. The life of a run
 
@@ -29,7 +30,7 @@ A host makes four kinds of call, in this order.
 
 | Phase | Host calls | What happens |
 |---|---|---|
-| Configure | `Sim()`, `settings()`, `load_settings()`, `dump_settings()` | Settings and initial-condition overrides are collected. No node code runs. |
+| Configure | `Sim()`, `settings()`, `load_settings()`, `dump_settings()`, `list_signals()`, the channel and log calls | Settings, initial-condition overrides, the recorded channels and the log are collected. No node code runs. |
 | Start | `init()` | Settings are finalized, initial conditions are written, and every node's `init()` runs. |
 | Step | `inputs()`, `tick()`, `outputs()`, `done()`, `sync_realtime()` | One `tick()` samples the model at the current time and advances it one step. It never waits; `sync_realtime()` is how a host keeps pace with wall time. |
 | Finish | `finish()` | Every node's `final()` runs, the recording and log close, and the exit code is returned. |
@@ -179,15 +180,52 @@ that quantity to be tunable exposes the input to the computation as a setting, a
 `var` members are not initial conditions. They have no override channel, start at
 zero, and are normally computed in `init()`.
 
-## 4. Starting the run
+## 4. What is recorded and logged
+
+The sim file's `record:` and `log:` entries are only where a run starts. Every path
+the sim file could record is a channel in the compiled model: each leaf's outputs,
+states and vars, each port at every level, and the `sim.*` metrics. A run chooses
+among them without regenerating, through the same settings sources:
+
+```
+record {
+    clear;                     // start from scratch
+    file  = "heavy.csv";
+    every = 10;
+    whl.state.omega;
+    tc.out.torque_cut;
+}
+
+log { file = "heavy.log"; level = warn; levels { tc = debug; } }
+```
+
+Each line is an edit, and sources apply in order, so one file can set a baseline of
+channels and a later one can drop a few with `-path;`. The same edits are calls on
+`Sim`: `record()`, `unrecord()`, `record_clear()`, `record_file()`,
+`record_every()`, `log_file()` and `log_level()`. `channels_list()` returns every
+channel and whether it is selected.
+
+Two outputs read back as settings sources:
+
+- `dump_settings()` (`--dump-settings`) is the recipe for the run. Its `record`
+  section starts with `clear;`, so loading it reproduces the selection exactly.
+- `list_signals()` (`--list-signals`) is the menu: every channel, the unselected
+  ones commented out, to be edited and kept as a channel file.
+
+A recorded element of an array state is checked against its extent when the
+source loads and when the run starts. The table and the log file open in
+`init()`, after configuration, so two copies of one model given a file each write
+two of each. A table is written only if at least one channel is selected.
+
+## 5. Starting the run
 
 `sim.init()` does the following, in order.
 
-1. Configures logging, as the sim file set it.
+1. Configures logging, as configuration left it ([section 4](#4-what-is-recorded-and-logged)).
 2. Finalizes the settings ([section 2](#what-is-fixed-and-when)).
 3. If a configuration failure stands, stops here. No node runs.
 4. Writes every state's initial value (layers 1 and 2 above).
-5. Opens the recording.
+5. Opens the recording, if any channel is selected.
 6. Calls each node's `init()` in elaboration order, stopping if one halts the run.
 
 `init()` returns false if a load was refused or a node halted the run. `error()`
@@ -196,7 +234,7 @@ says why.
 No output has been computed yet. The first values appear during the first
 `tick()`.
 
-## 5. The tick
+## 6. The tick
 
 ### The sequence
 
@@ -333,7 +371,7 @@ Anything slower than the tick is written against the tick counter:
 next() { if (sim.tick() % var.poll_ticks == 0) poll(); }
 ```
 
-## 6. The end of a run
+## 7. The end of a run
 
 A run ends in one of these ways, and `tick()` then sets `done()`:
 
@@ -358,7 +396,7 @@ runs, the row is still recorded, the exit is taken, and nothing commits.
 It returns 0 for a clean run. It returns 1 if the run was aborted or failed, or if a
 `sim.check_*` contract was broken at any point. A broken check does not stop a run.
 
-## 7. Where the data lives
+## 8. Where the data lives
 
 Behind the public header, the model is a small number of flat blocks.
 

@@ -670,6 +670,7 @@ public:
     }
 
     std::uint64_t rows() const { return rows_; }
+    bool active() const { return file_ != nullptr; }
 
 private:
     std::FILE* file_ = nullptr;
@@ -1213,26 +1214,222 @@ struct Assignment {
     double value;
 };
 
-// One binding as the loader reads it: a number with an optional unit, or a
-// bare name for an enumerator. Section 14.1 accepts nothing more at run time,
-// and the reader says so rather than evaluating a section-7 expression.
+// ─── The run's own configuration (section 13.3) ─────────────────────────────
+//
+// What a source says about the run rather than the model: which channels are
+// recorded, where and how often (section 13.5), and the log (section 13.7).
+// The .sim's entries are where a run starts; each `record` or `log` section
+// edits that, in order, and a later source edits what an earlier one left.
+
+// One recordable channel. An array state is one row, its elements named by
+// index at the extent configuration settles.
+struct ChannelRow {
+    const char* path;        // canonical: "whl.state.omega"; an array without its index
+    const char* label;       // the CSV header's bracket: a unit, a finite type, buffer(N)
+    bool array;
+};
+
+// A bare spelling of a leaf member: `whl.omega` for `whl.state.omega`. When
+// `other` is set the spelling is ambiguous, and `row` is the state while
+// `other` names the output (section 6.11).
+struct ChannelAlias {
+    const char* spelling;
+    std::size_t row;
+    const char* other;
+};
+
+// One column: a channel, its element, and the path as written where it was
+// added, which is what the header shows.
+struct Column {
+    std::size_t row;
+    std::size_t index;
+    std::string written;
+};
+
+struct RunConfig {
+    std::vector<Column> columns;
+    std::string record_file = "run.csv";
+    std::uint64_t every = 1;
+    std::string log_file;                 // empty: the console only
+    Level level = Level::Info;
+    std::vector<std::pair<std::string, Level>> levels;
+
+    // Adding a channel that is already selected keeps its place; removing one
+    // that is not does nothing, so a "turn these off" source layers on any
+    // baseline (section 13.5).
+    void add(const Column& c) {
+        for (const Column& k : columns)
+            if (k.row == c.row && k.index == c.index) return;
+        columns.push_back(c);
+    }
+    void remove(std::size_t row, std::size_t index) {
+        for (std::size_t k = 0; k < columns.size(); ++k)
+            if (columns[k].row == row && columns[k].index == index) {
+                columns.erase(columns.begin() + static_cast<std::ptrdiff_t>(k));
+                return;
+            }
+    }
+    void path_level(const std::string& path, Level l) {
+        for (auto& p : levels)
+            if (p.first == path) {
+                p.second = l;
+                return;
+            }
+        levels.emplace_back(path, l);
+    }
+};
+
+// One edit a source makes to it. A source's edits are kept, in order, until
+// the whole source has been checked, so a refused source changes nothing.
+struct RunEdit {
+    enum class Kind : unsigned char { Clear, Add, Remove, File, Every, LogFile, LogLevel, PathLevel };
+    Kind kind = Kind::Clear;
+    Column column{0, 0, std::string()};
+    std::string text;        // a file name, or the path a level is for
+    std::uint64_t every = 0;
+    Level level = Level::Info;
+};
+
+inline void apply(RunConfig& c, const RunEdit& e) {
+    switch (e.kind) {
+        case RunEdit::Kind::Clear:     c.columns.clear(); break;
+        case RunEdit::Kind::Add:       c.add(e.column); break;
+        case RunEdit::Kind::Remove:    c.remove(e.column.row, e.column.index); break;
+        case RunEdit::Kind::File:      c.record_file = e.text; break;
+        case RunEdit::Kind::Every:     c.every = e.every; break;
+        case RunEdit::Kind::LogFile:   c.log_file = e.text; break;
+        case RunEdit::Kind::LogLevel:  c.level = e.level; break;
+        case RunEdit::Kind::PathLevel: c.path_level(e.text, e.level); break;
+    }
+}
+
+inline bool level_of(const std::string& s, Level& out) {
+    for (int k = 0; k <= static_cast<int>(Level::Error); ++k)
+        if (s == level_name(static_cast<Level>(k))) {
+            out = static_cast<Level>(k);
+            return true;
+        }
+    return false;
+}
+
+// What a source is checked against: the paths its bindings may reach, and the
+// channels its `record` sections may name.
+struct Tables {
+    const SettingRow* rows;
+    std::size_t n_rows;
+    const ChannelRow* channels;
+    std::size_t n_channels;
+    const ChannelAlias* aliases;
+    std::size_t n_aliases;
+};
+
+// A channel path as `sec` resolves one (section 13.5): canonical, or a bare
+// spelling that is not ambiguous. `shown` is the path as written, its index
+// included. False, with `why`, when it names no channel.
+inline bool channel_of(const Tables& t, const std::string& path, bool indexed, std::size_t index,
+                       const std::string& shown, Column& out, std::string& why) {
+    std::size_t row = t.n_channels;
+    for (std::size_t r = 0; r < t.n_channels; ++r)
+        if (path == t.channels[r].path) {
+            row = r;
+            break;
+        }
+    for (std::size_t a = 0; row == t.n_channels && a < t.n_aliases; ++a) {
+        if (path != t.aliases[a].spelling) continue;
+        if (t.aliases[a].other) {
+            why = std::string("ambiguous: `") + t.channels[t.aliases[a].row].path +
+                  "` names the state, and `" + t.aliases[a].other + "` the output (section 6.11)";
+            return false;
+        }
+        row = t.aliases[a].row;
+    }
+    if (row == t.n_channels) {
+        why = "not a recordable signal of this model; list_signals() names every one "
+              "(section 13.5)";
+        return false;
+    }
+    if (t.channels[row].array && !indexed) {
+        why = "an array state, recorded one element at a time, as `" + path + "[0]`";
+        return false;
+    }
+    if (!t.channels[row].array && indexed) {
+        why = "not an array state, so it takes no index";
+        return false;
+    }
+    out = Column{row, index, shown};
+    return true;
+}
+
+// A channel path given whole, as the channel calls take it:
+// "whl.state.omega", "bw.state.w1[3]".
+inline bool channel_text(const Tables& t, const char* text, Column& out, std::string& why) {
+    std::string s = text ? text : "";
+    while (!s.empty() && s.front() == ' ') s.erase(0, 1);
+    while (!s.empty() && s.back() == ' ') s.pop_back();
+    std::string path = s;
+    bool indexed = false;
+    std::size_t index = 0;
+    const std::size_t lb = s.find('[');
+    if (lb != std::string::npos) {
+        const std::string digits = s.substr(lb + 1, s.size() > lb + 2 ? s.size() - lb - 2 : 0);
+        bool ok = s.back() == ']' && !digits.empty();
+        for (char c : digits) ok = ok && c >= '0' && c <= '9';
+        if (!ok) {
+            why = "an element index is a non-negative integer, `[3]`";
+            return false;
+        }
+        index = static_cast<std::size_t>(std::strtoull(digits.c_str(), nullptr, 10));
+        path = s.substr(0, lb);
+        indexed = true;
+    }
+    bool ok = !path.empty() && path.front() != '.' && path.back() != '.';
+    for (std::size_t k = 0; ok && k < path.size(); ++k) {
+        const char c = path[k];
+        const bool word = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_' ||
+                          (c >= '0' && c <= '9');
+        ok = word || (c == '.' && path[k + 1] != '.');
+    }
+    if (!ok) {
+        why = "expected a path, as `plant.out.velocity`";
+        return false;
+    }
+    return channel_of(t, path, indexed, index, s, out, why);
+}
+
+)SERT"
+    R"SERT(// ─── The settings source, read by a compiled model (section 14.1) ───────────
+
+// One source as the loader reads it: bindings of a number with an optional
+// unit, or a bare name for an enumerator, and the run's `record` and `log`
+// sections. Section 14.1 accepts nothing more at run time, and the reader says
+// so rather than evaluating a section-7 expression.
 class SourceReader {
 public:
     SourceReader(const char* text, const char* origin)
-        : s_(text ? text : ""), origin_(origin && *origin ? origin : "settings") {}
+        : s_(text ? text : ""), origin_(origin && *origin ? origin : "settings") {
+        if (s_.compare(0, 3, "\xEF\xBB\xBF") == 0) i_ = 3;   // a UTF-8 BOM, as editors save one
+    }
 
     // All or nothing: false at the first fault, with error() naming it.
-    bool check(const SettingRow* rows, std::size_t n, std::vector<Assignment>& out) {
+    bool check(const Tables& t, std::vector<Assignment>& out, std::vector<RunEdit>& edits) {
         out.clear();
+        edits.clear();
         std::vector<Assignment> got;
+        std::vector<RunEdit> run;
         for (;;) {
             if (!blank()) return false;
             if (i_ >= s_.size()) break;
+            std::string which;
+            if (at_section(which)) {
+                if (!(which == "record" ? record_section(t, run) : log_section(run))) return false;
+                continue;
+            }
             Assignment a{};
-            if (!binding(rows, n, a)) return false;
+            if (!binding(t.rows, t.n_rows, a)) return false;
             got.push_back(a);
         }
         out.swap(got);
+        edits.swap(run);
         return true;
     }
     const std::string& error() const { return err_; }
@@ -1313,10 +1510,28 @@ private:
         return true;
     }
 
-    bool binding(const SettingRow* rows, std::size_t n, Assignment& a) {
-        // path := identifier { '.' identifier } [ '[' integer ']' ]
-        at_line_ = line_;
-        std::string path, seg;
+    // A string, section 3.5: `"` ... `"`, with `\"` and `\\` and nothing across
+    // a line.
+    bool string_lit(std::string& out) {
+        if (i_ >= s_.size() || s_[i_] != '"') return false;
+        out.clear();
+        for (++i_; i_ < s_.size(); ++i_) {
+            const char c = s_[i_];
+            if (c == '\n') return false;
+            if (c == '"') {
+                ++i_;
+                return true;
+            }
+            if (c == '\\' && i_ + 1 < s_.size()) out += s_[++i_];
+            else out += c;
+        }
+        return false;
+    }
+
+    // path := identifier { '.' identifier } [ '[' integer ']' ]. `shown` is
+    // the path as a message names it, index included.
+    bool read_path(std::string& path, bool& indexed, std::size_t& index, std::string& shown) {
+        std::string seg;
         if (!ident(seg)) return fail("", "expected a path");
         path = seg;
         while (i_ < s_.size() && s_[i_] == '.') {
@@ -1324,9 +1539,9 @@ private:
             if (!ident(seg)) return fail(path, "expected a name after `.`");
             path += "." + seg;
         }
-        bool indexed = false;
-        std::size_t index = 0;
-        std::string shown = path;
+        indexed = false;
+        index = 0;
+        shown = path;
         if (i_ < s_.size() && s_[i_] == '[') {
             ++i_;
             const std::size_t at = i_;
@@ -1339,6 +1554,181 @@ private:
             indexed = true;
             shown = path + "[" + std::to_string(index) + "]";
         }
+        return true;
+    }
+
+    // `;` closes a line; at the same line's next token anything else is more
+    // than a compiled model reads.
+    bool semi(const std::string& shown, const char* what) {
+        if (!blank()) return false;
+        if (i_ < s_.size() && s_[i_] == ';') {
+            ++i_;
+            return true;
+        }
+        return fail(shown, std::string("expected `;` after ") + what);
+    }
+
+    // `record` or `log`, then `{`: a section (section 14). Anything else, even
+    // a path that starts `record.`, is a binding.
+    bool at_section(std::string& which) {
+        const std::size_t save_i = i_;
+        const int save_line = line_;
+        std::string w;
+        if (ident(w) && (w == "record" || w == "log")) {
+            const std::string saved_err = err_;
+            if (blank() && i_ < s_.size() && s_[i_] == '{') {
+                ++i_;
+                which = w;
+                return true;
+            }
+            err_ = saved_err;
+        }
+        i_ = save_i;
+        line_ = save_line;
+        return false;
+    }
+
+)SERT"
+    // Inside SourceReader: the split only has to keep each piece under the cap.
+    R"SERT(    // Section 13.5: `clear;`, `path;`, `-path;`, `file = "...";`, `every = N;`.
+    bool record_section(const Tables& t, std::vector<RunEdit>& run) {
+        for (;;) {
+            if (!blank()) return false;
+            at_line_ = line_;
+            if (i_ >= s_.size()) return fail("", "expected `}` to close the `record` section");
+            if (s_[i_] == '}') {
+                ++i_;
+                return true;
+            }
+            RunEdit e;
+            bool remove = false;
+            if (s_[i_] == '-') {
+                ++i_;
+                if (!blank()) return false;
+                remove = true;
+            } else {
+                const std::size_t save_i = i_;
+                const int save_line = line_;
+                std::string w;
+                if (!ident(w))
+                    return fail("", "expected a channel path, `-path`, `clear`, `file =` or "
+                                    "`every =`");
+                if (!blank()) return false;
+                if (i_ < s_.size() && s_[i_] == '=') {
+                    ++i_;
+                    if (!blank()) return false;
+                    if (w == "file") {
+                        e.kind = RunEdit::Kind::File;
+                        if (!string_lit(e.text) || e.text.empty())
+                            return fail(w, "expected a file name, in quotes");
+                    } else if (w == "every") {
+                        double v = 0.0;
+                        if (!number(v) || v < 1.0 || std::floor(v) != v)
+                            return fail(w, "takes a whole number of base steps, 1 or more");
+                        e.kind = RunEdit::Kind::Every;
+                        e.every = static_cast<std::uint64_t>(v);
+                    } else {
+                        return fail(w, "not a `record` key; a `record` section takes channels, "
+                                       "`-channel;`, `clear;`, `file = ...;` and `every = ...;` "
+                                       "(section 13.5)");
+                    }
+                    if (!semi(w, w == "file" ? "the file name" : "`every`")) return false;
+                    run.push_back(e);
+                    continue;
+                }
+                if (w == "clear" && i_ < s_.size() && s_[i_] == ';') {
+                    ++i_;
+                    e.kind = RunEdit::Kind::Clear;
+                    run.push_back(e);
+                    continue;
+                }
+                i_ = save_i;   // a channel path after all
+                line_ = save_line;
+            }
+            std::string path, shown, why;
+            bool indexed = false;
+            std::size_t index = 0;
+            if (!read_path(path, indexed, index, shown)) return false;
+            if (!semi(shown, "the channel path")) return false;
+            if (!channel_of(t, path, indexed, index, shown, e.column, why)) return fail(shown, why);
+            e.kind = remove ? RunEdit::Kind::Remove : RunEdit::Kind::Add;
+            run.push_back(e);
+        }
+    }
+
+    bool level_word(const std::string& shown, Level& out) {
+        std::string w;
+        if (!ident(w) || !level_of(w, out))
+            return fail(shown, "expected a log level: trace, debug, info, warn or error");
+        return true;
+    }
+
+    // Section 13.7: `file = "...";`, `level = L;`, `levels { path = L; }`.
+    bool log_section(std::vector<RunEdit>& run) {
+        for (;;) {
+            if (!blank()) return false;
+            at_line_ = line_;
+            if (i_ >= s_.size()) return fail("", "expected `}` to close the `log` section");
+            if (s_[i_] == '}') {
+                ++i_;
+                return true;
+            }
+            std::string w;
+            if (!ident(w)) return fail("", "expected `file`, `level` or `levels`");
+            if (!blank()) return false;
+            if (w == "levels") {
+                if (i_ >= s_.size() || s_[i_] != '{') return fail(w, "expected `{`");
+                ++i_;
+                for (;;) {
+                    if (!blank()) return false;
+                    at_line_ = line_;
+                    if (i_ < s_.size() && s_[i_] == '}') {
+                        ++i_;
+                        break;
+                    }
+                    RunEdit e;
+                    e.kind = RunEdit::Kind::PathLevel;
+                    std::string shown;
+                    bool indexed = false;
+                    std::size_t index = 0;
+                    if (!read_path(e.text, indexed, index, shown)) return false;
+                    if (indexed) return fail(shown, "a node path takes no index");
+                    if (!blank()) return false;
+                    if (i_ >= s_.size() || s_[i_] != '=')
+                        return fail(shown, "expected `=` after the node path");
+                    ++i_;
+                    if (!blank() || !level_word(shown, e.level) || !semi(shown, "the level"))
+                        return false;
+                    run.push_back(e);
+                }
+                continue;
+            }
+            if (w != "file" && w != "level")
+                return fail(w, "not a `log` key; a `log` section takes `file = ...;`, "
+                               "`level = ...;` and `levels { }` (section 13.7)");
+            if (i_ >= s_.size() || s_[i_] != '=') return fail(w, "expected `=`");
+            ++i_;
+            if (!blank()) return false;
+            RunEdit e;
+            if (w == "file") {
+                e.kind = RunEdit::Kind::LogFile;
+                if (!string_lit(e.text))
+                    return fail(w, "expected a file name, in quotes; \"\" for the console only");
+            } else {
+                e.kind = RunEdit::Kind::LogLevel;
+                if (!level_word(w, e.level)) return false;
+            }
+            if (!semi(w, w == "file" ? "the file name" : "the level")) return false;
+            run.push_back(e);
+        }
+    }
+
+    bool binding(const SettingRow* rows, std::size_t n, Assignment& a) {
+        at_line_ = line_;
+        std::string path, shown;
+        bool indexed = false;
+        std::size_t index = 0;
+        if (!read_path(path, indexed, index, shown)) return false;
 
         if (!blank()) return false;
         if (i_ >= s_.size() || s_[i_] != '=') return fail(shown, "expected `=` after the path");
@@ -1470,6 +1860,9 @@ private:
     std::string err_;
 };
 
+)SERT"
+    R"SERT(// ─── Writing a source (section 14.1) ────────────────────────────────────────
+
 // The shortest decimal that reads back as the same double, as a source writes
 // it: `340`, `0.08`, `1e-06`.
 inline std::string source_number(double v) {
@@ -1479,6 +1872,16 @@ inline std::string source_number(double v) {
         if (std::strtod(buf, nullptr) == v) break;
     }
     return buf;
+}
+
+// A string as a source writes it, so that SourceReader reads it back.
+inline std::string source_string(const std::string& s) {
+    std::string out = "\"";
+    for (char c : s) {
+        if (c == '"' || c == '\\') out += '\\';
+        out += c;
+    }
+    return out + "\"";
 }
 
 // Section 14.1's dump. `values[r]` is row r's current value for a Setting or
@@ -1513,7 +1916,8 @@ inline std::string dump_source(const char* title, const SettingRow* rows, std::s
     for (const Line& l : initial) w = l.path.size() > w ? l.path.size() : w;
 
     std::string out = std::string("// ") + title +
-                      ": every setting and initial condition, as configured (section 14.1).\n";
+                      ": how the run is configured (section 14.1): every setting and initial\n"
+                      "// condition, then the recording and the log.\n";
     auto section = [&](const char* head, const std::vector<Line>& ls) {
         if (ls.empty()) return;
         out += std::string("\n// ") + head + "\n";
@@ -1526,6 +1930,61 @@ inline std::string dump_source(const char* title, const SettingRow* rows, std::s
     section("settings", settings);
     section("initial conditions", initial);
     return out;
+}
+
+// The run's own configuration, as the sections that reproduce it: the record
+// section clears first, so loading it on top of anything gives exactly this
+// selection, in this column order.
+inline std::string dump_run(const RunConfig& c) {
+    std::string out = "\n// the recording (section 13.5)\nrecord {\n    clear;\n";
+    out += "    file  = " + source_string(c.record_file) + ";\n";
+    out += "    every = " + std::to_string(c.every) + ";\n";
+    for (const Column& k : c.columns) out += "    " + k.written + ";\n";
+    out += "}\n\n// the log (section 13.7)\nlog {\n";
+    out += "    file  = " + source_string(c.log_file) + ";\n";
+    out += std::string("    level = ") + level_name(c.level) + ";\n";
+    if (!c.levels.empty()) {
+        std::size_t w = 0;
+        for (const auto& p : c.levels) w = p.first.size() > w ? p.first.size() : w;
+        out += "    levels {\n";
+        for (const auto& p : c.levels)
+            out += "        " + p.first + std::string(w - p.first.size(), ' ') + " = " +
+                   level_name(p.second) + ";\n";
+        out += "    }\n";
+    }
+    return out + "}\n";
+}
+
+// Section 14.1's menu: every channel, in tree order, the selected ones as
+// lines and the rest commented out, each with its header bracket. `extents`
+// gives an array row's element count.
+inline std::string list_source(const char* title, const ChannelRow* rows, std::size_t n,
+                               const std::size_t* extents, const RunConfig& c) {
+    struct Line {
+        std::string path, label;
+        bool on;
+    };
+    std::vector<Line> lines;
+    for (std::size_t r = 0; r < n; ++r) {
+        const std::size_t count = rows[r].array ? extents[r] : 1;
+        for (std::size_t i = 0; i < count; ++i) {
+            bool on = false;
+            for (const Column& k : c.columns) on = on || (k.row == r && k.index == i);
+            std::string p = rows[r].path;
+            if (rows[r].array) p += "[" + std::to_string(i) + "]";
+            lines.push_back(Line{(on ? "" : "// ") + p + ";", rows[r].label, on});
+        }
+    }
+    std::size_t w = 0;
+    for (const Line& l : lines) w = l.path.size() > w ? l.path.size() : w;
+    std::string out = std::string("// ") + title +
+                      ": every channel this model can record (section 13.5). The selected\n"
+                      "// ones are lines and the rest are commented out: uncomment or delete,\n"
+                      "// then load this back as a settings source.\n";
+    out += "record {\n    clear;\n";
+    for (const Line& l : lines)
+        out += "    " + l.path + std::string(w - l.path.size(), ' ') + "   // [" + l.label + "]\n";
+    return out + "}\n";
 }
 
 }  // inline namespace @VER@

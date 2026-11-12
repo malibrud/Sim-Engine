@@ -1,4 +1,5 @@
-// ArrSt: every setting and initial condition, as configured (section 14.1).
+// ArrSt: how the run is configured (section 14.1): every setting and initial
+// condition, then the recording and the log.
 
 // settings
 n     = 3;
@@ -8,3 +9,25 @@ k0    = 1 (1/s);
 total = 0;
 tick  = 0;
 x[1]  = 2;
+
+// the recording (section 13.5)
+record {
+    clear;
+    file  = "arrst.csv";
+    every = 100;
+    state.x[0];
+    state.x[1];
+    state.x[2];
+    total;
+    state.h[0];
+    state.h[2];
+    tick;
+    out.sum;
+    out.tail;
+}
+
+// the log (section 13.7)
+log {
+    file  = "";
+    level = info;
+}
