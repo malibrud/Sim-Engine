@@ -3580,7 +3580,7 @@ external build tool:
 - **Generate-code and build-it are separable steps.** The compiler's contract is
   *generate code*; building it into a running simulation is an optional second
   stage.
-- **The header is the public interface, and nothing else.** `sec` writes three
+- **The header is the public interface, and nothing else.** `sec` writes five
   sources, named for the sim unless `--stem` says otherwise:
   - `<name>.hpp` declares `class Sim`: the ROOT node's settings, inputs and
     outputs as typed structs (with the record types they use), and the calls a
@@ -3588,8 +3588,9 @@ external build tool:
     `dump_settings()` / `list_signals()`, and the key-value, channel and log
     calls of §14.1), `init()`, `inputs()` / `tick()` / `outputs()` /
     `done()`, `finish()` — and, for a host that paces its run against wall
-    time, `sync_realtime()` and `realtime_stats()` (§9.4, §13.6). `tick()`
-    never waits. The model itself is `Sim::Impl`,
+    time, `sync_realtime()` and `realtime_stats()` (§9.4, §13.6); and, for a
+    host that watches a run, channel handles and the log queue (§14.1).
+    `tick()` never waits. The model itself is `Sim::Impl`,
     incomplete in the header, so a host depends on no layout it cannot see.
     A `Sim` runs once: a second `init()` is refused, and a fresh `Sim` is how
     a host runs again. Nothing outlives a `Sim`, so a program may run a model
@@ -3598,6 +3599,9 @@ external build tool:
     classes, `Sim::Impl` and the schedule. It is ONE translation unit — the
     whole model — which keeps the unity-build property that matters: the
     model's flat call sequence is compiled in one piece.
+  - `se_sim.h` and `<name>_c.cpp` are the C interface (§14.2). The header is
+    the same text for every model. The source is a thin layer that uses
+    `<name>.hpp` alone, with each `se_` call forwarding to the `Sim`.
   - `main.cpp` is an example host that uses the header alone. It is what the
     `run` and `exe` modes build, and `--no-main` suppresses it. It takes its
     whole configuration — settings, initial conditions, run length, channels
@@ -3610,10 +3614,19 @@ external build tool:
 - **Two scripts, one set of modes.** `build.ps1` for Windows and `build.sh` for
   a POSIX shell. They differ in quoting and in how an exit code is read, and
   take the same modes: `run` (build the exe and run it as the `.sim`
-  describes; the default), `exe`, `lib` (a static library plus the header),
-  `test` (build in debug, run, fail unless the exit status is 0), `clean` and
-  `all`; and the same options: a `release` or `debug` configuration, a
-  sanitizer build, and a statically linked C runtime. `test` alone sanitizes
+  describes; the default), `exe`, `lib` (a static library of the model and its
+  C layer, plus both headers), `dynamic` (a DLL or shared object that exports
+  the C interface of §14.2 and nothing else, plus `se_sim.h`), `test` (build
+  in debug, run, fail unless the exit status is 0), `clean`, and `all` (exe,
+  lib and dynamic). They take the same options:
+  - a `release` or `debug` configuration;
+  - a sanitizer build;
+  - a statically linked C runtime;
+  - a prefix for the C names (`-CPrefix dt_`, `--c-prefix dt_`, giving
+    `SE_C_PREFIX`), for linking two models' static libraries into one program.
+
+  On Windows the DLL's import library is `<name>_dll.lib`, so it can sit
+  beside the static `<name>.lib` that `all` also builds. `test` alone sanitizes
   by default — finding bugs is its whole job, and it runs its own exe — and
   falls back to a plain build, saying so, where the compiler has no sanitizer.
   Elsewhere it is opt-in: it displaces other debug checks (`/RTC1` under MSVC),
@@ -3837,7 +3850,7 @@ record: {
 | `path;` | add the channel; one already selected keeps its place |
 | `-path;` | remove it; one not selected is left alone |
 | `clear;` | remove every channel |
-| `file = "…";` | where the table is written; `run.csv` if never set |
+| `file = "…";` | where the table is written; `run.csv` if never set; may hold `{time}` |
 | `every = N;` | write every Nth base tick; 1 if never set |
 
 The same body is a `record` section in a settings source (§14), and the
@@ -3849,6 +3862,21 @@ each by the path as written where it was added. A table is written only when at
 least one channel is selected, so `clear;` with nothing after it turns
 recording off. `clear` is the one word the body reserves: a root port that is
 literally named `clear` is not reachable by its one-segment path here.
+
+**A file name may hold `{time}`.** When the run starts, `{time}` is replaced by
+the local date and time it started, written `YYYYMMDD-HHMMSS`. There is one
+instant per run, so a run's table and its log (§13.7) carry the same one.
+- **A name that is taken is not overwritten.** If a file of that name already
+  exists, `-2`, `-3`, … is added before the extension until one does not. The
+  file is created exclusively, so two copies of one model started in the same
+  second write two files, not one.
+- **A name without `{time}` is opened as it always was**, replacing any file
+  already there.
+- **A dump writes the pattern**, not the name it produced, so loading a recipe
+  gives the next run a file of its own. Once the run has started,
+  `record_file()` and `log_file()` report the name actually used (§14.1).
+- **`{time}` is the only placeholder.** Any other `{…}`, or a brace standing
+  alone, is `SE0268`, and a compiled model refuses it with the same wording.
 
 - **Signals are qualified paths** — `plant.out.velocity`, `plant.state.position` —
   reusing the `out.` / `state.` accessors. A bare `plant.velocity` is legal **when
@@ -3977,8 +4005,13 @@ The same body is a `log` section in a settings source (§14), and sections layer
 `levels` line sets one path's threshold, and a later line for the same path
 replaces it. Per-node levels keep their own `levels { }` so that a node path
 can never be mistaken for `file` or `level`. A log file is opened when the run
-starts, after configuration, so a host that gives each of two copies of one
-model its own `file` gets two logs.
+starts, after configuration. A host that gives each of two copies of one model
+its own `file` therefore gets two logs, and so does one that gives both the
+same `{time}` pattern: `file` takes `{time}` exactly as `record`'s does
+(§13.5).
+
+A host with no console has nowhere for the console's lines to go. It can ask
+for them to be kept in a queue instead (§14.1), and the file is not affected.
 
 ---
 
@@ -4138,7 +4171,7 @@ bool record_file(const char* file);   const char*   record_file() const;
 bool record_every(std::uint64_t n);   std::uint64_t record_every() const;
 
 // The log (§13.7).
-bool log_file(const char* file);                  // "" for console only
+bool log_file(const char* file);   const char*   log_file() const;   // "" for console only
 bool log_level(const char* level);                // the global threshold
 bool log_level(const char* path, const char* level);
 ```
@@ -4147,7 +4180,53 @@ bool log_level(const char* path, const char* level);
 optimiser never formats or parses; `set(path, text)` takes what a source line
 would, unit suffix and all. The lists are taken after configuration has
 settled what it can, so array rows appear at the extent the current settings
-give.
+give. `record_file()` and `log_file()` return the name as configured, a
+`{time}` pattern included (§13.5). Once `init()` has opened the file, they
+return the name it actually opened.
+
+Two more pairs serve a host that watches a run rather than configures one.
+Unlike everything above, they are **not configuration**: they work before and
+after `init()`, and nothing they do appears in a dump.
+
+```cpp
+// A channel read live (§13.5): resolve it once, then read it each tick.
+int    channel_handle(const char* path);          // -1 if refused; error() says why
+double read(int handle) const;                    // NaN for a bad handle
+
+// The console's lines, kept for a host that has none (§13.7).
+enum class LogLevel { Trace, Debug, Info, Warn, Error };
+struct LogLine {
+    LogLevel    level;
+    std::string path;          // the node, or "sim"
+    double      time;          // s, model time
+    std::string text;
+};
+void log_capture(bool on);
+bool log_next(LogLine& line);                     // false when none is waiting
+```
+
+- **A handle names a channel, not a column.**
+  - `channel_handle` resolves a path exactly as `record` does: qualified or
+    bare, with the same wording for an ambiguous one.
+  - The channel doesn't have to be selected, and a handle costs nothing on a
+    tick that doesn't read it.
+  - `read` returns the model at the instant the last `tick()` sampled. That is
+    the same instant as `outputs()`, and the same value that tick's row
+    records. Before the first tick it returns what `init()` left. Before
+    `init()` the value is not meaningful.
+  - An array element is checked against the extent when it is read. An
+    element past the extent, like a handle the model never issued, reads NaN.
+- **Captured lines are the console's.**
+  - While capture is on, every line the console would have received goes to
+    the queue instead. That means `warn` and above always, and, when there is
+    no log file, everything that passes the threshold.
+  - The whole-run summary of §13.6 is queued too, as an `info` line from
+    `sim`.
+  - The log file is not affected.
+  - The queue holds 10,000 lines. Past that the oldest are dropped, and the
+    next `log_next` first returns one `warn` line from `sim` saying how many
+    were dropped.
+  - Capture may be turned on and off at any time.
 
 - **A load is all or nothing.** Every binding is parsed, resolved to a path and
   checked against its target before any is applied; if one fails, none is.
@@ -4214,6 +4293,171 @@ applied left to right:
 ```
 mysim.exe --settings default.settings, thisrun.settings, initialcond.settings, outputs.settings
 ```
+
+### 14.2 The C interface
+
+A generated model is also callable from C, and through C from anything that
+can load a shared library and call a function by name: C#, Python, LabVIEW,
+MATLAB. A C++ class can't be found with `GetProcAddress` or `dlsym`, so `sec`
+writes a C layer over the `Sim` of §14.1. The `dynamic` build (§12.4) exports
+it from a DLL or shared object.
+
+**Every model exports the same names.** This works as FMI's `fmi2…` functions
+do. One wrapper, written once against `se_sim.h`, loads any model's library.
+`se_sim.h` is the same text for every model. What differs between models is
+asked for at run time: the model's name, its step, and its ports.
+
+```c
+#include <stdint.h>
+
+#define SE_ABI_VERSION 1
+typedef struct se_sim se_sim;   /* one instance of the model; opaque */
+
+/* ---- the model: no instance needed ---------------------------------- */
+SE_API int         se_abi_version(void);          /* SE_ABI_VERSION it was built with */
+SE_API const char* se_model_name(void);           /* "Drivetrain" */
+SE_API double      se_step_seconds(void);
+SE_API int         se_input_count(void);
+SE_API const char* se_input_name(int i);          /* "axle_torque", "cmd.gain" */
+SE_API const char* se_input_unit(int i);          /* as a CSV header's bracket */
+SE_API int         se_input_index(const char* name);   /* -1 if none */
+SE_API int         se_output_count(void);
+SE_API const char* se_output_name(int i);         /* "ws.speed" */
+SE_API const char* se_output_unit(int i);
+SE_API int         se_output_index(const char* name);
+
+/* ---- life ----------------------------------------------------------- */
+SE_API se_sim*     se_create(void);               /* NULL only if out of memory */
+SE_API void        se_destroy(se_sim* s);         /* NULL is allowed */
+
+/* ---- 1. configure: before se_init() --------------------------------- */
+SE_API int         se_load_settings(se_sim* s, const char* text, const char* origin);
+SE_API const char* se_dump_settings(se_sim* s);
+SE_API const char* se_list_signals(se_sim* s);
+
+SE_API int         se_setting_count(se_sim* s);   /* takes the list */
+SE_API const char* se_setting_path(se_sim* s, int i);
+SE_API int         se_setting_kind(se_sim* s, int i);   /* 0 setting, 1 initial, 2 run */
+SE_API const char* se_setting_unit(se_sim* s, int i);
+SE_API const char* se_setting_type(se_sim* s, int i);
+SE_API int         se_setting_structural(se_sim* s, int i);
+SE_API double      se_get(se_sim* s, const char* path);
+SE_API int         se_set(se_sim* s, const char* path, double value);
+SE_API int         se_set_text(se_sim* s, const char* path, const char* value);
+
+SE_API int         se_channel_count(se_sim* s);   /* takes the list */
+SE_API const char* se_channel_path(se_sim* s, int i);
+SE_API const char* se_channel_unit(se_sim* s, int i);
+SE_API int         se_channel_selected(se_sim* s, int i);
+SE_API int         se_record(se_sim* s, const char* path);
+SE_API int         se_unrecord(se_sim* s, const char* path);
+SE_API void        se_record_clear(se_sim* s);
+SE_API int         se_record_file(se_sim* s, const char* file);
+SE_API const char* se_get_record_file(se_sim* s);
+SE_API int         se_record_every(se_sim* s, uint64_t ticks);
+SE_API uint64_t    se_get_record_every(se_sim* s);
+SE_API int         se_log_file(se_sim* s, const char* file);
+SE_API const char* se_get_log_file(se_sim* s);
+SE_API int         se_log_level(se_sim* s, const char* level);
+SE_API int         se_log_path_level(se_sim* s, const char* path, const char* level);
+
+/* ---- 2. start ------------------------------------------------------- */
+SE_API int         se_init(se_sim* s);
+SE_API const char* se_error(se_sim* s);           /* "" when there is none */
+
+/* ---- 3. step -------------------------------------------------------- */
+SE_API int         se_set_input(se_sim* s, int i, double value);
+SE_API int         se_set_inputs(se_sim* s, const double* values, int n);
+SE_API void        se_tick(se_sim* s);
+SE_API double      se_get_output(se_sim* s, int i);    /* NaN for a bad index */
+SE_API int         se_get_outputs(se_sim* s, double* values, int n);
+SE_API int         se_done(se_sim* s);
+SE_API double      se_time(se_sim* s);
+SE_API uint64_t    se_tick_index(se_sim* s);
+SE_API uint64_t    se_tick_count(se_sim* s);
+
+SE_API int         se_channel_handle(se_sim* s, const char* path);   /* -1 if refused */
+SE_API double      se_read(se_sim* s, int handle);
+SE_API int         se_read_many(se_sim* s, const int* handles, int n, double* out);
+
+SE_API void        se_sync_realtime(se_sim* s);
+SE_API double      se_realtime_utilization(se_sim* s);
+SE_API double      se_realtime_overrun_pct(se_sim* s);
+SE_API double      se_realtime_lag(se_sim* s);
+SE_API uint64_t    se_realtime_frames(se_sim* s);
+SE_API uint64_t    se_realtime_overruns(se_sim* s);
+
+SE_API void        se_log_capture(se_sim* s, int on);
+SE_API const char* se_log_next(se_sim* s);        /* the next line's text, or NULL */
+SE_API int         se_log_line_level(se_sim* s);  /* 0 trace ... 4 error */
+SE_API const char* se_log_line_path(se_sim* s);
+SE_API double      se_log_line_time(se_sim* s);
+
+/* ---- 4. finish ------------------------------------------------------ */
+SE_API int         se_finish(se_sim* s);          /* 0 for a clean run */
+```
+
+Each call is the §14.1 member of the same name and behaves as that member
+does. The rules below are what C adds.
+
+- **Plain values only.**
+  - A call returns a number or a string, and takes only numbers, strings and
+    arrays of `double` or `int`. There are no structs, callbacks or enums to
+    declare, so every language's foreign-function layer can use it as it
+    stands.
+  - A truth value is an `int`, 1 or 0.
+  - A count, an index or a handle is an `int`.
+  - A tick count is a `uint64_t`.
+- **C has no overloads.** So `set(path, text)` is `se_set_text`, and
+  `log_level(path, level)` is `se_log_path_level`. A getter that shares a
+  setter's name in C++ is `se_get_…`.
+- **A list is a count, then one call per field.** `se_setting_count` and
+  `se_channel_count` take the list, and the per-row calls read it, until the
+  next count. A setting's value is `se_get` of its path, so it is always
+  current.
+- **Every string belongs to the instance.** It stays valid until the next call
+  on that instance that returns a string of the same kind; a list's strings
+  stay valid until the next count. The model's own strings
+  (`se_model_name`, the port names) stay valid for as long as the library is
+  loaded. Nothing is ever freed by the caller.
+- **The root's ports are numbers, by index.**
+  - Inputs and outputs are listed in declaration order. A record port is
+    flattened to its fields, depth first, and each field is named by its path
+    (`ws.speed`).
+  - Every value crosses as a `double`: an `int` as its value, a `bool` as 0 or
+    1, and a finite type as its enumerator's value.
+  - Writing an `int`, `bool` or finite input needs a whole number. A finite
+    input needs one of its enumerators, and a `bool` input 0 or 1.
+  - `se_set_inputs` and `se_get_outputs` move every port in one call, in index
+    order. `n` must equal the count.
+  - The root's settings have no struct here. They are paths like any other,
+    reached through `se_get` and `se_set`.
+- **`se_error` reports the last refusal.**
+  - That is either the C layer's own (a bad index, a value the input cannot
+    hold, a count that doesn't match), or the model's `error()`.
+  - It is cleared by the next call that can be refused, except that a refused
+    source stands, as §14.1 says.
+- **Nothing is thrown.** No C++ exception crosses the boundary. The one a
+  model can raise, running out of memory, is caught and reported through
+  `se_error`.
+- **Threads.** An instance is used by one thread at a time. Instances share
+  nothing (§15.4), so separate threads may each run their own.
+- **Exports.**
+  - `SE_API` marks every function, and only these functions are exported.
+    It is `__declspec(dllexport)` when building the DLL (`SE_BUILD_DLL`),
+    `__declspec(dllimport)` for a host that links the import library
+    (`SE_USE_DLL`), and nothing otherwise. On POSIX it is default visibility,
+    with everything else hidden.
+  - The calling convention is the platform's default, which is what ctypes'
+    `CDLL`, P/Invoke and LabVIEW's "C" setting all mean.
+- **Two models in one program.** Each model's library exports the same names,
+  so two models fit in one process when each is loaded as its own DLL. Linking
+  them statically needs distinct names:
+  - defining `SE_C_PREFIX` (for example `dt_`) both where a model's C layer is
+    compiled and where the host includes `se_sim.h` renames every function
+    (`dt_se_create`), as FMI's prefix macro does;
+  - a host that uses two models this way includes `se_sim.h` once in each of
+    two source files, one per prefix.
 
 ---
 
@@ -4818,6 +5062,7 @@ of thing wearing the same name.
 | `SE0265` | 2 | A removed `sim` entry (`mode`, `sync`, `window`): pacing is the host's (§9.4) |
 | `SE0266` | 2 | An old-style `record:` or `log:` body (`file:`, `signals { }`, `levels { p: l; }`): the body is now a settings section's (§13.1) |
 | `SE0267` | 4 | `sim.duration` that is not a whole number of base steps, or an unknown `sim.` binding (§13.3) |
+| `SE0268` | 2 | A file name with a placeholder other than `{time}`, or a brace standing alone (§13.5) |
 | `SE0270` | 2 | Duplicate entry in `tests` |
 | `SE0271` | 2 | Unknown entry in `tests` |
 | `SE0272` | 2 | `~=` with no `within`, or `=` with one |
