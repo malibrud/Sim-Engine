@@ -245,6 +245,28 @@ would use, in a form `--settings` reads back. Read
 `out\drivetrain\Drivetrain.hpp` and `out\drivetrain\main.cpp` to see what a
 generated model looks like from outside.
 
+The same model builds as a DLL for other languages. Still in `out\drivetrain\`:
+
+```powershell
+.\build.ps1 dynamic
+```
+
+That gives `build\release\bin\Drivetrain.dll`, which exports the C functions in
+`se_sim.h`. From Python, for example:
+
+```python
+import ctypes
+dt = ctypes.CDLL(r"build\release\bin\Drivetrain.dll")
+dt.se_create.restype = ctypes.c_void_p
+dt.se_init.argtypes = dt.se_tick.argtypes = dt.se_done.argtypes = [ctypes.c_void_p]
+dt.se_finish.argtypes = [ctypes.c_void_p]
+s = dt.se_create()
+dt.se_init(s)
+while not dt.se_done(s):
+    dt.se_tick(s)
+print(dt.se_finish(s))   # 0: a clean run
+```
+
 **3. Try the washout example.** A helper script emits, builds and runs it, then
 opens the recorded CSV:
 
@@ -302,6 +324,7 @@ overrides that.
 |---|---|
 | `Drivetrain.hpp` | **The public interface, and nothing else.** `class Sim`, the root node's settings, inputs and outputs as typed structs, and the configure / start / step / finish calls |
 | `Drivetrain.cpp` | Everything behind it: the engine runtime (namespace `se_rt`, the same for every model), the node classes, `Sim::Impl` and the schedule |
+| `Drivetrain_c.cpp`, `se_sim.h` | The C interface (§14.2): `se_` functions over `Sim`, for the `dynamic` build and any language that calls C. The header is the same text for every model |
 | `main.cpp` | An example host that uses the header alone. `--no-main` suppresses it |
 | `Drivetrain.units.txt` | The unit manifest (§15.6): the contract for an external solver or host, not documentation |
 | `Drivetrain.topology.html` | The signal-flow graph as it actually runs, interactive: open it in a browser, click any node for its settings, states and wiring, collapse composites and `group`s, which open collapsed where the model says `@diagram(collapsed)`. Laid out by Graphviz, which the page loads from jsDelivr, so it needs a network connection |
@@ -355,6 +378,16 @@ with structured answers: `settings_list()`, `get()` and `set()`;
 executable takes `--settings FILE...`, `--set PATH=VALUE`, `--duration TIME`,
 `--dump-settings` and `--list-signals`.
 
+A host that watches a run can read any channel live through
+`channel_handle()` and `read()`. With `log_capture()` and `log_next()`, the
+console's log lines are kept in a queue for it, for a host that has no console.
+A file name may contain `{time}`, which gives each run a file of its own.
+
+Everything above is also available from C, as `se_` functions declared in
+`se_sim.h` (§14.2). `build.ps1 dynamic` builds a DLL that exports them, and
+nothing else. Every model exports the same names, so one wrapper in C#, Python
+or LabVIEW can load any model.
+
 **[What a generated model does](docs/generated-model.md)** describes precisely how
 settings and initial conditions are finalized, what is called on every tick and in
 what order, and what each call can see.
@@ -374,18 +407,19 @@ reach them is on the [Roadmap](#roadmap).
 ## Building a generated model
 
 ```
-.\build.ps1 [run|exe|lib|test|clean|all] [-Config release|debug] [-Sanitize | -NoSanitize] [-StaticCrt]
-./build.sh  [run|exe|lib|test|clean|all] [--config release|debug] [--sanitize | --no-sanitize] [--static-crt]
+.\build.ps1 [run|exe|lib|dynamic|test|clean|all] [-Config release|debug] [-Sanitize | -NoSanitize] [-StaticCrt] [-CPrefix NAME]
+./build.sh  [run|exe|lib|dynamic|test|clean|all] [--config release|debug] [--sanitize | --no-sanitize] [--static-crt] [--c-prefix NAME]
 ```
 
 | Mode | |
 |---|---|
 | `run` (default) | Build the exe, then run it as the `.sim` describes |
 | `exe` | `build/<config>/bin/Drivetrain.exe` |
-| `lib` | `build/<config>/lib/Drivetrain.lib` (`libDrivetrain.a`) with `build/<config>/include/Drivetrain.hpp`: all a consumer needs |
+| `lib` | `build/<config>/lib/Drivetrain.lib` (`libDrivetrain.a`), the model and its C layer, with `build/<config>/include/Drivetrain.hpp` and `se_sim.h`: all a consumer needs |
+| `dynamic` | `build/<config>/bin/Drivetrain.dll` (`lib/libDrivetrain.so`), exporting the `se_` functions of `se_sim.h` and nothing else, with its import library `lib/Drivetrain_dll.lib` and `include/se_sim.h` |
 | `test` | Build the exe in debug with AddressSanitizer, run it, and fail unless it exits 0. A contract failure, an abort or a sanitizer report fails it. `-NoSanitize` builds it without the sanitizer; if the optional ASan component is missing, it does so anyway and says so |
 | `clean` | Delete `build/` |
-| `all` | `exe` and `lib` |
+| `all` | `exe`, `lib` and `dynamic` |
 
 **Configurations.** `release` is optimised and keeps debug information.
 `debug` uses the debug C runtime, so a debug `lib` links only into a debug
@@ -394,7 +428,9 @@ program.
 **Options.** `-Sanitize` adds AddressSanitizer to any mode. Only `test` has it
 by default, because elsewhere it would drop `/RTC1`, force ASan on whatever
 links a `lib`, and need its runtime DLL on PATH. `-StaticCrt` links the C
-runtime statically.
+runtime statically. `-CPrefix dt_` renames the C functions (`dt_se_create`), so
+two models' static libraries can be linked into one program. The host defines
+`SE_C_PREFIX` the same way before including `se_sim.h`.
 
 `build.ps1` finds Visual Studio itself when `cl` is not on PATH. Every build is
 a full one: nothing is tracked between runs.
@@ -521,8 +557,8 @@ In rough order. Each step is decided on its own, so this list changes.
 4. ~~**Recording at run time.** One settings format for a whole run, layered
    left to right: values, initial conditions, `sim.duration`, the recorded
    channels and the log, with a key-value API beside it.~~ Done.
-5. **A C interface and a `dynamic` build.** A DLL / shared object callable by
-   name from C, C#, Python, LabVIEW and others.
+5. ~~**A C interface and a `dynamic` build.** A DLL / shared object callable by
+   name from C, C#, Python, LabVIEW and others.~~ Done.
 6. **Later:** driving root inputs from a CSV file (`--inputs`); packaging as an
    FMI co-simulation FMU; clean-ups to the generated code's readability; and
    the open items in the spec's Appendix C, such as display units for recording

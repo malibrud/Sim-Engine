@@ -23,6 +23,7 @@ example host).
 6. [The tick](#6-the-tick)
 7. [The end of a run](#7-the-end-of-a-run)
 8. [Where the data lives](#8-where-the-data-lives)
+9. [From C and other languages](#9-from-c-and-other-languages)
 
 ## 1. The life of a run
 
@@ -451,6 +452,27 @@ Each slot's path, offset, type and unit are listed in generated tables, and
 [§15.5](../SPECIFICATION.md#155-the-three-blocks) and
 [§15.6](../SPECIFICATION.md#156-the-unit-manifest).
 
+## 9. From C and other languages
+
+Everything above is also reachable from C, as plain functions declared in
+`se_sim.h` ([§14.2](../SPECIFICATION.md#142-the-c-interface)). Each `se_` call
+is the `Sim` member of the same name, and runs at the same point in a run.
+`build.ps1 dynamic` builds a DLL that exports these functions and nothing else.
+
+- **The same names in every model.** `se_sim.h` is the same text for every
+  model. A wrapper written once, in C#, Python or LabVIEW, can load any model's
+  DLL and ask it for its name, its step and its ports.
+- **The root's ports are numbered doubles.** The inputs and outputs are listed
+  in declaration order, with records flattened (`ws.speed`). `se_set_inputs`
+  and `se_get_outputs` move all of them in one call each, so a paced host
+  crosses into the DLL three times per tick. Root settings are paths, like
+  every other setting, set through `se_set`.
+- **Only numbers and strings cross.** A list is a count, then one call per
+  field. Every string belongs to the instance. No C++ exception reaches the
+  caller.
+- **One error for both sides.** `se_error` reports a refusal made by the C
+  layer, such as a bad port index, as well as the model's own.
+
 ## Further reading
 
 | Topic | Specification |
@@ -463,3 +485,4 @@ Each slot's path, offset, type and unit are listed in generated tables, and
 | The tick | [§9.6](../SPECIFICATION.md#96-the-tick) |
 | Settings layers and initial conditions | [§13.3](../SPECIFICATION.md#133-settings-inflow), [§13.4](../SPECIFICATION.md#134-initial-conditions) |
 | Loading settings into a compiled model | [§14.1](../SPECIFICATION.md#141-the-third-carrier-a-compiled-model) |
+| The C interface | [§14.2](../SPECIFICATION.md#142-the-c-interface) |

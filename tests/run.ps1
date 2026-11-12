@@ -980,8 +980,9 @@ if (-not $cl) {
         $script:fail++
     }
 
-    # `build.ps1 lib` has to produce a library a stranger can use: the header
-    # and the .lib, and nothing else. The consumer is the emitted main.cpp,
+    # `build.ps1 lib` has to produce a library a stranger can use: the headers
+    # (the model's and the C interface's, SPEC 14.2) and the .lib, and nothing
+    # else. The consumer is the emitted main.cpp,
     # copied OUT of the emit directory and compiled with only include\ on its
     # path, so a header that leaned on anything but itself would fail here.
     if ($emitDirs.ContainsKey('Decay')) {
@@ -993,7 +994,8 @@ if (-not $cl) {
         $inc = Join-Path $libDir 'build\release\include'
         $lib = Join-Path $libDir 'build\release\lib\Decay.lib'
         $made = (Test-Path (Join-Path $inc 'Decay.hpp')) -and (Test-Path $lib) -and
-                ((Get-ChildItem -File $inc | Measure-Object).Count -eq 1)
+                (Test-Path (Join-Path $inc 'se_sim.h')) -and
+                ((Get-ChildItem -File $inc | Measure-Object).Count -eq 2)
         $consumer = Join-Path $root 'build\emit\lib-consumer'
         if (Test-Path $consumer) { Remove-Item -Recurse -Force $consumer }
         New-Item -ItemType Directory -Force $consumer | Out-Null
@@ -2669,6 +2671,116 @@ if (-not $cl) {
         } else {
             Write-Host "FAIL tests/emit/two_models.cpp" -ForegroundColor Red
             if (-not $built) { Write-Host $out }
+            $script:fail++
+        }
+    }
+
+    # SPEC 14.2 -- the C interface. `build.ps1 dynamic` gives a DLL that exports
+    # se_sim.h's functions and nothing else. tests/emit/c_host.c is compiled as
+    # C and finds every function by name, as a foreign language would; its run
+    # writes c_host.csv, which must be the C++ exe's table of the same run,
+    # byte for byte. tests/emit/c_host.py does the essentials through ctypes.
+    if ($emitDirs.ContainsKey('drivetrain')) {
+        $hostDir = $emitDirs['drivetrain']
+        Push-Location $hostDir
+        $out = (& powershell -NoProfile -File '.\build.ps1' dynamic 2>&1 | Out-String)
+        $dll = Join-Path $hostDir 'build\release\bin\Drivetrain.dll'
+        $made = ($LASTEXITCODE -eq 0 -and (Test-Path $dll) -and $out -notmatch 'warning' -and
+                 (Test-Path 'build\release\lib\Drivetrain_dll.lib') -and
+                 (Test-Path 'build\release\include\se_sim.h'))
+        # Only se_ names leave the DLL: as many exports as se_sim.h declares.
+        $declared = @(Select-String -Path 'se_sim.h' -Pattern '^SE_API ').Count
+        $exports = @((& dumpbin /nologo /exports $dll) | Where-Object { $_ -match '^\s+\d+\s+[0-9A-F]+\s+[0-9A-F]+\s+(\S+)' } |
+                     ForEach-Object { $matches[1] })
+        $onlySe = $made -and $exports.Count -eq $declared -and $declared -gt 60 -and
+                  -not ($exports | Where-Object { $_ -notmatch '^se_' })
+        Copy-Item (Join-Path $root 'tests\emit\c_host.c') $hostDir -Force
+        $cout = (& cl /nologo /TC /W4 /O2 /MD /D_CRT_SECURE_NO_WARNINGS /Fe:c_host.exe c_host.c 2>&1 |
+                 Out-String)
+        $built = ($LASTEXITCODE -eq 0 -and $cout -notmatch 'warning')
+        $said = ''
+        $ran = $false
+        if ($made -and $built) {
+            Remove-Item 'c_host.csv' -ErrorAction SilentlyContinue
+            $said = (& '.\c_host.exe' $dll 2>&1 | Out-String)
+            $ran = ($LASTEXITCODE -eq 0)
+        }
+        # The same run from the C++ exe: the .sim's channels, inputs at zero.
+        [IO.File]::WriteAllText((Join-Path (Get-Location) 'c_ref.settings'),
+            "record { file = `"c_ref.csv`"; }`n")
+        & '.\build\release\bin\Drivetrain.exe' --settings c_ref.settings 2>&1 | Out-Null
+        $same = $ran -and (Test-Path 'c_ref.csv') -and (Test-Path 'c_host.csv') -and
+                ((Get-FileHash 'c_ref.csv').Hash -eq (Get-FileHash 'c_host.csv').Hash)
+        Pop-Location
+        if ($onlySe -and $built -and $ran -and $same) {
+            Write-Host ("ok   tests/emit/c_host.c : the DLL exports " + $exports.Count +
+                        " se_ functions, found by name from C; the run's table is the exe's") -ForegroundColor Green
+            $script:pass++
+        } else {
+            Write-Host ("FAIL tests/emit/c_host.c (made=$made exports=" + $exports.Count +
+                        "/$declared built=$built ran=$ran same=$same)") -ForegroundColor Red
+            if (-not $made) { Write-Host $out }
+            if (-not $built) { Write-Host $cout } else { Write-Host $said }
+            $script:fail++
+        }
+
+        $python = Get-Command python -ErrorAction SilentlyContinue
+        if (-not $python) {
+            Write-Host "skip tests/emit/c_host.py : no python on PATH" -ForegroundColor DarkGray
+        } elseif ($made) {
+            $said = (& $python.Source -I (Join-Path $root 'tests\emit\c_host.py') $dll 2>&1 | Out-String)
+            if ($LASTEXITCODE -eq 0) {
+                Write-Host "ok   tests/emit/c_host.py : the DLL from Python, through ctypes" -ForegroundColor Green
+                $script:pass++
+            } else {
+                Write-Host "FAIL tests/emit/c_host.py" -ForegroundColor Red
+                Write-Host $said
+                $script:fail++
+            }
+        }
+    }
+
+    # SPEC 14.2 -- every model exports the same names, so two share a program
+    # only under SE_C_PREFIX. Each model's static library is built with its own
+    # prefix, and one C program links both. se_sim.h must be the same text in
+    # both emit directories: the header is the model-independent half.
+    if ($emitDirs.ContainsKey('drivetrain') -and $emitDirs.ContainsKey('Decay')) {
+        $dtDir = $emitDirs['drivetrain']
+        $dcDir = $emitDirs['Decay']
+        $libs = $true
+        foreach ($p in @(@{ dir = $dtDir; prefix = 'dt_' }, @{ dir = $dcDir; prefix = 'dc_' })) {
+            Push-Location $p.dir
+            $o = (& powershell -NoProfile -File '.\build.ps1' lib -CPrefix $p.prefix 2>&1 | Out-String)
+            if ($LASTEXITCODE -ne 0 -or $o -match 'warning') { $libs = $false; Write-Host $o }
+            Pop-Location
+        }
+        $sameHeader = (Get-FileHash (Join-Path $dtDir 'se_sim.h')).Hash -eq
+                      (Get-FileHash (Join-Path $dcDir 'se_sim.h')).Hash
+        $stDir = Join-Path $root 'build\emit\c-static'
+        if (Test-Path $stDir) { Remove-Item -Recurse -Force $stDir }
+        New-Item -ItemType Directory -Force $stDir | Out-Null
+        foreach ($f in @('c_static.c', 'c_static_dt.c', 'c_static_dc.c')) {
+            Copy-Item (Join-Path $root "tests\emit\$f") $stDir -Force
+        }
+        Push-Location $stDir
+        $out = (& cl /nologo /W4 /O2 /MD /D_CRT_SECURE_NO_WARNINGS "/I$dtDir" /Fe:c_static.exe `
+                    c_static.c c_static_dt.c c_static_dc.c `
+                    (Join-Path $dtDir 'build\release\lib\Drivetrain.lib') `
+                    (Join-Path $dcDir 'build\release\lib\Decay.lib') 2>&1 | Out-String)
+        $built = ($libs -and $LASTEXITCODE -eq 0 -and $out -notmatch 'warning')
+        $said = ''
+        $ran = $false
+        if ($built) {
+            $said = (& '.\c_static.exe' 2>&1 | Out-String)
+            $ran = ($LASTEXITCODE -eq 0)
+        }
+        Pop-Location
+        if ($sameHeader -and $built -and $ran) {
+            Write-Host "ok   tests/emit/c_static.c : two models' C interfaces in one program, by prefix" -ForegroundColor Green
+            $script:pass++
+        } else {
+            Write-Host "FAIL tests/emit/c_static.c (sameHeader=$sameHeader built=$built ran=$ran)" -ForegroundColor Red
+            if (-not $built) { Write-Host $out } else { Write-Host $said }
             $script:fail++
         }
     }
