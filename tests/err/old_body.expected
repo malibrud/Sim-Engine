@@ -1,0 +1,17 @@
+﻿error[SE0266]: old-style `record` body
+ --> tests/err/old_body.sim:9:9
+  |
+9 |         file:  "run.csv";
+  |         ^^^^ write `key = value;`
+  = note: a `record` body is a settings section's now, so a block copies between a .sim and a .settings file (§13.1)
+  = help: write `file = "run.csv";` and `every = 10;`, and each channel as a line of its own, `plant.out.velocity;`, with no `signals { }` around them
+
+error[SE0266]: old-style `log` body
+  --> tests/err/old_body.sim:15:9
+   |
+15 |         file:  "run.log";
+   |         ^^^^ write `key = value;`
+   = note: a `log` body is a settings section's now, so a block copies between a .sim and a .settings file (§13.1)
+   = help: write `file = "run.log";`, `level = info;` and `levels { front.left = debug; }`
+
+2 errors emitted

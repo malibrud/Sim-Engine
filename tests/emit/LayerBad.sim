@@ -1,0 +1,18 @@
+// SE0267: a `sim.` binding in a settings source that is not the run's length,
+// or a length that is not a whole number of steps. SE0304: a channel path that
+// names nothing is an error even where it would only be removed. §13.3
+sim LayerBad {
+    root: decay.Decay {
+        k = 2.0;
+    };
+
+    step:     1 (ms);
+    solver:   rk4;
+    duration: 2 (s);
+
+    settings: "layerbad.settings";
+
+    record: {
+        x;
+    }
+}

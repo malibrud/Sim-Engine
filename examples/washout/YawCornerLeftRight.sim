@@ -17,55 +17,53 @@ sim YawCornerLeftRight {
     settings: "RN85.settings";
 
     record: {
-        file:  "yaw_corner_left_right.csv";
-        every: 10;           // 100 Hz, the golden's rate
+        file  = "yaw_corner_left_right.csv";
+        every = 10;          // 100 Hz, the golden's rate
 
-        signals {
-            // The drive: -0.3 rad/s and -3 m/s^2 from t = 2 to 7 (left),
-            // +0.3 and +3 from t = 12 to 17 (right). Every sample equals the
-            // golden's `in_w_z` and `in_sf_y`.
-            r.y;
-            ay.y;
+        // The drive: -0.3 rad/s and -3 m/s^2 from t = 2 to 7 (left),
+        // +0.3 and +3 from t = 12 to 17 (right). Every sample equals the
+        // golden's `in_w_z` and `in_sf_y`.
+        r.y;
+        ay.y;
 
-            // Translation, all nine columns, overlaying the golden as in
-            // SteadyCornering. Y goes to +0.119 m at t = 7.80 and -0.198 m at
-            // t = 17.80 and ends 3.5 mm from home; 3.0e-3 m/s^2, 3.1e-4 m/s
-            // and 5.5e-5 m from the golden allowing its half sample.
-            //
-            // The off-axis drift does NOT cancel between the two turns: a
-            // left turn leans and turns the other way AND pushes the other
-            // way, so each product that lands in X and Z has the same sign
-            // as the right turn's. The platform ends 0.504 m low and 0.432 m
-            // forward, twice SteadyCornering's one turn. Z is 4.7e-5 m from
-            // the golden; X is 1% from it, 4.9e-3 m, which is again the
-            // golden's one-sample heading lead (SteadyCornering.sim).
-            wash.aout.x;
-            wash.aout.y;
-            wash.aout.z;
-            wash.vout.x;
-            wash.vout.y;
-            wash.vout.z;
-            wash.pout.x;
-            wash.pout.y;
-            wash.pout.z;
+        // Translation, all nine columns, overlaying the golden as in
+        // SteadyCornering. Y goes to +0.119 m at t = 7.80 and -0.198 m at
+        // t = 17.80 and ends 3.5 mm from home; 3.0e-3 m/s^2, 3.1e-4 m/s
+        // and 5.5e-5 m from the golden allowing its half sample.
+        //
+        // The off-axis drift does NOT cancel between the two turns: a
+        // left turn leans and turns the other way AND pushes the other
+        // way, so each product that lands in X and Z has the same sign
+        // as the right turn's. The platform ends 0.504 m low and 0.432 m
+        // forward, twice SteadyCornering's one turn. Z is 4.7e-5 m from
+        // the golden; X is 1% from it, 4.9e-3 m, which is again the
+        // golden's one-sample heading lead (SteadyCornering.sim).
+        wash.aout.x;
+        wash.aout.y;
+        wash.aout.z;
+        wash.vout.x;
+        wash.vout.y;
+        wash.vout.z;
+        wash.pout.x;
+        wash.pout.y;
+        wash.pout.z;
 
-            // The commanded attitude. Roll leans to +0.3102 for the left turn
-            // and -0.3102 for the right -- 5 s is not quite long enough for the
-            // full 0.3108 -- and is 5e-5 rad from the golden allowing its half
-            // sample. Pitch is zero in both, to 1e-17. Heading swings -0.100 at
-            // t = 2.88, +0.117 at 7.90, +0.095 at 12.86 and -0.122 at 17.89,
-            // each one sample earlier in the golden and 8e-5 from it allowing
-            // that sample.
-            wash.ecmd.x;
-            wash.ecmd.y;
-            wash.ecmd.z;
+        // The commanded attitude. Roll leans to +0.3102 for the left turn
+        // and -0.3102 for the right -- 5 s is not quite long enough for the
+        // full 0.3108 -- and is 5e-5 rad from the golden allowing its half
+        // sample. Pitch is zero in both, to 1e-17. Heading swings -0.100 at
+        // t = 2.88, +0.117 at 7.90, +0.095 at 12.86 and -0.122 at 17.89,
+        // each one sample earlier in the golden and 8e-5 from it allowing
+        // that sample.
+        wash.ecmd.x;
+        wash.ecmd.y;
+        wash.ecmd.z;
 
-            // The body rate, all within 3.2e-4 rad/s of the golden allowing its
-            // half sample. q = tan(roll) * r again, to 2e-10, peaking at 0.093
-            // at each release, t = 7 and t = 17, and 1.6e-5 from `out_q`.
-            wash.wcmd.x;
-            wash.wcmd.y;
-            wash.wcmd.z;
-        }
+        // The body rate, all within 3.2e-4 rad/s of the golden allowing its
+        // half sample. q = tan(roll) * r again, to 2e-10, peaking at 0.093
+        // at each release, t = 7 and t = 17, and 1.6e-5 from `out_q`.
+        wash.wcmd.x;
+        wash.wcmd.y;
+        wash.wcmd.z;
     }
 }

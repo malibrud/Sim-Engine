@@ -8,14 +8,12 @@ sim ContBq {
     duration: 2 (s);
 
     record: {
-        file:  "contbq.csv";
-        every: 100;          // 10 Hz in the file, off a 1 kHz base step
-        signals {
-            lp.y;
-            hp.y;
-            bq3.vout.x;
-            bq3.vout.y;
-            bq3.vout.z;
-        }
+        file  = "contbq.csv";
+        every = 100;         // 10 Hz in the file, off a 1 kHz base step
+        lp.y;
+        hp.y;
+        bq3.vout.x;
+        bq3.vout.y;
+        bq3.vout.z;
     }
 }

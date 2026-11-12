@@ -5,7 +5,8 @@ sim KwInst {
     duration: 2 (ms);
 
     record: {
-        file: "kwinst.csv";
-        signals { delete.y; new.y; }
+        file = "kwinst.csv";
+        delete.y;
+        new.y;
     }
 }

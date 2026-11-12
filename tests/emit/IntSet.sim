@@ -7,7 +7,7 @@ sim IntSet {
     duration: 10 (ms);
 
     record: {
-        file: "intset.csv";
-        signals { h.y; }
+        file = "intset.csv";
+        h.y;
     }
 }

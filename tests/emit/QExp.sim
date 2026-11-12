@@ -9,19 +9,17 @@ sim QExp {
     duration: 3 (ms);
 
     record: {
-        file: "qexp.csv";
-        signals {
-            qId.q.w;    qId.q.x;
-            q90.q.w;    q90.q.y;
-            qGen.q.w;   qGen.q.x;   qGen.q.y;   qGen.q.z;
-            qTiny.q.w;  qTiny.q.x;
+        file = "qexp.csv";
+        qId.q.w;    qId.q.x;
+        q90.q.w;    q90.q.y;
+        qGen.q.w;   qGen.q.x;   qGen.q.y;   qGen.q.z;
+        qTiny.q.w;  qTiny.q.x;
 
-            rId.v.x;
-            r90.v.y;
-            rGen.v.x;   rGen.v.y;   rGen.v.z;
-            rTiny.v.x;
+        rId.v.x;
+        r90.v.y;
+        rGen.v.x;   rGen.v.y;   rGen.v.z;
+        rTiny.v.x;
 
-            qWrap.q.w;  rWrap.v.z;
-        }
+        qWrap.q.w;  rWrap.v.z;
     }
 }

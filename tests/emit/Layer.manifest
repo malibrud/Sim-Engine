@@ -1,0 +1,43 @@
+﻿# ----------------------------------------------------------------------------
+#  GENERATED — DO NOT EDIT.
+#  Unit manifest for: Layer.hpp
+#  sim: Layer   root: decay.Decay   base step: 0.001 s
+#
+#  Units are checked by the DSL compiler at every declarative site and then
+#  ERASED — the generated C++ is plain `double` throughout. This file is where
+#  the erased information goes. It is a real generator output, not
+#  documentation: it is the contract for anyone writing an external solver,
+#  feeding the root boundary, or overriding a setting from outside the model.
+#
+#  Every value named here is IN THE UNIT SHOWN. `-` means dimensionless.
+# ----------------------------------------------------------------------------
+
+[state.continuous]        # slot | model path | unit  -- the solver's ABI
+x[0]      x                       -
+xd[0]     x'                      1/s
+
+[state.discrete]          # Sim::Impl::dis; offsets from Sim::Impl::discrete_map()
+          (none)
+
+[signals]                 # Sim::Impl::sig; offsets from Sim::Impl::signal_map()
+          value                   -           double
+          remaining               s           double
+
+[boundary.in]             # root inputs the host must drive, through Sim::inputs()
+          (none)
+
+[boundary.out]            # root outputs the host may read
+          value                   -
+          remaining               s
+
+[settings]                # configurable; value is the elaborated default
+          k                       1/s         = 2.0
+          x0                      -           = 1.0
+          half_life               s           = 0.34657359027997264   <- (std::log(2.0)) / k
+
+[types]
+
+[recorded]                # columns of layer.csv
+          time                    s
+          out.remaining           s
+          out.value               -

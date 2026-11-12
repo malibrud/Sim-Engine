@@ -8,15 +8,13 @@ sim PortPath {
     duration: 3 (ms);
 
     record: {
-        file: "portpath.csv";
-        signals {
-            y;
-            inner.vout;
-            inner.ain;
-            inner.sp.v.x;
-            inner.sp.v.z;
-            inner.s2.b;
-            sum.b;
-        }
+        file = "portpath.csv";
+        y;
+        inner.vout;
+        inner.ain;
+        inner.sp.v.x;
+        inner.sp.v.z;
+        inner.s2.b;
+        sum.b;
     }
 }

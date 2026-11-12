@@ -1,0 +1,26 @@
+// §14 — a settings source holding model values and the run's own
+// configuration together, in any order.
+total_mass          = 1800 (kg);
+front.left.velocity = 2 (m/s);
+sim.duration        = 20 (s);
+
+record {
+    clear;                      // start from scratch
+    file  = "heavy.csv";
+    every = 10;
+    plant.out.velocity;
+    front.left.out.force;
+    bw.state.w1[3];             // an element of an array state
+    -front.left.out.force;      // and a later edit takes one back
+}
+
+record.gain = 2;                // a node called `record` is still a binding
+
+log {
+    file  = "heavy.log";
+    level = warn;
+    levels {
+        front.left = debug;
+        mix        = trace;
+    }
+}

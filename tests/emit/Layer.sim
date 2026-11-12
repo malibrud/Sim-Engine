@@ -1,0 +1,27 @@
+// §13.3, §13.5, §13.7 — the `settings:` file's sections edit this file's
+// entries, in order, and `sim.duration` overrides `duration:`. The manifest
+// pins the columns that survive and the file they land in.
+sim Layer {
+    root: decay.Decay {
+        k = 2.0;
+    };
+
+    step:     1 (ms);
+    solver:   rk4;
+    duration: 2 (s);
+
+    settings: "layer.settings";
+
+    record: {
+        file  = "first.csv";
+        every = 100;
+        x;
+        out.value;
+        out.remaining;
+    }
+
+    log: {
+        file  = "first.log";
+        level = info;
+    }
+}

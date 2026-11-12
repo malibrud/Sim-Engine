@@ -1,0 +1,6 @@
+sim.duration = 1.0005 (s);      // half a step past a whole number
+sim.step     = 2 (ms);          // the step is fixed: every rate counts it
+
+record {
+    -out.nothing_here;          // removing is forgiving; naming nothing is not
+}

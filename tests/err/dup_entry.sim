@@ -8,7 +8,7 @@ sim Bad {
     solver:   rk4;
 
     record: {
-        file:  "run.csv";
-        evrey: 10;
+        file  = "run.csv";
+        evrey = 10;
     };
 }

@@ -6,12 +6,10 @@ sim PortBad {
     duration: 1 (ms);
 
     record: {
-        file: "portbad.csv";
-        signals {
-            k.e;        // declared, driven by nothing
-            k.v;        // a whole record is not a column
-            k.v.w;      // no such field
-            k.v[0];     // a port may not be array-shaped
-        }
+        file = "portbad.csv";
+        k.e;            // declared, driven by nothing
+        k.v;            // a whole record is not a column
+        k.v.w;          // no such field
+        k.v[0];         // a port may not be array-shaped
     }
 }

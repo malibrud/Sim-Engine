@@ -2672,193 +2672,263 @@ bool Parser::parse_sim_entry(ast::SimFile& out) {
     return true;
 }
 
+// §13.5 — a record body: edits to a selection, applied in order. The same body
+// is a `.sim` entry and a settings-source section (§14), so a block copies
+// between the two unchanged. `file` and `every` are keys only when `=` follows
+// them, and `clear` only when `;` does, so a node or port of that name is still
+// a channel.
 bool Parser::parse_record_block(ast::RecordBlock& out) {
-    if (!expect(Tok::LBrace, "SE0201", "to open the `record` block")) return false;
+    if (!expect(Tok::LBrace, "SE0201", "to open the `record` body")) return false;
 
-    static const std::vector<const char*> keys = {"file", "every", "signals"};
+    // §13.1 — the body of earlier versions, once per body. What follows it is
+    // still read, so one old block costs one error and not a cascade.
+    bool said = false;
+    auto old_style = [&](Loc at) {
+        if (said) return;
+        said = true;
+        err("SE0266", at, "old-style `record` body", "write `key = value;`",
+            {note("a `record` body is a settings section's now, so a block copies between "
+                  "a .sim and a .settings file (\xc2\xa7""13.1)"),
+             help("write `file = \"run.csv\";` and `every = 10;`, and each channel as a line "
+                  "of its own, `plant.out.velocity;`, with no `signals { }` around them")});
+    };
+    auto channel = [&](ast::RecordItem::Kind kind, Loc start) {
+        ast::RecordItem it;
+        it.kind = kind;
+        it.loc = start;
+        if (!parse_path(it.path, true, true)) return false;
+        if (!expect(Tok::Semi, "SE0208", "after the channel path")) return false;
+        out.items.push_back(std::move(it));
+        return true;
+    };
 
     while (!at(Tok::RBrace) && !at_end()) {
         const std::uint32_t before = tok_.loc.offset;
+        const Loc start = tok_.loc;
+        bool ok = true;
 
-        if (!tok_.is_word()) {
-            err("SE0201", tok_.loc,
-                std::string("expected `file`, `every` or `signals`, found ") +
-                    describe(tok_.kind),
-                "expected a key");
-            recover_in_list(Tok::RBrace);
-        } else {
-            const std::string key = tok_.text;
-            const Loc key_loc = tok_.loc;
+        if (at(Tok::Minus)) {
             advance();
-
-            if (key == "signals") {
-                if (!expect(Tok::LBrace, "SE0201", "to open `signals`")) {
-                    recover_in_list(Tok::RBrace);
+            ok = channel(ast::RecordItem::Kind::Remove, start);
+        } else if (tok_.is_word() && tok_.text == "clear" && peek().kind == Tok::Semi) {
+            advance();
+            advance();
+            ast::RecordItem it;
+            it.kind = ast::RecordItem::Kind::Clear;
+            it.loc = start;
+            out.items.push_back(std::move(it));
+        } else if (tok_.is_word() && (tok_.text == "file" || tok_.text == "every") &&
+                   (peek().kind == Tok::Equal || peek().kind == Tok::Colon)) {
+            const std::string key = tok_.text;
+            advance();
+            if (at(Tok::Colon)) old_style(start);
+            advance();
+            ast::RecordItem it;
+            it.loc = start;
+            if (key == "file") {
+                it.kind = ast::RecordItem::Kind::File;
+                if (!at(Tok::String)) {
+                    err("SE0201", tok_.loc,
+                        std::string("expected a file name, found ") + describe(tok_.kind),
+                        "expected a string");
+                    ok = false;
                 } else {
-                    while (!at(Tok::RBrace) && !at_end()) {
-                        const std::uint32_t inner = tok_.loc.offset;
-                        ast::Path p;
-                        if (!parse_path(p, true, true)) {
-                            recover_in_list(Tok::RBrace);
-                        } else if (!expect(Tok::Semi, "SE0208", "after the signal path")) {
-                            recover_in_list(Tok::RBrace);
-                        } else {
-                            out.signals.push_back(std::move(p));
-                        }
-                        if (give_up()) return false;
-                        if (tok_.loc.offset == inner && !at(Tok::RBrace)) advance();
-                    }
-                    expect(Tok::RBrace, "SE0201", "to close `signals`");
-                }
-            } else if (key == "file" || key == "every") {
-                if (!expect(Tok::Colon, "SE0201", "after the key")) {
-                    recover_in_list(Tok::RBrace);
-                } else if (key == "file") {
-                    if (!at(Tok::String)) {
-                        err("SE0201", tok_.loc,
-                            std::string("expected a file name, found ") + describe(tok_.kind),
-                            "expected a string");
-                        recover_in_list(Tok::RBrace);
-                    } else {
-                        out.file = tok_.text;
-                        out.has_file = true;
-                        advance();
-                        expect(Tok::Semi, "SE0208", "after the file name");
-                    }
-                } else {
-                    if (!at(Tok::Number) || tok_.text.find('.') != std::string::npos) {
-                        err("SE0201", tok_.loc, "`every` takes a whole number of base steps",
-                            "expected an integer",
-                            {note("`every: N` decimates the recording (\xc2\xa7""13.5)")});
-                        recover_in_list(Tok::RBrace);
-                    } else {
-                        out.every = std::strtol(tok_.text.c_str(), nullptr, 10);
-                        out.has_every = true;
-                        advance();
-                        expect(Tok::Semi, "SE0208", "after `every`");
-                    }
+                    it.file = tok_.text;
+                    advance();
                 }
             } else {
-                std::vector<Attachment> att;
-                const std::string did = closest(key, keys);
-                if (!did.empty()) att.push_back(help("did you mean `" + did + "`?"));
-                att.push_back(note("the `record` block takes `file`, `every` and `signals` "
-                                   "(\xc2\xa7""13.5)"));
-                err("SE0261", key_loc, "unknown `record` key `" + key + "`", "", std::move(att));
-                recover_in_list(Tok::RBrace);
+                it.kind = ast::RecordItem::Kind::Every;
+                if (!at(Tok::Number) || tok_.text.find('.') != std::string::npos) {
+                    err("SE0201", tok_.loc, "`every` takes a whole number of base steps",
+                        "expected an integer",
+                        {note("`every = N;` decimates the recording (\xc2\xa7""13.5)")});
+                    ok = false;
+                } else {
+                    it.every = std::strtol(tok_.text.c_str(), nullptr, 10);
+                    advance();
+                }
             }
+            if (ok) ok = expect(Tok::Semi, "SE0208", key == "file" ? "after the file name"
+                                                                   : "after `every`");
+            if (ok) out.items.push_back(std::move(it));
+        } else if (tok_.is_word() && tok_.text == "signals" && peek().kind == Tok::LBrace) {
+            old_style(start);
+            advance();
+            advance();
+            while (!at(Tok::RBrace) && !at_end()) {
+                const std::uint32_t inner = tok_.loc.offset;
+                if (!channel(ast::RecordItem::Kind::Add, tok_.loc)) recover_in_list(Tok::RBrace);
+                if (give_up()) return false;
+                if (tok_.loc.offset == inner && !at(Tok::RBrace)) advance();
+            }
+            expect(Tok::RBrace, "SE0201", "to close `signals`");
+        } else if (tok_.is_word() && (peek().kind == Tok::Equal || peek().kind == Tok::Colon)) {
+            // No channel line has `=` after its path, so this is a key, and a
+            // misspelt one.
+            static const std::vector<const char*> keys = {"file", "every"};
+            const std::string key = tok_.text;
+            std::vector<Attachment> att;
+            const std::string did = closest(key, keys);
+            if (!did.empty()) att.push_back(help("did you mean `" + did + "`?"));
+            att.push_back(note("a `record` body takes channels, `-channel;`, `clear;`, "
+                               "`file = …;` and `every = …;` (\xc2\xa7""13.5)"));
+            err("SE0261", start, "unknown `record` key `" + key + "`", "", std::move(att));
+            ok = false;
+        } else if (tok_.is_word()) {
+            ok = channel(ast::RecordItem::Kind::Add, start);
+        } else {
+            err("SE0201", tok_.loc,
+                std::string("expected a channel path, `-path`, `clear`, `file =` or `every =`, "
+                            "found ") + describe(tok_.kind),
+                "expected a record line");
+            ok = false;
         }
 
+        if (!ok) recover_in_list(Tok::RBrace);
         if (give_up()) return false;
         if (tok_.loc.offset == before && !at(Tok::RBrace)) advance();
     }
-    return expect(Tok::RBrace, "SE0201", "to close the `record` block");
+    return expect(Tok::RBrace, "SE0201", "to close the `record` body");
 }
 
+// §13.7 — a log body, shared with the settings source's `log` section.
 bool Parser::parse_log_block(ast::LogBlock& out) {
-    if (!expect(Tok::LBrace, "SE0201", "to open the `log` block")) return false;
+    if (!expect(Tok::LBrace, "SE0201", "to open the `log` body")) return false;
 
     static const std::vector<const char*> keys = {"file", "level", "levels"};
 
+    bool said = false;
+    auto old_style = [&](Loc at) {
+        if (said) return;
+        said = true;
+        err("SE0266", at, "old-style `log` body", "write `key = value;`",
+            {note("a `log` body is a settings section's now, so a block copies between a .sim "
+                  "and a .settings file (\xc2\xa7""13.1)"),
+             help("write `file = \"run.log\";`, `level = info;` and "
+                  "`levels { front.left = debug; }`")});
+    };
+    auto level_word = [&](std::string& outl) {
+        if (!tok_.is_word()) {
+            err("SE0201", tok_.loc, std::string("expected a log level, found ") + describe(tok_.kind),
+                "expected trace, debug, info, warn or error");
+            return false;
+        }
+        outl = tok_.text;
+        advance();
+        return true;
+    };
+
     while (!at(Tok::RBrace) && !at_end()) {
         const std::uint32_t before = tok_.loc.offset;
+        const Loc start = tok_.loc;
+        bool ok = true;
 
         if (!tok_.is_word()) {
             err("SE0201", tok_.loc,
                 std::string("expected `file`, `level` or `levels`, found ") + describe(tok_.kind),
                 "expected a key");
-            recover_in_list(Tok::RBrace);
-        } else {
+            ok = false;
+        } else if ((tok_.text == "file" || tok_.text == "level") &&
+                   (peek().kind == Tok::Equal || peek().kind == Tok::Colon)) {
             const std::string key = tok_.text;
-            const Loc key_loc = tok_.loc;
             advance();
-
-            if (key == "levels") {
-                if (!expect(Tok::LBrace, "SE0201", "to open `levels`")) {
-                    recover_in_list(Tok::RBrace);
+            if (at(Tok::Colon)) old_style(start);
+            advance();
+            ast::LogItem it;
+            it.loc = start;
+            if (key == "file") {
+                it.kind = ast::LogItem::Kind::File;
+                if (!at(Tok::String)) {
+                    err("SE0201", tok_.loc,
+                        std::string("expected a file name, found ") + describe(tok_.kind),
+                        "expected a string");
+                    ok = false;
                 } else {
-                    while (!at(Tok::RBrace) && !at_end()) {
-                        const std::uint32_t inner = tok_.loc.offset;
-                        ast::Path p;
-                        if (!parse_path(p, true)) {
-                            recover_in_list(Tok::RBrace);
-                        } else if (!expect(Tok::Colon, "SE0201", "after the node path")) {
-                            recover_in_list(Tok::RBrace);
-                        } else if (!tok_.is_word()) {
-                            err("SE0201", tok_.loc,
-                                std::string("expected a log level, found ") +
-                                    describe(tok_.kind),
-                                "expected trace, debug, info, warn or error");
-                            recover_in_list(Tok::RBrace);
-                        } else {
-                            const std::string level = tok_.text;
-                            advance();
-                            if (expect(Tok::Semi, "SE0208", "after the level override"))
-                                out.levels.emplace_back(std::move(p), level);
-                            else
-                                recover_in_list(Tok::RBrace);
-                        }
-                        if (give_up()) return false;
-                        if (tok_.loc.offset == inner && !at(Tok::RBrace)) advance();
-                    }
-                    expect(Tok::RBrace, "SE0201", "to close `levels`");
-                }
-            } else if (key == "file" || key == "level") {
-                if (!expect(Tok::Colon, "SE0201", "after the key")) {
-                    recover_in_list(Tok::RBrace);
-                } else if (key == "file") {
-                    if (!at(Tok::String)) {
-                        err("SE0201", tok_.loc,
-                            std::string("expected a file name, found ") + describe(tok_.kind),
-                            "expected a string");
-                        recover_in_list(Tok::RBrace);
-                    } else {
-                        out.file = tok_.text;
-                        out.has_file = true;
-                        advance();
-                        expect(Tok::Semi, "SE0208", "after the file name");
-                    }
-                } else {
-                    if (!tok_.is_word()) {
-                        err("SE0201", tok_.loc,
-                            std::string("expected a log level, found ") + describe(tok_.kind),
-                            "expected trace, debug, info, warn or error");
-                        recover_in_list(Tok::RBrace);
-                    } else {
-                        out.level = tok_.text;
-                        out.has_level = true;
-                        advance();
-                        expect(Tok::Semi, "SE0208", "after the level");
-                    }
+                    it.text = tok_.text;
+                    advance();
                 }
             } else {
-                std::vector<Attachment> att;
-                const std::string did = closest(key, keys);
-                if (!did.empty()) att.push_back(help("did you mean `" + did + "`?"));
-                att.push_back(note("the `log` block takes `file`, `level` and `levels` "
-                                   "(\xc2\xa7""13.7)"));
-                err("SE0261", key_loc, "unknown `log` key `" + key + "`", "", std::move(att));
-                recover_in_list(Tok::RBrace);
+                it.kind = ast::LogItem::Kind::Level;
+                it.loc = tok_.loc;
+                ok = level_word(it.text);
             }
+            if (ok) ok = expect(Tok::Semi, "SE0208", key == "file" ? "after the file name"
+                                                                   : "after the level");
+            if (ok) out.items.push_back(std::move(it));
+        } else if (tok_.text == "levels" && peek().kind == Tok::LBrace) {
+            advance();
+            advance();
+            while (!at(Tok::RBrace) && !at_end()) {
+                const std::uint32_t inner = tok_.loc.offset;
+                ast::LogItem it;
+                it.kind = ast::LogItem::Kind::PathLevel;
+                it.loc = tok_.loc;
+                bool line_ok = parse_path(it.path, true);
+                if (line_ok && at(Tok::Colon)) {
+                    old_style(tok_.loc);
+                    advance();
+                } else if (line_ok) {
+                    line_ok = expect(Tok::Equal, "SE0201", "after the node path");
+                }
+                if (line_ok) line_ok = level_word(it.text);
+                if (line_ok) line_ok = expect(Tok::Semi, "SE0208", "after the level override");
+                if (line_ok) out.items.push_back(std::move(it));
+                else recover_in_list(Tok::RBrace);
+                if (give_up()) return false;
+                if (tok_.loc.offset == inner && !at(Tok::RBrace)) advance();
+            }
+            expect(Tok::RBrace, "SE0201", "to close `levels`");
+        } else {
+            const std::string key = tok_.text;
+            std::vector<Attachment> att;
+            const std::string did = closest(key, keys);
+            if (!did.empty()) att.push_back(help("did you mean `" + did + "`?"));
+            att.push_back(note("a `log` body takes `file = …;`, `level = …;` and `levels { }` "
+                               "(\xc2\xa7""13.7)"));
+            err("SE0261", start, "unknown `log` key `" + key + "`", "", std::move(att));
+            ok = false;
         }
 
+        if (!ok) recover_in_list(Tok::RBrace);
         if (give_up()) return false;
         if (tok_.loc.offset == before && !at(Tok::RBrace)) advance();
     }
-    return expect(Tok::RBrace, "SE0201", "to close the `log` block");
+    return expect(Tok::RBrace, "SE0201", "to close the `log` body");
 }
 
 // ─── The settings source (§14) ───────────────────────────────────────────────
 
+// Bindings, and the run's own sections. `record` and `log` are contextual: a
+// section only when `{` follows, so `record.x = 1;` is still a binding.
 std::unique_ptr<ast::SettingsFile> Parser::parse_settings_file() {
     auto file = std::make_unique<ast::SettingsFile>();
     advance();
 
     while (!at_end() && !give_up()) {
         const std::uint32_t before = tok_.loc.offset;
+
+        if (tok_.is_word() && (tok_.text == "record" || tok_.text == "log") &&
+            peek().kind == Tok::LBrace) {
+            const bool is_record = tok_.text == "record";
+            const Loc at_kw = tok_.loc;
+            advance();
+            if (is_record) {
+                ast::RecordBlock b;
+                b.loc = at_kw;
+                if (parse_record_block(b)) file->records.push_back(std::move(b));
+                else recover_in_list(Tok::End);
+            } else {
+                ast::LogBlock b;
+                b.loc = at_kw;
+                if (parse_log_block(b)) file->logs.push_back(std::move(b));
+                else recover_in_list(Tok::End);
+            }
+            if (tok_.loc.offset == before && !at_end()) advance();
+            continue;
+        }
+
         ast::Override o;
         o.loc = tok_.loc;
-
         if (!parse_path(o.path, true, true)) {
             recover_in_list(Tok::End);
         } else if (!expect(Tok::Equal, "SE0201", "after the path")) {

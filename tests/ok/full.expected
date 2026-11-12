@@ -10,15 +10,13 @@ sim-file Full
   record
     file: "run.csv"
     every: 20
-    signals
-      front.left.out.force
-      front.left.state.velocity
-      mix.total
-      sim.utilization
-      sim.overrun_pct
+    add front.left.out.force
+    add front.left.state.velocity
+    add mix.total
+    add sim.utilization
+    add sim.overrun_pct
   log
     file: "run.log"
     level: info
-    levels
-      front.left: debug
-      mix: trace
+    level front.left: debug
+    level mix: trace

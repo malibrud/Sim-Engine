@@ -9,14 +9,12 @@ sim Enums {
     settings: "enums.settings";
 
     record: {
-        file: "enums.csv";
-        signals {
-            dev.state.link;
-            dev.out.link;
-            w.code;
-            w.up;
-            w.st.link;
-            link;
-        }
+        file = "enums.csv";
+        dev.state.link;
+        dev.out.link;
+        w.code;
+        w.up;
+        w.st.link;
+        link;
     }
 }

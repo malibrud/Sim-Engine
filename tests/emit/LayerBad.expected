@@ -1,0 +1,21 @@
+﻿error[SE0267]: `sim.duration` is not a whole number of base steps
+ --> tests/emit/layerbad.settings:1:16
+  |
+1 | sim.duration = 1.0005 (s);      // half a step past a whole number
+  |                ^^^^^^ not a multiple of the step
+  = note: the step is 0.001 s, and a run is a whole number of ticks (§13.3)
+
+error[SE0267]: unknown `sim` binding `sim.step`
+ --> tests/emit/layerbad.settings:2:1
+  |
+2 | sim.step     = 2 (ms);          // the step is fixed: every rate counts it
+  | ^^^^^^^^ not a run setting
+  = note: `sim.duration` is the one `sim.` binding a settings source takes; the step is fixed, because every rate is a count of it (§13.3)
+
+error[SE0304]: `out.nothing_here` names no out of `Decay`
+ --> tests/emit/layerbad.settings:5:6
+  |
+5 |     -out.nothing_here;          // removing is forgiving; naming nothing is not
+  |      ^^^^^^^^^^^^^^^^ unresolved
+
+3 errors emitted

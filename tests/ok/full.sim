@@ -12,23 +12,21 @@ sim Full {
     settings: "sweep.settings";
 
     record: {
-        file:  "run.csv";
-        every: 20;
-        signals {
-            front.left.out.force;
-            front.left.state.velocity;
-            mix.total;                 // bare, legal when unambiguous
-            sim.utilization;
-            sim.overrun_pct;
-        }
+        file  = "run.csv";
+        every = 20;
+        front.left.out.force;
+        front.left.state.velocity;
+        mix.total;                     // bare, legal when unambiguous
+        sim.utilization;
+        sim.overrun_pct;
     }
 
     log: {
-        file:  "run.log";
-        level: info;
+        file  = "run.log";
+        level = info;
         levels {
-            front.left: debug;
-            mix:        trace;
+            front.left = debug;
+            mix        = trace;
         }
     }
 }

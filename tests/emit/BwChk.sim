@@ -13,13 +13,11 @@ sim BwChk {
     duration: 3 (s);
 
     record: {
-        file: "bwchk.csv";
-        signals {
-            src.out.y;             // the drive
-            bw4.out.y;             // 4th order
-            bw5.out.y;             // 5th order
-            bw4.state.w1[0];       // one section's state, addressed by index
-            bw5.state.w1[2];       // the third section of the odd-order cascade
-        }
+        file = "bwchk.csv";
+        src.out.y;                 // the drive
+        bw4.out.y;                 // 4th order
+        bw5.out.y;                 // 5th order
+        bw4.state.w1[0];           // one section's state, addressed by index
+        bw5.state.w1[2];           // the third section of the odd-order cascade
     }
 }

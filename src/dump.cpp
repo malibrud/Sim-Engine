@@ -82,13 +82,6 @@ void dump_bindings(std::ostream& o, int d, const std::vector<ast::Binding>& bs) 
         o << indent(d) << b.name << " = " << expr_to_string(b.value.get()) << "\n";
 }
 
-void dump_path_list(std::ostream& o, int d, const char* label,
-                    const std::vector<ast::Path>& ps) {
-    if (ps.empty()) return;
-    o << indent(d) << label << "\n";
-    for (const ast::Path& p : ps) o << indent(d + 1) << p.str() << "\n";
-}
-
 }  // namespace
 
 // ─── Rendering ───────────────────────────────────────────────────────────────
@@ -327,6 +320,34 @@ void dump(std::ostream& o, const ast::ModelFile& f) {
 
 // ─── Sim file ────────────────────────────────────────────────────────────────
 
+// §13.5, §13.7 — the bodies a `.sim` entry and a settings section share, one
+// line per edit, in order.
+static void dump_record_body(std::ostream& o, int depth, const ast::RecordBlock& b) {
+    for (const ast::RecordItem& it : b.items) {
+        o << indent(depth);
+        switch (it.kind) {
+            case ast::RecordItem::Kind::Clear:  o << "clear"; break;
+            case ast::RecordItem::Kind::Add:    o << "add " << it.path.str(); break;
+            case ast::RecordItem::Kind::Remove: o << "remove " << it.path.str(); break;
+            case ast::RecordItem::Kind::File:   o << "file: \"" << it.file << "\""; break;
+            case ast::RecordItem::Kind::Every:  o << "every: " << it.every; break;
+        }
+        o << "\n";
+    }
+}
+
+static void dump_log_body(std::ostream& o, int depth, const ast::LogBlock& b) {
+    for (const ast::LogItem& it : b.items) {
+        o << indent(depth);
+        switch (it.kind) {
+            case ast::LogItem::Kind::File:      o << "file: \"" << it.text << "\""; break;
+            case ast::LogItem::Kind::Level:     o << "level: " << it.text; break;
+            case ast::LogItem::Kind::PathLevel: o << "level " << it.path.str() << ": " << it.text; break;
+        }
+        o << "\n";
+    }
+}
+
 void dump(std::ostream& o, const ast::SimFile& f) {
     o << "sim-file " << f.name << "\n";
     for (const ast::SimEntry& e : f.entries) {
@@ -346,19 +367,11 @@ void dump(std::ostream& o, const ast::SimFile& f) {
                 break;
             case ast::SimEntry::Kind::Record:
                 o << indent(1) << "record\n";
-                if (e.record.has_file) o << indent(2) << "file: \"" << e.record.file << "\"\n";
-                if (e.record.has_every) o << indent(2) << "every: " << e.record.every << "\n";
-                dump_path_list(o, 2, "signals", e.record.signals);
+                dump_record_body(o, 2, e.record);
                 break;
             case ast::SimEntry::Kind::Log:
                 o << indent(1) << "log\n";
-                if (e.log.has_file) o << indent(2) << "file: \"" << e.log.file << "\"\n";
-                if (e.log.has_level) o << indent(2) << "level: " << e.log.level << "\n";
-                if (!e.log.levels.empty()) {
-                    o << indent(2) << "levels\n";
-                    for (const auto& kv : e.log.levels)
-                        o << indent(3) << kv.first.str() << ": " << kv.second << "\n";
-                }
+                dump_log_body(o, 2, e.log);
                 break;
         }
     }
@@ -370,6 +383,14 @@ void dump(std::ostream& o, const ast::SettingsFile& f) {
     o << "settings-source\n";
     for (const ast::Override& ov : f.overrides)
         o << indent(1) << ov.path.str() << " = " << expr_to_string(ov.value.get()) << "\n";
+    for (const ast::RecordBlock& b : f.records) {
+        o << indent(1) << "record\n";
+        dump_record_body(o, 2, b);
+    }
+    for (const ast::LogBlock& b : f.logs) {
+        o << indent(1) << "log\n";
+        dump_log_body(o, 2, b);
+    }
 }
 
 }  // namespace se

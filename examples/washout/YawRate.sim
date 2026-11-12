@@ -16,55 +16,53 @@ sim YawRate {
     settings: "RN85.settings";
 
     record: {
-        file:  "yaw_rate.csv";
-        every: 10;           // 100 Hz, the golden's rate
+        file  = "yaw_rate.csv";
+        every = 10;          // 100 Hz, the golden's rate
 
-        signals {
-            // The drive: 0.4 rad/s about +Z -- a right turn in SAE -- 0-10 s.
-            pulse.y;
+        // The drive: 0.4 rad/s about +Z -- a right turn in SAE -- 0-10 s.
+        pulse.y;
 
-            // The translational channel, which nothing here drives: all nine
-            // columns are zero on every row, exactly, here and in the golden.
-            // A pure yaw leaves gravity where it was, so the gravity term is
-            // exactly {0, 0, g} and cancels the -g inside `sf` to the bit; and
-            // with nothing to rotate, the frame rotation has nothing to move.
-            // A nonzero cell here is a leak between channels.
-            wash.aout.x;
-            wash.aout.y;
-            wash.aout.z;
-            wash.vout.x;
-            wash.vout.y;
-            wash.vout.z;
-            wash.pout.x;
-            wash.pout.y;
-            wash.pout.z;
+        // The translational channel, which nothing here drives: all nine
+        // columns are zero on every row, exactly, here and in the golden.
+        // A pure yaw leaves gravity where it was, so the gravity term is
+        // exactly {0, 0, g} and cancels the -g inside `sf` to the bit; and
+        // with nothing to rotate, the frame rotation has nothing to move.
+        // A nonzero cell here is a leak between channels.
+        wash.aout.x;
+        wash.aout.y;
+        wash.aout.z;
+        wash.vout.x;
+        wash.vout.y;
+        wash.vout.z;
+        wash.pout.x;
+        wash.pout.y;
+        wash.pout.z;
 
-            // The commanded attitude -- golden `out_roll`, `out_pitch`,
-            // `out_yaw` -- and the rotation washout's own shape. Heading turns
-            // right to 0.133 rad by t = 0.88 and is washed back while the rate
-            // still holds, overshooting to -0.023 at t = 6.6; at the release
-            // it swings -0.149 at t = 10.9 and rings back out. Every one of
-            // those extremes is in the golden one sample EARLIER, 0.87, 6.57,
-            // 10.86: its washout attitude is a per-step update
-            // `qWash (x) exp(w dt)` that has already taken sample i's rate
-            // when it reports sample i. Allowing that one sample the two agree
-            // to 1e-4 rad; not allowing it, to 4e-3. Roll and pitch are zero in
-            // both -- a yaw rate leans nothing.
-            wash.ecmd.x;
-            wash.ecmd.y;
-            wash.ecmd.z;
+        // The commanded attitude -- golden `out_roll`, `out_pitch`,
+        // `out_yaw` -- and the rotation washout's own shape. Heading turns
+        // right to 0.133 rad by t = 0.88 and is washed back while the rate
+        // still holds, overshooting to -0.023 at t = 6.6; at the release
+        // it swings -0.149 at t = 10.9 and rings back out. Every one of
+        // those extremes is in the golden one sample EARLIER, 0.87, 6.57,
+        // 10.86: its washout attitude is a per-step update
+        // `qWash (x) exp(w dt)` that has already taken sample i's rate
+        // when it reports sample i. Allowing that one sample the two agree
+        // to 1e-4 rad; not allowing it, to 4e-3. Roll and pitch are zero in
+        // both -- a yaw rate leans nothing.
+        wash.ecmd.x;
+        wash.ecmd.y;
+        wash.ecmd.z;
 
-            // Its body rate -- golden `out_p`, `out_q`, `out_r`. The high pass
-            // passes the step whole, so `wcmd.z` starts at the full 0.4 and
-            // decays through zero to -0.064 at t = 1.8 while the drive still
-            // holds; the release mirrors it. The rate is not the attitude:
-            // its golden runs half a sample LATE, like every filter output,
-            // and allowing that the two agree to 2e-4 rad/s away from the two
-            // edges. Not allowing it, to 4.5e-3 -- largest just after each
-            // edge, where the rate moves 0.86 rad/s^2.
-            wash.wcmd.x;
-            wash.wcmd.y;
-            wash.wcmd.z;
-        }
+        // Its body rate -- golden `out_p`, `out_q`, `out_r`. The high pass
+        // passes the step whole, so `wcmd.z` starts at the full 0.4 and
+        // decays through zero to -0.064 at t = 1.8 while the drive still
+        // holds; the release mirrors it. The rate is not the attitude:
+        // its golden runs half a sample LATE, like every filter output,
+        // and allowing that the two agree to 2e-4 rad/s away from the two
+        // edges. Not allowing it, to 4.5e-3 -- largest just after each
+        // edge, where the rate moves 0.86 rad/s^2.
+        wash.wcmd.x;
+        wash.wcmd.y;
+        wash.wcmd.z;
     }
 }

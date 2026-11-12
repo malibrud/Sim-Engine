@@ -1,0 +1,19 @@
+﻿=== tests/ok/sections.settings ===
+settings-source
+  total_mass = 1800 (kg)
+  front.left.velocity = 2 (m/s)
+  sim.duration = 20 (s)
+  record.gain = 2
+  record
+    clear
+    file: "heavy.csv"
+    every: 10
+    add plant.out.velocity
+    add front.left.out.force
+    add bw.state.w1[3]
+    remove front.left.out.force
+  log
+    file: "heavy.log"
+    level: warn
+    level front.left: debug
+    level mix: trace

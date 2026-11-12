@@ -8,11 +8,9 @@ sim QInt {
     duration: 2 (s);
 
     record: {
-        file: "qint.csv";
-        every: 10;                 // 10 Hz in the file, off a 100 Hz base step
-        signals {
-            qiS.q.w;  qiS.q.x;  qiS.q.y;  qiS.q.z;
-            nF.n;
-        }
+        file = "qint.csv";
+        every = 10;                // 10 Hz in the file, off a 100 Hz base step
+        qiS.q.w;  qiS.q.x;  qiS.q.y;  qiS.q.z;
+        nF.n;
     }
 }

@@ -126,7 +126,7 @@ private:
 
     // ─── The sim file ────────────────────────────────────────────────────────
     bool read_sim_entries(const ast::SimFile& sim, const Source& src, Model& m);
-    bool load_settings_file(const std::string& path, const Source& from, Loc loc);
+    bool load_settings_file(const std::string& path, const Source& from, Loc loc, Model& m);
     bool time_value(const ast::Expr* e, const Source& src, const char* key, double& out);
 
     // ─── The §7 evaluator ────────────────────────────────────────────────────
@@ -269,8 +269,23 @@ private:
     void resolve_boundary(const NodeInfo* root, Model& m);
 
     // ─── Recording and logging ───────────────────────────────────────────────
-    void resolve_record(const ast::RecordBlock& block, const Source& src, Model& m);
-    void resolve_log(const ast::LogBlock& block, const Source& src, Model& m);
+    // §13.5 — one recordable path, resolved as a column; false, with the
+    // diagnostic reported, when it names none.
+    bool resolve_signal(const ast::Path& p, const Source& src, Model& m, RecordedSignal& out);
+    // §13.3 — the bodies in layering order: the `.sim`'s entry, then each
+    // settings-source section. Each applies its edits in turn.
+    struct RecordLayer {
+        const ast::RecordBlock* block;
+        const Source* src;
+    };
+    struct LogLayer {
+        const ast::LogBlock* block;
+        const Source* src;
+    };
+    void resolve_record(const std::vector<RecordLayer>& layers, Model& m);
+    void resolve_log(const std::vector<LogLayer>& layers, Model& m);
+    // §13.3 — `sim.duration` and its kin, from a settings source.
+    void sim_binding(const ast::Override& o, const Source& src, Model& m);
 
     Diagnostics& diag_;
     Resolver& resolver_;

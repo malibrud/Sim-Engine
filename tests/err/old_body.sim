@@ -1,0 +1,18 @@
+// SE0266: the `record:` and `log:` bodies of earlier versions, one error per
+// body however many old lines it has. §13.1
+sim Old {
+    root:     tests.Vehicle;
+    step:     1 (ms);
+    duration: 1 (s);
+
+    record: {
+        file:  "run.csv";
+        every: 10;
+        signals { front.left.out.force; }
+    }
+
+    log: {
+        file:  "run.log";
+        levels { front.left: debug; }
+    }
+}

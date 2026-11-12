@@ -17,10 +17,10 @@ error[SE0261]: unknown `sim` entry `duratoin`
 error[SE0261]: unknown `record` key `evrey`
   --> tests/err/dup_entry.sim:12:9
    |
-12 |         evrey: 10;
+12 |         evrey = 10;
    |         ^^^^^
    = help: did you mean `every`?
-   = note: the `record` block takes `file`, `every` and `signals` (§13.5)
+   = note: a `record` body takes channels, `-channel;`, `clear;`, `file = …;` and `every = …;` (§13.5)
 
 warning[SE0201]: no `;` is needed after a block entry
   --> tests/err/dup_entry.sim:13:6

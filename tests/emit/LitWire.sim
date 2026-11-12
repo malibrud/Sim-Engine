@@ -7,7 +7,7 @@ sim LitWire {
     duration: 10 (ms);
 
     record: {
-        file: "litwire.csv";
-        signals { s6.y; }
+        file = "litwire.csv";
+        s6.y;
     }
 }

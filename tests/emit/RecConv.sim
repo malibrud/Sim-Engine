@@ -7,7 +7,7 @@ sim RecConv {
     duration: 3 (ms);
 
     record: {
-        file: "recconv.csv";
-        signals { s2.y; }
+        file = "recconv.csv";
+        s2.y;
     }
 }

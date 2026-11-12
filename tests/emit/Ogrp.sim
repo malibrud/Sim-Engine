@@ -8,11 +8,9 @@ sim Ogrp {
     duration: 0.5 (s);
 
     record: {
-        file: "ogrp.csv";
-        signals {
-            la.state.w;
-            lb.state.w;
-            lc.state.w;
-        }
+        file = "ogrp.csv";
+        la.state.w;
+        lb.state.w;
+        lc.state.w;
     }
 }

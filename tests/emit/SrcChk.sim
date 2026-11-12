@@ -9,14 +9,12 @@ sim SrcChk {
     duration: 20 (s);
 
     record: {
-        file: "srcchk.csv";
+        file = "srcchk.csv";
         // EVERY sample. The waveform checks need the exact grid the closed
         // forms are written on, and the noise checks need the population.
-        every: 1;
-        signals {
-            n_ct.y;  n_st.y;  n_rp.y;  n_sn.y;
-            n_sq.y;  n_tr.y;  n_sw.y;  n_cp.y;
-            n_wn.y;  n_un.y;  n_pn.y;  n_pr.y;
-        }
+        every = 1;
+        n_ct.y;  n_st.y;  n_rp.y;  n_sn.y;
+        n_sq.y;  n_tr.y;  n_sw.y;  n_cp.y;
+        n_wn.y;  n_un.y;  n_pn.y;  n_pr.y;
     }
 }

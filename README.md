@@ -157,9 +157,11 @@ sim Drivetrain {
     duration: 5 (s);
 
     record: {
-        file:  "drivetrain.csv";
-        every: 10;
-        signals { whl.state.omega; whl.out.ws.slip; tc.out.torque_cut; }
+        file  = "drivetrain.csv";
+        every = 10;
+        whl.state.omega;
+        whl.out.ws.slip;
+        tc.out.torque_cut;
     }
 }
 ```

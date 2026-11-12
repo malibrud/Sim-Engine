@@ -11,18 +11,16 @@ sim ArrSt {
     duration: 2 (s);
 
     record: {
-        file:  "arrst.csv";
-        every: 100;                 // 10 Hz in the file, off a 1 kHz base step
-        signals {
-            state.x[0];             // an element of a continuous array state
-            state.x[1];             // the one an IC override moved
-            state.x[2];
-            total;                  // a scalar state in the same block
-            state.h[0];             // an element of the discrete array block
-            state.h[2];
-            tick;                   // a scalar discrete state, still in `dis`
-            out.sum;
-            out.tail;
-        }
+        file  = "arrst.csv";
+        every = 100;                // 10 Hz in the file, off a 1 kHz base step
+        state.x[0];                 // an element of a continuous array state
+        state.x[1];                 // the one an IC override moved
+        state.x[2];
+        total;                      // a scalar state in the same block
+        state.h[0];                 // an element of the discrete array block
+        state.h[2];
+        tick;                       // a scalar discrete state, still in `dis`
+        out.sum;
+        out.tail;
     }
 }

@@ -10,12 +10,10 @@ sim Decay {
     duration: 2 (s);
 
     record: {
-        file:  "decay.csv";
-        every: 100;          // 10 Hz in the file, off a 1 kHz base step
-        signals {
-            x;               // a bare name: legal because it is unambiguous
-            out.value;
-            out.remaining;
-        }
+        file  = "decay.csv";
+        every = 100;         // 10 Hz in the file, off a 1 kHz base step
+        x;                   // a bare name: legal because it is unambiguous
+        out.value;
+        out.remaining;
     }
 }

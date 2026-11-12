@@ -23,27 +23,25 @@ sim Drivetrain {
     settings: "drivetrain.settings";
 
     record: {
-        file:  "drivetrain.csv";
-        every: 10;           // 100 Hz in the file, off a 1 kHz base step
+        file  = "drivetrain.csv";
+        every = 10;          // 100 Hz in the file, off a 1 kHz base step
 
-        signals {
-            // Internals are addressable directly — no pass-through outputs
-            // need to be invented just to observe a state.
-            whl.state.omega;
-            whl.out.ws.slip;
-            tc.state.cut;
-            tc.out.torque_cut;
+        // Internals are addressable directly — no pass-through outputs
+        // need to be invented just to observe a state.
+        whl.state.omega;
+        whl.out.ws.slip;
+        tc.state.cut;
+        tc.out.torque_cut;
 
-            // The engine's own real-time metrics land in the same table, which
-            // is what identifies WHICH manoeuvre blows the timing budget.
-            sim.utilization;
-            sim.overrun_pct;
-        }
+        // The engine's own real-time metrics land in the same table, which
+        // is what identifies WHICH manoeuvre blows the timing budget.
+        sim.utilization;
+        sim.overrun_pct;
     }
 
     log: {
-        file:  "drivetrain.log";
-        level: info;
-        levels { tc: debug; }
+        file  = "drivetrain.log";
+        level = info;
+        levels { tc = debug; }
     }
 }

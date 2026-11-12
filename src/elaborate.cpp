@@ -878,7 +878,8 @@ bool Elaborator::time_value(const ast::Expr* e, const Source& src, const char* k
     return true;
 }
 
-bool Elaborator::load_settings_file(const std::string& path, const Source& from, Loc loc) {
+bool Elaborator::load_settings_file(const std::string& path, const Source& from, Loc loc,
+                                    Model& m) {
     auto src = std::make_unique<Source>();
     std::string error;
     if (!Source::load(path, *src, error)) {
@@ -889,6 +890,11 @@ bool Elaborator::load_settings_file(const std::string& path, const Source& from,
     Parser parser(*src, diag_);
     auto ast = parser.parse_settings_file();
     for (const ast::Override& o : ast->overrides) {
+        // §13.3 — the run's own bindings land on the model, not a node.
+        if (!o.path.segs.empty() && o.path.segs[0] == "sim") {
+            sim_binding(o, *src, m);
+            continue;
+        }
         OverrideEntry e;
         e.path = o.path.str();
         e.value = o.value.get();
@@ -2309,409 +2315,507 @@ bool field_walk(const Type& t0, const std::vector<std::string>& segs, Type& out,
 
 }  // namespace
 
-void Elaborator::resolve_record(const ast::RecordBlock& block, const Source& src,
-                                Model& m) {
-    m.record.present = true;
-    m.record.file = block.has_file ? block.file : "run.csv";
-    m.record.every = block.has_every ? block.every : 1;
-    if (m.record.every < 1) m.record.every = 1;
+bool Elaborator::resolve_signal(const ast::Path& p, const Source& src, Model& m,
+                                RecordedSignal& out) {
+    const std::string path = p.str();
 
-    for (const ast::Path& p : block.signals) {
-        const std::string path = p.str();
-
-        // §13.6 — the engine's own metrics are addressed in the same scheme.
-        if (p.segs.size() == 2 && p.segs[0] == "sim") {
-            RecordedSignal s;
-            s.path = path;
-            Unit pct;
-            lookup_unit_symbol("%", pct);
-            s.unit = pct;
-            if (p.segs[1] == "utilization") s.expr = "se_run_.realtime.utilization()";
-            else if (p.segs[1] == "overrun_pct") s.expr = "se_run_.realtime.overrun_pct()";
-            else {
-                diag_.error("SE0304", src, p.loc, "unknown engine metric `" + path + "`",
-                            "not a metric",
-                            {note("`sim.utilization` and `sim.overrun_pct` (§13.6)")});
-                failed_ = true;
-                continue;
-            }
-            m.record.signals.push_back(std::move(s));
-            continue;
-        }
-
-        // §13.5 — a PORT, at any level of nesting. A port is not storage once
-        // the hierarchy is flat: a composite evaporates, and a wire coincides
-        // with the producer's member (§15.3). So the path is answered by
-        // chasing the very chain a leaf's `In` view is built from, and the
-        // column carries what the node at that port actually reads — the
-        // producer's storage with every hop's conversion applied, reported in
-        // the unit the port itself declares.
-        //
-        // No precedence rule is needed against the accessor path below: §6.11
-        // puts instance names and port names in one namespace, and states
-        // are separate from OUTPUTS only, so no port path can also be a
-        // leaf-member path. The one thing this branch must not claim is a
-        // leaf's own output, which is real storage the accessor path reads
-        // directly.
-        std::string port_owner;
-        std::string port_name;
-        std::size_t port_at = 0;
-        const Field* port_field = nullptr;
-        // An index may sit on the port segment itself (`k.v[0]`) as easily as on
-        // a field of it, and both are the same mistake. It comes off here, so
-        // the lookup below sees `v` either way and can say what is actually
-        // wrong instead of failing to find a port called `v[0]`.
-        bool port_indexed = false;
-        for (std::size_t n = p.segs.size(); n-- > 0;) {
-            std::string cand;
-            for (std::size_t i = 0; i < n; ++i) cand = sub(cand, p.segs[i]);
-            auto it = instances_.find(cand);
-            if (it == instances_.end()) continue;
-            std::string name = p.segs[n];
-            std::size_t ix = 0;
-            std::string stem;
-            const bool indexed = split_index(name, stem, ix);
-            if (indexed) name = stem;
-            const Field* f = it->second->input(name);
-            const bool is_out = f == nullptr;
-            if (!f) f = it->second->output(name);
-            if (!f) continue;
-            if (is_out && leaf_by_path_.count(cand)) break;
-            port_owner = cand;
-            port_name = name;
-            port_at = n;
-            port_field = f;
-            port_indexed = indexed;
-            break;
-        }
-
-        if (port_field) {
-            const std::string key = sub(port_owner, port_name);
-            std::vector<std::string> tail(p.segs.begin() + port_at + 1, p.segs.end());
-            std::string stem;
-            std::size_t ix = 0;
-            if (port_indexed || (!tail.empty() && split_index(tail.back(), stem, ix))) {
-                diag_.error("SE0304", src, p.loc, "`" + path + "` is not an array state",
-                            "unexpected index",
-                            {note("a port may not be array-shaped (SE0234)")});
-                failed_ = true;
-                continue;
-            }
-
-            // §6.2a — the hop carries the port's SUBSTITUTED type, which for a
-            // unit-parametric leaf is the only place the real unit exists. An
-            // undriven port has no hop, and is about to be an error anyway.
-            auto hop_it = producers_.find(key);
-            const Type& pt =
-                hop_it != producers_.end() ? hop_it->second.dest_type : port_field->type;
-
-            Type scalar;
-            std::size_t flat = 0;
-            std::string suffix;
-            if (!field_walk(pt, tail, scalar, flat, suffix)) {
-                diag_.error("SE0304", src, p.loc,
-                            "`" + path + "` does not name a scalar signal",
-                            pt.is_record && tail.empty() ? "a record cannot be a CSV column"
-                                                         : "no such field");
-                failed_ = true;
-                continue;
-            }
-
-            InputSource in;
-            std::string dead_end;
-            if (!trace_source(key, in, dead_end)) {
-                // §13.5 — unlike the §15.6 manifest, which may quietly omit a
-                // root output nothing drives, a recorded signal names a column
-                // that has to hold something.
-                std::vector<Attachment> att;
-                if (dead_end != key)
-                    att.push_back(note("the wire reaches `" + dead_end +
-                                       "`, which nothing drives"));
-                att.push_back(note("a recorded port is read through its producer, "
-                                   "so an undriven one names no value (§13.5)"));
-                diag_.error("SE0304", src, p.loc, "nothing drives `" + key + "`",
-                            "undriven port", att);
-                failed_ = true;
-                continue;
-            }
-
-            // A record's conversion is per field; a scalar's is the hop's. The
-            // two never both apply, because `port_conversion` leaves the whole-
-            // port scale at identity for a record.
-            double sc = in.scale, of = in.offset;
-            if (!in.field_convs.empty() && flat < in.field_convs.size()) {
-                sc = in.field_convs[flat].scale;
-                of = in.field_convs[flat].offset;
-            }
-
-            RecordedSignal s;
-            s.path = path;
-            s.unit = scalar.unit;
-            s.enm = scalar.enm;
-            if (in.kind == InputSource::Kind::Param) {
-                // §6.9.2 — the chain ended on a setting, which is a live member
-                // (§6.2b): the column shows the value configuration settled on,
-                // so an override moves it. A record setting's leaves are
-                // separate scalars, so the field path spells one of them.
-                auto ps = setting_sources_.find(dead_end);
-                ExprCode c = ec_param(ps->second.owner, ps->second.name + suffix);
-                if (sc != 1.0 || of != 0.0) {
-                    ExprCode w = ec_lit("(");
-                    w.insert(w.end(), c.begin(), c.end());
-                    ExprCode t = ec_lit(") * " + cpp_number(sc) + " + " + cpp_number(of));
-                    w.insert(w.end(), t.begin(), t.end());
-                    c = std::move(w);
-                }
-                s.code = std::move(c);
-            } else {
-                std::string base;
-                if (in.kind == InputSource::Kind::Const) {
-                    // Already folded through the whole chain by `trace_source`.
-                    base = cpp_number(in.value);
-                    sc = 1.0;
-                    of = 0.0;
-                } else if (in.kind == InputSource::Kind::Boundary) {
-                    base = in.boundary + suffix;
-                } else {
-                    base = "sig." + m.leaves[in.producer].ident + "." + in.port + suffix;
-                }
-                s.expr = (sc == 1.0 && of == 0.0)
-                             ? base
-                             : "(" + base + ") * " + cpp_number(sc) + " + " + cpp_number(of);
-                // §13.5 — a buffer's column is its size. A buffer wire never
-                // converts, so the identity above is the only form that reaches
-                // here.
-                if (scalar.buffer) {
-                    s.expr = base + ".size()";
-                    s.label = buffer_label(scalar);
-                }
-            }
-            m.record.signals.push_back(std::move(s));
-            continue;
-        }
-
-        // Longest instance-path prefix wins, so `whl.out.ws.slip` splits at
-        // `whl` and the rest is an accessor path.
-        std::size_t best = 0;
-        std::string leaf_path;
-        for (std::size_t n = p.segs.size(); n-- > 0;) {
-            std::string candidate;
-            for (std::size_t i = 0; i < n; ++i) candidate = sub(candidate, p.segs[i]);
-            if (leaf_by_path_.count(candidate)) {
-                leaf_path = candidate;
-                best = n;
-                break;
-            }
-        }
-        if (leaf_path.empty() && !leaf_by_path_.count("")) {
-            diag_.error("SE0304", src, p.loc, "no node at `" + path + "`",
-                        "unresolved signal path",
-                        {note("signals are dotted paths from the root (§13.2)")});
+    // §13.6 — the engine's own metrics are addressed in the same scheme.
+    if (p.segs.size() == 2 && p.segs[0] == "sim") {
+        RecordedSignal s;
+        s.path = path;
+        s.key = path;
+        Unit pct;
+        lookup_unit_symbol("%", pct);
+        s.unit = pct;
+        if (p.segs[1] == "utilization") s.expr = "se_run_.realtime.utilization()";
+        else if (p.segs[1] == "overrun_pct") s.expr = "se_run_.realtime.overrun_pct()";
+        else {
+            diag_.error("SE0304", src, p.loc, "unknown engine metric `" + path + "`",
+                        "not a metric",
+                        {note("`sim.utilization` and `sim.overrun_pct` (§13.6)")});
             failed_ = true;
-            continue;
+            return false;
         }
-        const std::size_t leaf_index = leaf_by_path_[leaf_path];
-        const Leaf& leaf = m.leaves[leaf_index];
-        std::vector<std::string> rest(p.segs.begin() + best, p.segs.end());
-        // §13.5 — `bw.state.w1[3]`. The index comes off the last segment
-        // before anything resolves a name, so every lookup below sees `w1`.
-        bool has_index = false;
-        std::size_t elem_index = 0;
-        if (!rest.empty()) {
-            std::string stem;
-            if (split_index(rest.back(), stem, elem_index)) {
-                rest.back() = stem;
-                has_index = true;
-            }
-        }
-        if (rest.empty()) {
-            diag_.error("SE0304", src, p.loc, "`" + path + "` names a node, not a signal",
-                        "not a signal");
+        out = std::move(s);
+        return true;
+    }
+
+    // §13.5 — a PORT, at any level of nesting. A port is not storage once
+    // the hierarchy is flat: a composite evaporates, and a wire coincides
+    // with the producer's member (§15.3). So the path is answered by
+    // chasing the very chain a leaf's `In` view is built from, and the
+    // column carries what the node at that port actually reads — the
+    // producer's storage with every hop's conversion applied, reported in
+    // the unit the port itself declares.
+    //
+    // No precedence rule is needed against the accessor path below: §6.11
+    // puts instance names and port names in one namespace, and states
+    // are separate from OUTPUTS only, so no port path can also be a
+    // leaf-member path. The one thing this branch must not claim is a
+    // leaf's own output, which is real storage the accessor path reads
+    // directly.
+    std::string port_owner;
+    std::string port_name;
+    std::size_t port_at = 0;
+    const Field* port_field = nullptr;
+    // An index may sit on the port segment itself (`k.v[0]`) as easily as on
+    // a field of it, and both are the same mistake. It comes off here, so
+    // the lookup below sees `v` either way and can say what is actually
+    // wrong instead of failing to find a port called `v[0]`.
+    bool port_indexed = false;
+    for (std::size_t n = p.segs.size(); n-- > 0;) {
+        std::string cand;
+        for (std::size_t i = 0; i < n; ++i) cand = sub(cand, p.segs[i]);
+        auto it = instances_.find(cand);
+        if (it == instances_.end()) continue;
+        std::string name = p.segs[n];
+        std::size_t ix = 0;
+        std::string stem;
+        const bool indexed = split_index(name, stem, ix);
+        if (indexed) name = stem;
+        const Field* f = it->second->input(name);
+        const bool is_out = f == nullptr;
+        if (!f) f = it->second->output(name);
+        if (!f) continue;
+        if (is_out && leaf_by_path_.count(cand)) break;
+        port_owner = cand;
+        port_name = name;
+        port_at = n;
+        port_field = f;
+        port_indexed = indexed;
+        break;
+    }
+
+    if (port_field) {
+        const std::string key = sub(port_owner, port_name);
+        std::vector<std::string> tail(p.segs.begin() + port_at + 1, p.segs.end());
+        std::string stem;
+        std::size_t ix = 0;
+        if (port_indexed || (!tail.empty() && split_index(tail.back(), stem, ix))) {
+            diag_.error("SE0304", src, p.loc, "`" + path + "` is not an array state",
+                        "unexpected index",
+                        {note("a port may not be array-shaped (SE0234)")});
             failed_ = true;
-            continue;
+            return false;
         }
 
-        std::string kind;
-        if (rest[0] == "out" || rest[0] == "state" || rest[0] == "var") {
-            kind = rest[0];
-            rest.erase(rest.begin());
-            if (rest.empty()) {
-                diag_.error("SE0304", src, p.loc, "`" + path + "` names no member",
-                            "incomplete path");
-                failed_ = true;
-                continue;
-            }
-        } else {
-            // §13.5 — a bare name is legal when unambiguous, and loud when not.
-            const bool is_state = leaf.node->state(rest[0]) != nullptr;
-            const bool is_out = leaf.node->output(rest[0]) != nullptr;
-            if (is_state && is_out) {
-                diag_.error("SE0461", src, p.loc,
-                            "`" + path + "` is ambiguous", "both a state and an output",
-                            {note("`" + leaf.path + ".state." + rest[0] + "` names the state"),
-                             note("`" + leaf.path + ".out." + rest[0] + "` names the output"),
-                             note("a node may legitimately have both (§6.11)")});
-                failed_ = true;
-                continue;
-            }
-            kind = is_state ? "state" : (is_out ? "out" : "var");
+        // §6.2a — the hop carries the port's SUBSTITUTED type, which for a
+        // unit-parametric leaf is the only place the real unit exists. An
+        // undriven port has no hop, and is about to be an error anyway.
+        auto hop_it = producers_.find(key);
+        const Type& pt =
+            hop_it != producers_.end() ? hop_it->second.dest_type : port_field->type;
+
+        Type scalar;
+        std::size_t flat = 0;
+        std::string suffix;
+        if (!field_walk(pt, tail, scalar, flat, suffix)) {
+            diag_.error("SE0304", src, p.loc,
+                        "`" + path + "` does not name a scalar signal",
+                        pt.is_record && tail.empty() ? "a record cannot be a CSV column"
+                                                     : "no such field");
+            failed_ = true;
+            return false;
+        }
+
+        InputSource in;
+        std::string dead_end;
+        if (!trace_source(key, in, dead_end)) {
+            // §13.5 — unlike the §15.6 manifest, which may quietly omit a
+            // root output nothing drives, a recorded signal names a column
+            // that has to hold something.
+            std::vector<Attachment> att;
+            if (dead_end != key)
+                att.push_back(note("the wire reaches `" + dead_end +
+                                   "`, which nothing drives"));
+            att.push_back(note("a recorded port is read through its producer, "
+                               "so an undriven one names no value (§13.5)"));
+            diag_.error("SE0304", src, p.loc, "nothing drives `" + key + "`",
+                        "undriven port", att);
+            failed_ = true;
+            return false;
+        }
+
+        // A record's conversion is per field; a scalar's is the hop's. The
+        // two never both apply, because `port_conversion` leaves the whole-
+        // port scale at identity for a record.
+        double sc = in.scale, of = in.offset;
+        if (!in.field_convs.empty() && flat < in.field_convs.size()) {
+            sc = in.field_convs[flat].scale;
+            of = in.field_convs[flat].offset;
         }
 
         RecordedSignal s;
         s.path = path;
-        const std::string base = leaf.ident;
-
-        if (kind == "state") {
-            const NodeInfo::StateInfo* st = leaf.node->state(rest[0]);
-            if (!st || rest.size() != 1) {
-                diag_.error("SE0304", src, p.loc, "`" + path + "` names no state",
-                            "unresolved");
-                failed_ = true;
-                continue;
+        s.key = path;   // a port path has one spelling
+        s.unit = scalar.unit;
+        s.enm = scalar.enm;
+        if (in.kind == InputSource::Kind::Param) {
+            // §6.9.2 — the chain ended on a setting, which is a live member
+            // (§6.2b): the column shows the value configuration settled on,
+            // so an override moves it. A record setting's leaves are
+            // separate scalars, so the field path spells one of them.
+            auto ps = setting_sources_.find(dead_end);
+            ExprCode c = ec_param(ps->second.owner, ps->second.name + suffix);
+            if (sc != 1.0 || of != 0.0) {
+                ExprCode w = ec_lit("(");
+                w.insert(w.end(), c.begin(), c.end());
+                ExprCode t = ec_lit(") * " + cpp_number(sc) + " + " + cpp_number(of));
+                w.insert(w.end(), t.begin(), t.end());
+                c = std::move(w);
             }
-            // Read the block, not the node's view of it. A continuous state is
-            // a slot in `x` — the solver's ABI — and a discrete one is a field
-            // of `dis`; the node holds only proxies into both (§15.5).
-            const StateSlot* ss = nullptr;
-            std::size_t state_index = 0;
-            for (std::size_t i = 0; i < leaf.states.size(); ++i)
-                if (leaf.states[i].name == rest[0]) {
-                    ss = &leaf.states[i];
-                    state_index = i;
-                }
-            if (ss && ss->extent.present != has_index) {
-                // Neither direction can be waved through: an array state has no
-                // single value to record, and a scalar one has no element 0 to
-                // name that would still be true if it grew one.
-                diag_.error("SE0304", src, p.loc,
-                            ss->extent.present
-                                ? "`" + path + "` is an array state and needs an index"
-                                : "`" + path + "` is not an array state",
-                            ss->extent.present ? "an element index is required"
-                                               : "unexpected index",
-                            {note(ss->extent.present
-                                      ? "an element of an array state is recorded by "
-                                        "index, `" + path + "[0]` (§13.5)"
-                                      : "only an array-shaped state is indexed "
-                                        "(§6.4a)")});
-                failed_ = true;
-                continue;
-            }
-            if (st->kind == ast::StateKind::Continuous) {
-                if (!m.dynamic_states) {
-                    s.expr = "x[" + std::to_string(ss ? ss->slot : 0) + "]";
-                } else {
-                    s.expr = "x[se_x_off_[" + std::to_string(ss ? ss->off : 0) + "]" +
-                             (has_index ? " + " + std::to_string(elem_index) : "") + "]";
-                }
-            } else if (ss && ss->extent.present) {
-                s.expr = "dis_arr[se_da_off_[" + std::to_string(ss->off) + "] + " +
-                         std::to_string(elem_index) + "]";
-            } else if (st->kind == ast::StateKind::Finite) {
-                // §6.4c — the finite block, read as committed. A row is
-                // written before the jump (§9.6 step 5), so it shows the value
-                // the tick began with.
-                s.expr = "fin." + base + "." + rest[0];
-            } else {
-                s.expr = "dis." + base + "." + rest[0];
-            }
-            if (has_index && ss) {
-                Model::ElementRef ref;
-                ref.path = path;
-                ref.continuous = ss->kind == ast::StateKind::Continuous;
-                ref.index = elem_index;
-                m.element_refs.push_back(std::move(ref));
-                element_sites_.push_back({m.element_refs.size() - 1, leaf_index,
-                                          state_index});
-            }
-            // §6.2a — the slot's unit is substituted; the node's is still `(U)`.
-            s.unit = ss ? ss->unit : st->type.unit;
-            s.enm = st->type.enm;
+            s.code = std::move(c);
         } else {
-            if (has_index) {
-                // §6.4a — only a state is array-shaped in the recordable
-                // surface. A port may not carry an extent at all (SE0234), and
-                // an array var is node-private storage with no path (§6.5).
-                diag_.error("SE0304", src, p.loc,
-                            "`" + path + "` is not an array state", "unexpected index",
-                            {note("a port may not be array-shaped (SE0234), and an "
-                                  "array var is node-private (§6.5)")});
-                failed_ = true;
-                continue;
+            std::string base;
+            if (in.kind == InputSource::Kind::Const) {
+                // Already folded through the whole chain by `trace_source`.
+                base = cpp_number(in.value);
+                sc = 1.0;
+                of = 0.0;
+            } else if (in.kind == InputSource::Kind::Boundary) {
+                base = in.boundary + suffix;
+            } else {
+                base = "sig." + m.leaves[in.producer].ident + "." + in.port + suffix;
             }
-            const Field* f = nullptr;
-            if (kind == "out")
-                for (const Field& lf : leaf.ports_out)
-                    if (lf.name == rest[0]) f = &lf;
-            if (!f)
-                for (const Field& v : leaf.node->vars)
-                    if (kind == "var" && v.name == rest[0]) f = &v;
-            if (!f) {
-                diag_.error("SE0304", src, p.loc,
-                            "`" + path + "` names no " + kind + " of `" +
-                                leaf.node->def->name + "`",
-                            "unresolved");
-                failed_ = true;
-                continue;
-            }
-            // An output lives in the signal block; a var is deliberately NOT a
-            // block member — §6.5 makes it private per-instance storage outside
-            // the override channel — so it is still read through the node.
-            s.expr = kind == "out" ? "sig." + base + "." + rest[0]
-                                   : base + ".var." + rest[0];
-            Type t = f->type;
-            bool ok = true;
-            for (std::size_t i = 1; i < rest.size(); ++i) {
-                if (!t.is_record) {
-                    ok = false;
-                    break;
-                }
-                const Field* sf = nullptr;
-                for (const Field& c : t.record->fields)
-                    if (c.name == rest[i]) sf = &c;
-                if (!sf) {
-                    ok = false;
-                    break;
-                }
-                s.expr += "." + rest[i];
-                t = field_type(t, *sf);
-            }
-            if (!ok || t.is_record) {
-                diag_.error("SE0304", src, p.loc,
-                            "`" + path + "` does not name a scalar signal",
-                            t.is_record ? "a record cannot be a CSV column" : "no such field");
-                failed_ = true;
-                continue;
-            }
-            s.unit = t.unit;
-            s.enm = t.enm;
-            if (t.buffer) {   // §13.5 — its size, headed by its type
-                s.expr += ".size()";
-                s.label = buffer_label(t);
+            s.expr = (sc == 1.0 && of == 0.0)
+                         ? base
+                         : "(" + base + ") * " + cpp_number(sc) + " + " + cpp_number(of);
+            // §13.5 — a buffer's column is its size. A buffer wire never
+            // converts, so the identity above is the only form that reaches
+            // here.
+            if (scalar.buffer) {
+                s.expr = base + ".size()";
+                s.label = buffer_label(scalar);
             }
         }
-        m.record.signals.push_back(std::move(s));
+        out = std::move(s);
+        return true;
+    }
+
+    // Longest instance-path prefix wins, so `whl.out.ws.slip` splits at
+    // `whl` and the rest is an accessor path.
+    std::size_t best = 0;
+    std::string leaf_path;
+    for (std::size_t n = p.segs.size(); n-- > 0;) {
+        std::string candidate;
+        for (std::size_t i = 0; i < n; ++i) candidate = sub(candidate, p.segs[i]);
+        if (leaf_by_path_.count(candidate)) {
+            leaf_path = candidate;
+            best = n;
+            break;
+        }
+    }
+    if (leaf_path.empty() && !leaf_by_path_.count("")) {
+        diag_.error("SE0304", src, p.loc, "no node at `" + path + "`",
+                    "unresolved signal path",
+                    {note("signals are dotted paths from the root (§13.2)")});
+        failed_ = true;
+        return false;
+    }
+    const std::size_t leaf_index = leaf_by_path_[leaf_path];
+    const Leaf& leaf = m.leaves[leaf_index];
+    std::vector<std::string> rest(p.segs.begin() + best, p.segs.end());
+    // §13.5 — `bw.state.w1[3]`. The index comes off the last segment
+    // before anything resolves a name, so every lookup below sees `w1`.
+    bool has_index = false;
+    std::size_t elem_index = 0;
+    if (!rest.empty()) {
+        std::string stem;
+        if (split_index(rest.back(), stem, elem_index)) {
+            rest.back() = stem;
+            has_index = true;
+        }
+    }
+    if (rest.empty()) {
+        diag_.error("SE0304", src, p.loc, "`" + path + "` names a node, not a signal",
+                    "not a signal");
+        failed_ = true;
+        return false;
+    }
+
+    std::string kind;
+    if (rest[0] == "out" || rest[0] == "state" || rest[0] == "var") {
+        kind = rest[0];
+        rest.erase(rest.begin());
+        if (rest.empty()) {
+            diag_.error("SE0304", src, p.loc, "`" + path + "` names no member",
+                        "incomplete path");
+            failed_ = true;
+            return false;
+        }
+    } else {
+        // §13.5 — a bare name is legal when unambiguous, and loud when not.
+        const bool is_state = leaf.node->state(rest[0]) != nullptr;
+        const bool is_out = leaf.node->output(rest[0]) != nullptr;
+        if (is_state && is_out) {
+            diag_.error("SE0461", src, p.loc,
+                        "`" + path + "` is ambiguous", "both a state and an output",
+                        {note("`" + leaf.path + ".state." + rest[0] + "` names the state"),
+                         note("`" + leaf.path + ".out." + rest[0] + "` names the output"),
+                         note("a node may legitimately have both (§6.11)")});
+            failed_ = true;
+            return false;
+        }
+        kind = is_state ? "state" : (is_out ? "out" : "var");
+    }
+
+    RecordedSignal s;
+    s.path = path;
+    s.key = (leaf.path.empty() ? "" : leaf.path + ".") + kind;
+    for (const std::string& r : rest) s.key += "." + r;
+    if (has_index) s.key += "[" + std::to_string(elem_index) + "]";
+    const std::string base = leaf.ident;
+
+    if (kind == "state") {
+        const NodeInfo::StateInfo* st = leaf.node->state(rest[0]);
+        if (!st || rest.size() != 1) {
+            diag_.error("SE0304", src, p.loc, "`" + path + "` names no state",
+                        "unresolved");
+            failed_ = true;
+            return false;
+        }
+        // Read the block, not the node's view of it. A continuous state is
+        // a slot in `x` — the solver's ABI — and a discrete one is a field
+        // of `dis`; the node holds only proxies into both (§15.5).
+        const StateSlot* ss = nullptr;
+        std::size_t state_index = 0;
+        for (std::size_t i = 0; i < leaf.states.size(); ++i)
+            if (leaf.states[i].name == rest[0]) {
+                ss = &leaf.states[i];
+                state_index = i;
+            }
+        if (ss && ss->extent.present != has_index) {
+            // Neither direction can be waved through: an array state has no
+            // single value to record, and a scalar one has no element 0 to
+            // name that would still be true if it grew one.
+            diag_.error("SE0304", src, p.loc,
+                        ss->extent.present
+                            ? "`" + path + "` is an array state and needs an index"
+                            : "`" + path + "` is not an array state",
+                        ss->extent.present ? "an element index is required"
+                                           : "unexpected index",
+                        {note(ss->extent.present
+                                  ? "an element of an array state is recorded by "
+                                    "index, `" + path + "[0]` (§13.5)"
+                                  : "only an array-shaped state is indexed "
+                                    "(§6.4a)")});
+            failed_ = true;
+            return false;
+        }
+        if (st->kind == ast::StateKind::Continuous) {
+            if (!m.dynamic_states) {
+                s.expr = "x[" + std::to_string(ss ? ss->slot : 0) + "]";
+            } else {
+                s.expr = "x[se_x_off_[" + std::to_string(ss ? ss->off : 0) + "]" +
+                         (has_index ? " + " + std::to_string(elem_index) : "") + "]";
+            }
+        } else if (ss && ss->extent.present) {
+            s.expr = "dis_arr[se_da_off_[" + std::to_string(ss->off) + "] + " +
+                     std::to_string(elem_index) + "]";
+        } else if (st->kind == ast::StateKind::Finite) {
+            // §6.4c — the finite block, read as committed. A row is
+            // written before the jump (§9.6 step 5), so it shows the value
+            // the tick began with.
+            s.expr = "fin." + base + "." + rest[0];
+        } else {
+            s.expr = "dis." + base + "." + rest[0];
+        }
+        if (has_index && ss) {
+            // Checked at configuration, and only if the channel survives the
+            // layering (resolve_record), so a removed one cannot fail a run.
+            s.element = true;
+            s.elem_continuous = ss->kind == ast::StateKind::Continuous;
+            s.elem_leaf = leaf_index;
+            s.elem_state = state_index;
+            s.elem_index = elem_index;
+        }
+        // §6.2a — the slot's unit is substituted; the node's is still `(U)`.
+        s.unit = ss ? ss->unit : st->type.unit;
+        s.enm = st->type.enm;
+    } else {
+        if (has_index) {
+            // §6.4a — only a state is array-shaped in the recordable
+            // surface. A port may not carry an extent at all (SE0234), and
+            // an array var is node-private storage with no path (§6.5).
+            diag_.error("SE0304", src, p.loc,
+                        "`" + path + "` is not an array state", "unexpected index",
+                        {note("a port may not be array-shaped (SE0234), and an "
+                              "array var is node-private (§6.5)")});
+            failed_ = true;
+            return false;
+        }
+        const Field* f = nullptr;
+        if (kind == "out")
+            for (const Field& lf : leaf.ports_out)
+                if (lf.name == rest[0]) f = &lf;
+        if (!f)
+            for (const Field& v : leaf.node->vars)
+                if (kind == "var" && v.name == rest[0]) f = &v;
+        if (!f) {
+            diag_.error("SE0304", src, p.loc,
+                        "`" + path + "` names no " + kind + " of `" +
+                            leaf.node->def->name + "`",
+                        "unresolved");
+            failed_ = true;
+            return false;
+        }
+        // An output lives in the signal block; a var is deliberately NOT a
+        // block member — §6.5 makes it private per-instance storage outside
+        // the override channel — so it is still read through the node.
+        s.expr = kind == "out" ? "sig." + base + "." + rest[0]
+                               : base + ".var." + rest[0];
+        Type t = f->type;
+        bool ok = true;
+        for (std::size_t i = 1; i < rest.size(); ++i) {
+            if (!t.is_record) {
+                ok = false;
+                break;
+            }
+            const Field* sf = nullptr;
+            for (const Field& c : t.record->fields)
+                if (c.name == rest[i]) sf = &c;
+            if (!sf) {
+                ok = false;
+                break;
+            }
+            s.expr += "." + rest[i];
+            t = field_type(t, *sf);
+        }
+        if (!ok || t.is_record) {
+            diag_.error("SE0304", src, p.loc,
+                        "`" + path + "` does not name a scalar signal",
+                        t.is_record ? "a record cannot be a CSV column" : "no such field");
+            failed_ = true;
+            return false;
+        }
+        s.unit = t.unit;
+        s.enm = t.enm;
+        if (t.buffer) {   // §13.5 — its size, headed by its type
+            s.expr += ".size()";
+            s.label = buffer_label(t);
+        }
+    }
+    out = std::move(s);
+    return true;
+}
+
+// §13.5 — the layers of edits, in order, to one selection. A channel is its
+// key, so a later layer can remove what an earlier one added under another
+// spelling; removing one that is not selected is not an error, so a "turn
+// these off" source layers on any baseline. A path that names nothing is.
+void Elaborator::resolve_record(const std::vector<RecordLayer>& layers, Model& m) {
+    m.record.file = "run.csv";
+    m.record.every = 1;
+    std::vector<RecordedSignal> sel;
+    for (const RecordLayer& layer : layers) {
+        for (const ast::RecordItem& it : layer.block->items) {
+            switch (it.kind) {
+                case ast::RecordItem::Kind::Clear:
+                    sel.clear();
+                    break;
+                case ast::RecordItem::Kind::File:
+                    m.record.file = it.file;
+                    break;
+                case ast::RecordItem::Kind::Every:
+                    m.record.every = it.every < 1 ? 1 : it.every;
+                    break;
+                case ast::RecordItem::Kind::Add:
+                case ast::RecordItem::Kind::Remove: {
+                    RecordedSignal s;
+                    if (!resolve_signal(it.path, *layer.src, m, s)) break;
+                    auto at = std::find_if(sel.begin(), sel.end(), [&](const RecordedSignal& c) {
+                        return c.key == s.key;
+                    });
+                    if (it.kind == ast::RecordItem::Kind::Add) {
+                        if (at == sel.end()) sel.push_back(std::move(s));
+                    } else if (at != sel.end()) {
+                        sel.erase(at);
+                    }
+                    break;
+                }
+            }
+        }
+    }
+    // §6.4a — only the channels that survived name an element configuration
+    // must check.
+    for (const RecordedSignal& s : sel) {
+        if (!s.element) continue;
+        Model::ElementRef ref;
+        ref.path = s.path;
+        ref.continuous = s.elem_continuous;
+        ref.index = s.elem_index;
+        m.element_refs.push_back(std::move(ref));
+        element_sites_.push_back({m.element_refs.size() - 1, s.elem_leaf, s.elem_state});
+    }
+    m.record.signals = std::move(sel);
+    // §13.5 — a table is written only when it would have a channel in it.
+    m.record.present = !m.record.signals.empty();
+}
+
+// §13.7 — the same layering for the log: `file` and `level` are single values,
+// and each `levels` line sets one path, replacing an earlier line for it.
+void Elaborator::resolve_log(const std::vector<LogLayer>& layers, Model& m) {
+    m.log.present = !layers.empty();
+    for (const LogLayer& layer : layers) {
+        for (const ast::LogItem& it : layer.block->items) {
+            if (it.kind == ast::LogItem::Kind::File) {
+                m.log.file = it.text;
+                continue;
+            }
+            if (!one_of(it.text, kLevels, 5)) {
+                diag_.error("SE0264", *layer.src, it.loc, "unknown log level `" + it.text + "`",
+                            "not a level",
+                            {note("`trace`, `debug`, `info`, `warn`, `error` (§13.7)")});
+                continue;
+            }
+            if (it.kind == ast::LogItem::Kind::Level) {
+                m.log.level = it.text;
+                continue;
+            }
+            const std::string path = it.path.str();
+            auto at = std::find_if(m.log.levels.begin(), m.log.levels.end(),
+                                   [&](const std::pair<std::string, std::string>& kv) {
+                                       return kv.first == path;
+                                   });
+            if (at != m.log.levels.end()) at->second = it.text;
+            else m.log.levels.push_back({path, it.text});
+        }
     }
 }
 
-void Elaborator::resolve_log(const ast::LogBlock& block, const Source& src, Model& m) {
-    m.log.present = true;
-    m.log.file = block.has_file ? block.file : "";
-    if (block.has_level) {
-        m.log.level = block.level;
-        if (!one_of(block.level, kLevels, 5))
-            diag_.error("SE0264", src, block.loc, "unknown log level `" + block.level + "`",
-                        "not a level",
-                        {note("`trace`, `debug`, `info`, `warn`, `error` (§13.7)")});
+// §13.3 — a settings source's `sim.` binding. `sim` is reserved, so nothing in
+// the model can be called this; `sim.duration` is the run's length, a whole
+// number of base steps, and `step` itself is not settable.
+void Elaborator::sim_binding(const ast::Override& o, const Source& src, Model& m) {
+    const std::string path = o.path.str();
+    if (path != "sim.duration") {
+        diag_.error("SE0267", src, o.path.loc, "unknown `sim` binding `" + path + "`",
+                    "not a run setting",
+                    {note("`sim.duration` is the one `sim.` binding a settings source takes; "
+                          "the step is fixed, because every rate is a count of it (§13.3)")});
+        return;
     }
-    for (const auto& kv : block.levels) {
-        if (!one_of(kv.second, kLevels, 5)) {
-            diag_.error("SE0264", src, kv.first.loc,
-                        "unknown log level `" + kv.second + "`", "not a level");
-            continue;
-        }
-        m.log.levels.push_back({kv.first.str(), kv.second});
+    Value v;
+    if (!eval(o.value.get(), src, Env{}, v)) return;
+    Unit seconds;
+    lookup_unit_symbol("s", seconds);
+    if (v.bare || !compatible(v.unit, seconds)) {
+        diag_.error("SE0410", src, o.value->loc, "`sim.duration` must be a time",
+                    v.bare ? "no unit given" : "`(" + v.unit.str() + ")` is " + v.unit.dim_str(),
+                    {help("write `sim.duration = 20 (s);`")});
+        return;
     }
+    const double d = to_si(v.v, v.unit);
+    const double n = m.step > 0.0 ? std::floor(d / m.step + 0.5) : 0.0;
+    if (n < 1.0 || std::fabs(n * m.step - d) > 1e-9 * d) {
+        diag_.error("SE0267", src, o.value->loc,
+                    "`sim.duration` is not a whole number of base steps",
+                    "not a multiple of the step",
+                    {note("the step is " + cpp_number(m.step) + " s, and a run is a whole "
+                          "number of ticks (§13.3)")});
+        return;
+    }
+    m.duration = d;
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -2765,7 +2869,7 @@ bool Elaborator::run(const ast::SimFile& sim, const Source& sim_src,
         else if (e.key == "record") record_entry = &e;
         else if (e.key == "log") log_entry = &e;
         else if (e.key == "settings")
-            load_settings_file(join_file(sim_dir, e.text), sim_src, e.loc);
+            load_settings_file(join_file(sim_dir, e.text), sim_src, e.loc, m);
     }
     if (!root_entry) return false;
 
@@ -2882,8 +2986,20 @@ bool Elaborator::run(const ast::SimFile& sim, const Source& sim_src,
         m.n_states = 0;   // not known until §6.2b step 4
     }
 
-    if (record_entry) resolve_record(record_entry->record, sim_src, m);
-    if (log_entry) resolve_log(log_entry->log, sim_src, m);
+    // §13.3 — the `.sim`'s entries are the bottom layer; the settings source's
+    // sections edit them, in order.
+    std::vector<RecordLayer> record_layers;
+    std::vector<LogLayer> log_layers;
+    if (record_entry) record_layers.push_back({&record_entry->record, &sim_src});
+    if (log_entry) log_layers.push_back({&log_entry->log, &sim_src});
+    for (std::size_t i = 0; i < settings_asts_.size(); ++i) {
+        for (const ast::RecordBlock& b : settings_asts_[i]->records)
+            record_layers.push_back({&b, settings_srcs_[i].get()});
+        for (const ast::LogBlock& b : settings_asts_[i]->logs)
+            log_layers.push_back({&b, settings_srcs_[i].get()});
+    }
+    resolve_record(record_layers, m);
+    resolve_log(log_layers, m);
 
     // Every element reference the model made, now that the offset table it
     // indexes into exists.

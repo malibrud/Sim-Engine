@@ -8,14 +8,12 @@ sim Finite {
     duration: 3 (s);
 
     record: {
-        file: "finite.csv";
-        signals {
-            cl.state.w_clutch;
-            cl.state.locked;
-            integ.out.y;
-            pi.u;
-            tx.state.range;
-            tx.state.gear;
-        }
+        file = "finite.csv";
+        cl.state.w_clutch;
+        cl.state.locked;
+        integ.out.y;
+        pi.u;
+        tx.state.range;
+        tx.state.gear;
     }
 }

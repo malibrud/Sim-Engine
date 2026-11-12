@@ -475,21 +475,44 @@ struct ModelFile {
 
 // ─── The sim file (§13) ──────────────────────────────────────────────────────
 
+// §13.5 — a record body is a list of EDITS to a selection, applied in order,
+// and the same body is a `.sim` entry or a settings-source section (§14).
+struct RecordItem {
+    enum class Kind {
+        Clear,     // clear;
+        Add,       // plant.out.velocity;
+        Remove,    // -plant.out.velocity;
+        File,      // file = "run.csv";
+        Every,     // every = 10;
+    };
+    Kind kind = Kind::Add;
+    Path path;                 // Add, Remove
+    std::string file;          // File
+    long every = 0;            // Every
+    Loc loc;
+};
+
 struct RecordBlock {
-    std::string file;
-    bool has_file = false;
-    long every = 0;
-    bool has_every = false;
-    std::vector<Path> signals;
+    std::vector<RecordItem> items;
+    Loc loc;
+};
+
+// §13.7 — likewise for the log: single values, last writer wins, and per-path
+// thresholds in their own `levels { }`.
+struct LogItem {
+    enum class Kind {
+        File,      // file = "run.log";
+        Level,     // level = info;
+        PathLevel, // levels { front.left = debug; }, one per line
+    };
+    Kind kind = Kind::File;
+    std::string text;          // the file name, or the level
+    Path path;                 // PathLevel
     Loc loc;
 };
 
 struct LogBlock {
-    std::string file;
-    bool has_file = false;
-    std::string level;
-    bool has_level = false;
-    std::vector<std::pair<Path, std::string>> levels;
+    std::vector<LogItem> items;
     Loc loc;
 };
 
@@ -533,6 +556,10 @@ struct Override {
 
 struct SettingsFile {
     std::vector<Override> overrides;
+    // §14 — the run's own configuration, each section in source order. A
+    // binding's position among them does not matter: bindings layer per path.
+    std::vector<RecordBlock> records;
+    std::vector<LogBlock> logs;
 };
 
 }  // namespace ast

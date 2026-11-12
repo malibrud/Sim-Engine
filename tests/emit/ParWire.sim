@@ -7,7 +7,7 @@ sim ParWire {
     duration: 10 (ms);
 
     record: {
-        file: "parwire.csv";
-        signals { s5.y; }
+        file = "parwire.csv";
+        s5.y;
     }
 }

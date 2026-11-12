@@ -8,16 +8,14 @@ sim Buf {
     duration: 12 (ms);
 
     record: {
-        file: "buf.csv";
-        signals {
-            src.data;
-            src.var.rx;
-            thru.q;
-            peek.first;
-            peek.cap;
-            tail.n;
-            tail.cap;
-            thru.c.clipped;
-        }
+        file = "buf.csv";
+        src.data;
+        src.var.rx;
+        thru.q;
+        peek.first;
+        peek.cap;
+        tail.n;
+        tail.cap;
+        thru.c.clipped;
     }
 }

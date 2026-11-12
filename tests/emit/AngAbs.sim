@@ -7,12 +7,10 @@ sim AngAbs {
     duration: 3 (ms);
 
     record: {
-        file: "angabs.csv";
-        signals {
-            wxr.y.x;  wxr.y.y;  wxr.y.z;
-            acc2.y.x; acc2.y.y; acc2.y.z;
-            ta.aout.x; ta.aout.y; ta.aout.z;
-            hold.y;
-        }
+        file = "angabs.csv";
+        wxr.y.x;  wxr.y.y;  wxr.y.z;
+        acc2.y.x; acc2.y.y; acc2.y.z;
+        ta.aout.x; ta.aout.y; ta.aout.z;
+        hold.y;
     }
 }

@@ -1,0 +1,17 @@
+// Layered on Layer.sim's own entries, in order.
+record {
+    -state.x;                   // what the bare `x` added: one channel, two spellings
+    -out.value;
+    -out.value;                 // not selected any more: left alone, not an error
+    out.value;                  // added back, so now after out.remaining
+    file = "layer.csv";
+}
+
+record { every = 50; }          // a second section layers on the first
+
+log {
+    file  = "layer.log";
+    level = warn;
+}
+
+sim.duration = 1 (s);

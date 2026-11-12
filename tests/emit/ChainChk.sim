@@ -9,7 +9,8 @@ sim ChainChk {
     duration: 2 (s);
 
     record: {
-        file: "chain.csv";
-        signals { dbl.y; mark.y; }
+        file = "chain.csv";
+        dbl.y;
+        mark.y;
     }
 }

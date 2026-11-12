@@ -9,7 +9,10 @@ sim RecSet {
     settings: "recset.settings";
 
     record: {
-        file: "recset.csv";
-        signals { cue.vout.x; cue.vout.y; cue.vout.z; nest.y; }
+        file = "recset.csv";
+        cue.vout.x;
+        cue.vout.y;
+        cue.vout.z;
+        nest.y;
     }
 }

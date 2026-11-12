@@ -490,9 +490,14 @@ struct RootOutput {
     InputSource src;
 };
 
-// A signal named in `record: { signals { … } }`.
+// A channel of the recording (§13.5).
 struct RecordedSignal {
     std::string path;                  // as written
+    // Its identity, whatever the spelling: `plant.velocity` and
+    // `plant.out.velocity` are one channel, so adding either keeps one column
+    // and removing either drops it. A port and the leaf member behind it are
+    // two channels, as two paths the author wrote.
+    std::string key;
     std::string expr;                  // a C++ expression in Sim scope
     // §13.5 — a port path whose chain terminates on a setting (§6.9.2) cannot be
     // rendered here, for the same reason `InputSource::expr` cannot: a setting
@@ -507,6 +512,12 @@ struct RecordedSignal {
     // §13.5 — a buffer column is its size, headed by `buffer(N)` where a unit
     // would go. Empty for every other column.
     std::string label;
+    // §6.4a — an element of an array state, whose index configuration checks.
+    bool element = false;
+    bool elem_continuous = false;
+    std::size_t elem_leaf = 0;
+    std::size_t elem_state = 0;
+    std::size_t elem_index = 0;
 };
 
 struct LogConfig {
