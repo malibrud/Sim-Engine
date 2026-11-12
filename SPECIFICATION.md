@@ -384,8 +384,9 @@ includes:
 - the build primitives `link`, `include_dir`, `define`, `cflag`, the tag keyword
   `when`, and the platform atoms — contextual inside `build`;
 - every sim-file key (`root`, `step`, `solver`, `duration`, `settings`,
-  `record`, `log`, `file`, `every`, `signals`, `level`, `levels`) — contextual
-  inside `sim`;
+  `record`, `log`, `file`, `every`, `level`, `levels`, and `clear` inside a
+  record body) — contextual inside `sim`, and `record`, `log` and their bodies'
+  keys likewise inside a settings source (§14);
 - annotation names and their keys (`diagram`, `collapsed`, `expanded`) —
   recognised only after an `@` (§6.15);
 - the type name `buffer` — recognised as a one-segment type, as the scalar
@@ -3583,8 +3584,9 @@ external build tool:
   sources, named for the sim unless `--stem` says otherwise:
   - `<name>.hpp` declares `class Sim`: the ROOT node's settings, inputs and
     outputs as typed structs (with the record types they use), and the calls a
-    host makes in order — `settings()` / `load_settings()` /
-    `dump_settings()` (§14.1), `init()`, `inputs()` / `tick()` / `outputs()` /
+    host makes in order — configuration (`settings()`, `load_settings()` /
+    `dump_settings()` / `list_signals()`, and the key-value, channel and log
+    calls of §14.1), `init()`, `inputs()` / `tick()` / `outputs()` /
     `done()`, `finish()` — and, for a host that paces its run against wall
     time, `sync_realtime()` and `realtime_stats()` (§9.4, §13.6). `tick()`
     never waits. The model itself is `Sim::Impl`,
@@ -3597,8 +3599,11 @@ external build tool:
     whole model — which keeps the unity-build property that matters: the
     model's flat call sequence is compiled in one piece.
   - `main.cpp` is an example host that uses the header alone. It is what the
-    `run` and `exe` modes build, and `--no-main` suppresses it. It takes a
-    settings source from its command line (§14.1). It runs flat out unless
+    `run` and `exe` modes build, and `--no-main` suppresses it. It takes its
+    whole configuration — settings, initial conditions, run length, channels
+    and log — as a list of settings sources on its command line (§14.1). The
+    run's length is `tick_count()`, `sim.duration` in steps; `step_seconds`
+    stays a constant. It runs flat out unless
     given `--realtime SYNC`, a time that is a whole number of base steps, and
     then calls `sync_realtime()` after every `SYNC` of ticks. `run` and `test`
     pass any arguments after the script's own through to it.
@@ -3642,21 +3647,19 @@ sim Demo {
     settings: "vehicle_heavy.settings";
 
     record: {
-        file:  "run.csv";
-        every: 10;
-        signals {
-            plant.out.velocity;
-            plant.state.position;
-            front.left.out.force;
-            sim.utilization;
-            sim.overrun_pct;
-        }
+        file  = "run.csv";
+        every = 10;
+        plant.out.velocity;
+        plant.state.position;
+        front.left.out.force;
+        sim.utilization;
+        sim.overrun_pct;
     }
 
     log: {
-        file:  "run.log";
-        level: info;
-        levels { front.left: debug; }
+        file  = "run.log";
+        level = info;
+        levels { front.left = debug; }
     }
 }
 ```
@@ -3675,14 +3678,23 @@ model, and the model would stop being the thing under test.
 | `solver:` | `euler` · `rk2` · `rk4` | `rk4` |
 | `duration:` | time expression | required |
 | `settings:` | string — a `.settings` path | none |
-| `record:` | block, §13.5 | no recording |
-| `log:` | block, §13.7 | console only |
+| `record:` | a record body, §13.5 | no recording |
+| `log:` | a log body, §13.7 | console only |
 
 Each entry may appear at most once (`SE0260`). Whether a run keeps pace with wall
 time is not an entry: it is the host's choice (§9.4), and the `mode`, `sync` and
 `window` entries of earlier versions are rejected as removed (`SE0265`).
 Block-valued entries (`record:`, `log:`) take **no trailing semicolon**; scalar
 entries require one.
+
+**`record:` and `log:` take exactly the body a settings source's `record` and
+`log` sections take** (§14), so a block copies between a `.sim` and a
+`.settings` file unchanged. The body of earlier versions — `file:` and
+`every:` with colons, the channels inside `signals { }`, `levels { p: debug; }`
+— is `SE0266`, and the help shows the new form. Each entry here is the bottom
+layer of its kind: `duration:` is what `sim.duration` overrides, `record:` is the
+selection a settings source's `record` section edits, and `log:` is what a `log`
+section edits (§13.3).
 
 The `root` entry is what makes a model runnable: it names the single top-level
 node to instantiate, and may bind its settings exactly as an instance in a
@@ -3734,6 +3746,23 @@ setting that a flow-down expression also drives — is noted but not required.
 An override may target a **setting or a state**, never an **output** (outputs are
 computed). The resolver therefore only has to disambiguate setting-versus-state
 (`SE0460`).
+
+**The run itself layers the same way.** Three things about a run that are not
+model values ride the same sources, in the same order:
+
+| | bottom layer | edited by |
+|---|---|---|
+| the run's length | `duration:` | `sim.duration = 20 (s);` |
+| the recorded channels, file and rate | `record:` | a `record { }` section (§13.5) |
+| the log file and levels | `log:` | a `log { }` section (§13.7) |
+
+`sim` is reserved (§3.4), so `sim.duration` can collide with no model path. It
+is a whole number of base steps, or `SE0267`; `step` itself is not settable,
+because every rate in the model is an integer count of it (§9.2). Each source
+applies its lines in order, and sources apply in the order given — the `.sim`'s
+entries, its `settings:` file, then each source the compiled model is handed,
+left to right. A dump (§14.1) writes all three, so loading it reproduces the
+run.
 
 ### 13.4 Initial conditions
 
@@ -3794,11 +3823,32 @@ logging in every respect.
 
 ```
 record: {
-    file:  "run.csv";
-    every: 10;                     // decimate: every 10th base tick
-    signals { plant.out.velocity; plant.state.position; }
+    file  = "run.csv";
+    every = 10;                    // decimate: every 10th base tick
+    plant.out.velocity;
+    plant.state.position;
 }
 ```
+
+**The body is a list of edits to a selection**, applied in order:
+
+| line | effect |
+|---|---|
+| `path;` | add the channel; one already selected keeps its place |
+| `-path;` | remove it; one not selected is left alone |
+| `clear;` | remove every channel |
+| `file = "…";` | where the table is written; `run.csv` if never set |
+| `every = N;` | write every Nth base tick; 1 if never set |
+
+The same body is a `record` section in a settings source (§14), and the
+sections layer (§13.3): one file builds a baseline of channels, a later one
+removes a few, and one that starts with `clear;` starts from scratch. Removing
+an unselected channel is not an error, so a "turn these off" file layers on any
+baseline. Columns are in the order their channels were added; the header names
+each by the path as written where it was added. A table is written only when at
+least one channel is selected, so `clear;` with nothing after it turns
+recording off. `clear` is the one word the body reserves: a root port that is
+literally named `clear` is not reachable by its one-segment path here.
 
 - **Signals are qualified paths** — `plant.out.velocity`, `plant.state.position` —
   reusing the `out.` / `state.` accessors. A bare `plant.velocity` is legal **when
@@ -3839,7 +3889,7 @@ record: {
   output nothing drives — nobody has to read a manifest row — but a column has to
   hold something, so here silence is not available.
 - **Records at the base step by default**; the first column is `time (s)`.
-  `every: N` decimates the file.
+  `every = N;` decimates the file.
 - A signal slower than the recording rate is **held (ZOH)** — which is its actual
   physical value, since that is precisely what downstream nodes see.
 - The header carries units: `plant.out.velocity [m/s]`.
@@ -3861,6 +3911,16 @@ record: {
 - Wildcards (`plant.out.*`) are not in this version; see Appendix C. They would
   be worth more now than before: naming every element of an array state
   individually is exactly the case a wildcard removes.
+
+**Every path the `.sim` could record can be chosen at run time** (§14.1). The
+compiled model carries a table of every recordable channel — each leaf's
+outputs, states and vars, each port at every level of nesting, the
+`sim.*` metrics — and resolves a path against it exactly as `sec` resolves one
+here: the same qualified and bare forms, the same ambiguity, and the same
+conversions on a port's chain. An undriven port is not in the table. An array
+state is one entry, its elements named by index at the extent configuration
+settles. The `.sim`'s `record:` is therefore only the selection a run starts
+with, and choosing another one needs no regeneration.
 
 ### 13.6 Real-time instrumentation
 
@@ -3885,7 +3945,7 @@ self-documenting in a CSV header, and `-` in the manifest either way:
 - Utilization can exceed 100: a call that overran spent longer computing than
   the model time it covered. Catching up does not inflate it, since a call that
   returns without waiting has still only computed for as long as it computed.
-- **Both are recordable signals**, addressable as `sim.*` paths in `signals`, so
+- **Both are recordable signals**, addressable as `sim.*` paths in a record body, so
   they land in the CSV beside model signals. That is what identifies *which*
   manoeuvre blows the timing budget, not merely that something did. Values
   between calls are held, which §13.5's rule already covers at no extra cost.
@@ -3902,15 +3962,23 @@ Logging is **qualitative**: asynchronous, unaligned text and events.
 
 ```
 log: {
-    file:  "run.log";
-    level: info;                     // global threshold
-    levels { front.left: debug; }    // per-node-path overrides
+    file  = "run.log";
+    level = info;                    // global threshold
+    levels { front.left = debug; }   // per-node-path overrides
 }
 ```
 
 Levels are `trace`, `debug`, `info`, `warn`, `error`. The console always receives
 `warn` and above regardless of the configured threshold. The file format is plain
 text; a structured alternative is an open question.
+
+The same body is a `log` section in a settings source (§14), and sections layer
+(§13.3): `file` and `level` are single values and the last writer wins; each
+`levels` line sets one path's threshold, and a later line for the same path
+replaces it. Per-node levels keep their own `levels { }` so that a node path
+can never be mistaken for `file` or `level`. A log file is opened when the run
+starts, after configuration, so a host that gives each of two copies of one
+model its own `file` gets two logs.
 
 ---
 
@@ -3927,18 +3995,41 @@ rear.tc.slip_limit  = 0.08;
 ```
 
 ```
-settings_source  := { binding }
+settings_source  := { binding | record_section | log_section }
 binding          := path '=' expression ';'
-path             := identifier { '.' identifier }
+path             := identifier { '.' identifier } [ '[' integer ']' ]
+record_section   := 'record' record_body          // §13.5
+log_section      := 'log' log_body                // §13.7
 ```
 
 **File and string are one grammar, two carriers.** The same text may be passed
 inline — as a command-line flag or through an API call — with no separate syntax.
 Every value is unit-checked against its target (§4.3).
 
-Comments follow §3.2. There is no `package`, no nesting, and no conditionals:
-this is deliberately the flattest possible surface, because it is the layer that
-gets generated by scripts and sweeps.
+A source holds model values, run configuration, or both, in any mix and any
+order: settings and initial conditions as bindings, the run's length as the
+binding `sim.duration`, and the recording and the log as sections whose bodies
+are the `.sim`'s own (§13.1). One file may carry all of them, or a run may be
+assembled from several, each applied in turn (§13.3):
+
+```
+// outputs.settings — the channels for this study, from scratch
+record {
+    clear;
+    file = "heavy.csv";
+    plant.out.velocity;
+    front.left.out.force;
+}
+
+// quiet.settings — layered after it: one channel fewer, less log
+record { -front.left.out.force; }
+log    { level = warn; }
+```
+
+Comments follow §3.2. There is no `package` and no conditionals, and the two
+sections are the only nesting: this is deliberately the flattest surface that
+can configure a whole run, because it is the layer that gets generated by
+scripts and sweeps.
 
 ### 14.1 The third carrier: a compiled model
 
@@ -3949,7 +4040,15 @@ which is the carrier `sec` never sees. A model exposes three operations:
 |---|---|
 | `load_settings` | apply a §14 source; each binding pins its target |
 | `resolve_settings` | re-evaluate derived defaults and flow-down, skipping pinned |
-| `dump_settings` | emit a §14 source describing the model's current settings |
+| `dump_settings` | emit a §14 source describing how the run is configured |
+| `list_signals` | emit a `record` section offering every channel the model has |
+
+**The whole grammar, sections included.** A compiled model accepts the
+`record` and `log` sections and the `sim.duration` binding as `sec` does. A
+section's channel paths resolve against the model's channel table (§13.5), with
+`sec`'s qualified and bare forms and its wording for an ambiguous one; a
+channel's array index, like an override's (§13.4), is checked when
+configuration settles the extent.
 
 **Record settings cost the runtime nothing** (§6.2c). A leaf is a flat path and
 a number, which is what this section already describes, so nothing below changed
@@ -3993,15 +4092,62 @@ dump stays loadable and the round trip above holds for a model that has one.
 
 #### The operations on a generated `Sim`
 
-The three operations are members of the generated `Sim` (§15.5), beside
+The operations are members of the generated `Sim` (§15.5), beside
 `settings()`, and like it they belong to configuration — after construction,
 before `init()`:
 
 ```cpp
 bool        load_settings(const char* text, const char* origin = "settings");
 const char* dump_settings();
+const char* list_signals();
 // resolve_settings is not a separate call: load_settings ends with it.
 ```
+
+A host that would rather not write text has the same operations one key at a
+time, with structured answers. Each call is exactly one line of a source, takes
+the same checks, fails with the same wording through `error()`, and layers as
+that line would:
+
+```cpp
+// Settings, initial conditions and sim.duration: one row per settable path.
+enum class SettingKind { Setting, Initial, Run };
+struct SettingInfo {
+    std::string path;          // "front.left.mass", "bw.w1[3]", "sim.duration"
+    SettingKind kind;
+    std::string unit;          // canonical (§15.6); "-" for none
+    std::string type;          // "double", "int", "bool", or a finite type
+    double      value;         // current, in `unit`; an enumerator's value
+    bool        structural;    // listed, never settable (§6.2)
+};
+std::vector<SettingInfo> settings_list() const;
+double get(const char* path) const;               // canonical unit; NaN if unknown
+bool   set(const char* path, double value);       // canonical unit
+bool   set(const char* path, const char* value);  // "340 (kg)", "CONNECTED"
+
+// Channels: every recordable path (§13.5), and whether it is selected.
+struct ChannelInfo {
+    std::string path;          // "plant.out.velocity", "bw.state.w1[3]"
+    std::string unit;          // the header's bracket: a unit, a finite type, buffer(N)
+    bool        selected;
+};
+std::vector<ChannelInfo> channels_list() const;
+bool record(const char* path);                    // `path;`
+bool unrecord(const char* path);                  // `-path;`
+void record_clear();                              // `clear;`
+bool record_file(const char* file);   const char*   record_file() const;
+bool record_every(std::uint64_t n);   std::uint64_t record_every() const;
+
+// The log (§13.7).
+bool log_file(const char* file);                  // "" for console only
+bool log_level(const char* level);                // the global threshold
+bool log_level(const char* path, const char* level);
+```
+
+`get` and `set(path, double)` speak the canonical unit, so a sweep or an
+optimiser never formats or parses; `set(path, text)` takes what a source line
+would, unit suffix and all. The lists are taken after configuration has
+settled what it can, so array rows appear at the extent the current settings
+give.
 
 - **A load is all or nothing.** Every binding is parsed, resolved to a path and
   checked against its target before any is applied; if one fails, none is.
@@ -4021,9 +4167,9 @@ const char* dump_settings();
   afterwards includes every derived value.
 - **What a load may bind** is what §13.3 and §13.4 say an override may target —
   a setting at any depth, one leaf of a record setting, a scalar state's initial
-  value, or one element of an array state — and nothing else. An output, a
-  whole record, a whole array, and a path the model does not have are each
-  rejected by name.
+  value, or one element of an array state — plus `sim.duration` and the two
+  sections (§13.3), and nothing else. An output, a whole record, a whole array,
+  and a path the model does not have are each rejected by name.
 - **A bound value is converted, not only checked.** A suffix compatible with
   the target (§4.2, with §4.5's angle rule) is converted to the target's
   canonical unit, so `0.34 (t)` at a `kg` setting is 340, and `20 (degC)` at a
@@ -4035,19 +4181,39 @@ const char* dump_settings();
   written `0` or `1` here as it is everywhere else.
 
 `dump_settings` returns text owned by the model, valid until the next call. It
-writes the settings, in configuration order, then the initial conditions:
-every scalar state's, and each array-state element that a source bound. Numbers
-are written to round-trip exactly; units are the canonical ones (§15.6);
-enumerators are written by name.
+is **the recipe for the run**: the settings, in configuration order; the initial
+conditions — every scalar state's, and each array-state element that a source
+bound; `sim.duration`; a `record` section that starts with `clear;` and then
+names the file, the rate and the selected channels in column order; and a `log`
+section. Numbers are written to round-trip exactly; units are the canonical ones
+(§15.6); enumerators are written by name. Because the record section clears
+first, loading a dump on top of any configuration reproduces the selection
+exactly, column order included.
+
+`list_signals` is **the menu**: a `record` section that starts with `clear;` and
+lists every channel in the table, in tree order, each with its unit as a
+comment — the selected ones as lines, the rest commented out. It is meant to be
+saved, edited by uncommenting or deleting lines, and loaded back as a run's
+channel file. It names channels only — no file and no rate — so it layers
+beside a file that sets those.
 
 A generated `main.cpp` (§12.4) is a host of this interface, and takes the same
 text from its command line:
 
 | | |
 |---|---|
-| `--settings FILE` | load a §14 file; repeatable, in order |
+| `--settings FILE [FILE …]` | load §14 files in order; the list may be comma-separated, and the flag repeated |
 | `--set PATH=VALUE` | load one binding, `PATH = VALUE;`; repeatable, in order |
+| `--duration TIME` | shorthand for `--set sim.duration=TIME` |
 | `--dump-settings` | after any loads, print `dump_settings()` and exit without running |
+| `--list-signals` | after any loads, print `list_signals()` and exit without running |
+
+Everything a run can be configured with therefore arrives through one list,
+applied left to right:
+
+```
+mysim.exe --settings default.settings, thisrun.settings, initialcond.settings, outputs.settings
+```
 
 ---
 
@@ -4650,6 +4816,8 @@ of thing wearing the same name.
 | `SE0263` | — | *Retired.* `sync` or `window` requires `mode: realtime` — the entries were removed with §9.4's host pacing. The number stays burned; codes are stable. |
 | `SE0264` | 4 | Bad value for a `sim` entry (solver, log level) |
 | `SE0265` | 2 | A removed `sim` entry (`mode`, `sync`, `window`): pacing is the host's (§9.4) |
+| `SE0266` | 2 | An old-style `record:` or `log:` body (`file:`, `signals { }`, `levels { p: l; }`): the body is now a settings section's (§13.1) |
+| `SE0267` | 4 | `sim.duration` that is not a whole number of base steps, or an unknown `sim.` binding (§13.3) |
 | `SE0270` | 2 | Duplicate entry in `tests` |
 | `SE0271` | 2 | Unknown entry in `tests` |
 | `SE0272` | 2 | `~=` with no `within`, or `=` with one |
@@ -4941,21 +5109,27 @@ root_entry      = "root" ":" qualified_name
                   [ "{" { setting_binding } "}" ] ";" ;
 scalar_entry    = IDENT ":" ( expression | IDENT | STRING ) ";" ;
 
-record_entry    = "record" ":" "{" { record_item } "}" ;
-record_item     = "file"  ":" STRING ";"
-                | "every" ":" NUMBER ";"
-                | "signals" "{" { signal_path ";" } "}" ;
-signal_path     = IDENT { "." IDENT } ;
+record_entry    = "record" ":" record_body ;
+log_entry       = "log" ":" log_body ;
 
-log_entry       = "log" ":" "{" { log_item } "}" ;
-log_item        = "file"  ":" STRING ";"
-                | "level" ":" IDENT ";"
-                | "levels" "{" { signal_path ":" IDENT ";" } "}" ;
+(* §13.5, §13.7 — one body, shared with the settings source's sections. *)
+record_body     = "{" { record_item } "}" ;
+record_item     = "clear" ";"
+                | [ "-" ] signal_path ";"
+                | "file"  "=" STRING ";"
+                | "every" "=" NUMBER ";" ;
+log_body        = "{" { log_item } "}" ;
+log_item        = "file"  "=" STRING ";"
+                | "level" "=" IDENT ";"
+                | "levels" "{" { signal_path "=" IDENT ";" } "}" ;
+signal_path     = IDENT { "." IDENT } [ "[" NUMBER "]" ] ;
 
 (* ─── settings source ────────────────────────────────────────────────── *)
 
-settings_file   = { override_binding } EOF ;
+settings_file   = { override_binding | record_section | log_section } EOF ;
 override_binding= signal_path "=" expression ";" ;
+record_section  = "record" record_body ;
+log_section     = "log" log_body ;
 ```
 
 Two places where the grammar is deliberately looser than the semantics, so that a
