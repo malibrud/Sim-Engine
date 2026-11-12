@@ -3112,7 +3112,9 @@ rather than a reason to forbid the method.
 One base tick at index *k*, normatively:
 
 1. **Set the time** to *t*[k] — which is what `sim.time()` returns for the rest
-   of this step, except where step 7 moves it.
+   of this step, except where step 7 moves it. When an inputs file drives the
+   run (§13.8), write the root inputs it names, at *t*[k], over whatever the
+   host wrote.
 2. **Propagate outputs.** `output()` in topological order, at the tick's entry
    state.
 3. **`next()`** on every node that defines it, in any order, unless the run has
@@ -3693,21 +3695,22 @@ model, and the model would stop being the thing under test.
 | `settings:` | string — a `.settings` path | none |
 | `record:` | a record body, §13.5 | no recording |
 | `log:` | a log body, §13.7 | console only |
+| `inputs:` | an inputs body, §13.8 | the host drives every root input |
 
 Each entry may appear at most once (`SE0260`). Whether a run keeps pace with wall
 time is not an entry: it is the host's choice (§9.4), and the `mode`, `sync` and
 `window` entries of earlier versions are rejected as removed (`SE0265`).
-Block-valued entries (`record:`, `log:`) take **no trailing semicolon**; scalar
-entries require one.
+Block-valued entries (`record:`, `log:`, `inputs:`) take **no trailing
+semicolon**; scalar entries require one.
 
-**`record:` and `log:` take exactly the body a settings source's `record` and
-`log` sections take** (§14), so a block copies between a `.sim` and a
-`.settings` file unchanged. The body of earlier versions — `file:` and
+**`record:`, `log:` and `inputs:` take exactly the body a settings source's
+`record`, `log` and `inputs` sections take** (§14), so a block copies between a
+`.sim` and a `.settings` file unchanged. The body of earlier versions — `file:` and
 `every:` with colons, the channels inside `signals { }`, `levels { p: debug; }`
 — is `SE0266`, and the help shows the new form. Each entry here is the bottom
 layer of its kind: `duration:` is what `sim.duration` overrides, `record:` is the
-selection a settings source's `record` section edits, and `log:` is what a `log`
-section edits (§13.3).
+selection a settings source's `record` section edits, `log:` is what a `log`
+section edits, and `inputs:` is the file an `inputs` section replaces (§13.3).
 
 The `root` entry is what makes a model runnable: it names the single top-level
 node to instantiate, and may bind its settings exactly as an instance in a
@@ -3760,7 +3763,7 @@ An override may target a **setting or a state**, never an **output** (outputs ar
 computed). The resolver therefore only has to disambiguate setting-versus-state
 (`SE0460`).
 
-**The run itself layers the same way.** Three things about a run that are not
+**The run itself layers the same way.** Four things about a run that are not
 model values ride the same sources, in the same order:
 
 | | bottom layer | edited by |
@@ -3768,13 +3771,14 @@ model values ride the same sources, in the same order:
 | the run's length | `duration:` | `sim.duration = 20 (s);` |
 | the recorded channels, file and rate | `record:` | a `record { }` section (§13.5) |
 | the log file and levels | `log:` | a `log { }` section (§13.7) |
+| the inputs file | `inputs:` | an `inputs { }` section (§13.8) |
 
 `sim` is reserved (§3.4), so `sim.duration` can collide with no model path. It
 is a whole number of base steps, or `SE0267`; `step` itself is not settable,
 because every rate in the model is an integer count of it (§9.2). Each source
 applies its lines in order, and sources apply in the order given — the `.sim`'s
 entries, its `settings:` file, then each source the compiled model is handed,
-left to right. A dump (§14.1) writes all three, so loading it reproduces the
+left to right. A dump (§14.1) writes all four, so loading it reproduces the
 run.
 
 ### 13.4 Initial conditions
@@ -4013,6 +4017,116 @@ same `{time}` pattern: `file` takes `{time}` exactly as `record`'s does
 A host with no console has nowhere for the console's lines to go. It can ask
 for them to be kept in a queue instead (§14.1), and the file is not affected.
 
+### 13.8 Driving the root inputs from a file
+
+A run's root inputs can come from a CSV table instead of from the host:
+
+```
+inputs: {
+    file = "drive.csv";
+}
+```
+
+The body takes one line, `file = "…";`. A later section replaces the file, and
+`file = "";` means none: the host drives every root input, as it does with no
+section at all. The same body is an `inputs` section in a settings source
+(§14), and a generated application takes `--inputs FILE` as shorthand for one
+(§14.1). The file is read, not written, so its name may not hold `{time}`
+(`SE0269`); any other brace is `SE0268`, as in every file name (§13.5).
+
+**The table is read whole when the run starts**, at `init()`, after
+configuration. Anything wrong with it is a configuration failure (§6.2b):
+`init()` refuses, and `error()` names the file, the row and the column.
+
+```
+time (s), axle_torque [N*m], ground_speed [km/h], gear [drive.Gear]
+0,        0,                 0,                   1
+2,        250,               36,                  2
+2,        250,               36,                  3
+12,       400,               90,                  3
+```
+
+**Columns are matched by name.**
+- The first column is the time. Its header is `time` with a time unit in
+  brackets or parentheses: `time (s)`, as the recorder writes it, or
+  `time [ms]`.
+- Each other column whose name is a root input drives that input. A record
+  input is flattened to its fields, each named by its path, `ws.speed`, as the
+  C interface names them (§14.2).
+- **Any other column is ignored**, and one `info` line from `sim` names every
+  ignored column. A table the recorder wrote (§13.5) therefore drives a run as
+  it stands: its root input columns drive the inputs, and its other columns
+  are passed over. A misspelt input name shows up in that line.
+- A root input with no column is still the host's to write.
+
+**A header's unit is converted.** A column's bracket is checked and
+converted, as a unit suffix in a settings source is (§14.1), so a
+`ground_speed [km/h]` column drives an `m/s` input. An incompatible unit is
+refused. So is a missing one where the input has a dimension, because a bare
+number there could mean anything. A dimensionless input takes `[-]`, `[]` or
+no bracket. A finite input's bracket may be its type's name, as the recorder
+writes it, or absent.
+
+**The values are checked as the C interface checks them** (§14.2).
+- An `int` input takes a whole number, and a `bool` input 0 or 1.
+- A finite input takes an enumerator's value, as the recorder writes it, or
+  its name.
+- An empty cell is refused.
+
+**Between rows, a value is interpolated or held, by its type.**
+- A `double` input is interpolated linearly between the last row at or before
+  *t*[k] and the next row.
+- An `int`, `bool` or finite input holds the last row at or before *t*[k],
+  because halfway between two gears is not a gear.
+- **Two rows with the same time make a step**: up to that time the value comes
+  from the earlier row, and from that time on from the later one.
+- Times may repeat but never go backwards.
+
+**The file has to cover the start, and its end ends the run.**
+- The first row must be at or before *t* = 0. A table that starts later is
+  refused, since the values before its first row would be invented.
+- The run ends at whichever comes first: `sim.duration`, or the last tick at
+  or before the last row. Either way the reason is `completed` (§10.3). When it
+  is the file that ends the run, one `info` line says so: `the run ended at 12
+  s, where drive.csv ends`.
+- `tick_count()` reports the shorter length once `init()` has read the table.
+  Before that it reports `sim.duration`.
+- A dump keeps both `sim.duration` and the file, so it reproduces the same
+  length.
+
+**A row meets a tick within a thousandth of a step.** A row time written as
+text does not always read back as exactly *k* times the step, so a row within
+a thousandth of a step of *t*[k] counts as at *t*[k]. The same tolerance
+applies to the first row and to the last. It is deliberately small, so a table
+sampled faster than the model is interpolated, never snapped to a nearby row.
+
+**The file's columns win.** At step 1 of each tick (§9.6) the file's values are
+written over whatever the host wrote to those inputs. One `info` line at
+`init()` names the inputs the file drives and those it leaves to the host.
+
+**A relative name is relative to the settings file that gave it.**
+- A settings file loaded at run time through `load_settings_file` (§14.1),
+  which is how the generated application loads `--settings`, resolves a
+  relative name in its `inputs` section beside itself. A recipe directory can
+  then carry its own data.
+- Everything else resolves against the working directory: `--inputs`, text
+  passed to `load_settings`, the key-value call, and the `.sim`. The `.sim`
+  and the settings file it names are read when the model is generated, and
+  the application runs somewhere else, so their names are kept as written.
+- An absolute name is never joined.
+- The dump writes the name as joined, so it reproduces the run from the same
+  working directory. `inputs_file()` returns it the same way.
+
+**The table's dialect.** Fields are separated by commas. An optional UTF-8 BOM
+is skipped, lines may end in LF or CRLF, blank lines are skipped, and a field
+wrapped in double quotes has them removed. A row with the wrong number of
+fields is refused.
+
+**A recorded run replays to the recorder's precision.** The recorder writes 9
+significant digits, so a replay drives the model with each input as recorded.
+That is the same value whenever the input was a number with 9 or fewer
+significant digits, and otherwise its nearest 9-digit neighbour.
+
 ---
 
 ## 14. The settings source
@@ -4028,11 +4142,12 @@ rear.tc.slip_limit  = 0.08;
 ```
 
 ```
-settings_source  := { binding | record_section | log_section }
+settings_source  := { binding | record_section | log_section | inputs_section }
 binding          := path '=' expression ';'
 path             := identifier { '.' identifier } [ '[' integer ']' ]
 record_section   := 'record' record_body          // §13.5
 log_section      := 'log' log_body                // §13.7
+inputs_section   := 'inputs' inputs_body          // §13.8
 ```
 
 **File and string are one grammar, two carriers.** The same text may be passed
@@ -4041,8 +4156,8 @@ Every value is unit-checked against its target (§4.3).
 
 A source holds model values, run configuration, or both, in any mix and any
 order: settings and initial conditions as bindings, the run's length as the
-binding `sim.duration`, and the recording and the log as sections whose bodies
-are the `.sim`'s own (§13.1). One file may carry all of them, or a run may be
+binding `sim.duration`, and the recording, the log and the inputs file as
+sections whose bodies are the `.sim`'s own (§13.1). One file may carry all of them, or a run may be
 assembled from several, each applied in turn (§13.3):
 
 ```
@@ -4059,8 +4174,8 @@ record { -front.left.out.force; }
 log    { level = warn; }
 ```
 
-Comments follow §3.2. There is no `package` and no conditionals, and the two
-sections are the only nesting: this is deliberately the flattest surface that
+Comments follow §3.2. There is no `package` and no conditionals, and the
+three sections are the only nesting: this is deliberately the flattest surface that
 can configure a whole run, because it is the layer that gets generated by
 scripts and sweeps.
 
@@ -4077,7 +4192,8 @@ which is the carrier `sec` never sees. A model exposes three operations:
 | `list_signals` | emit a `record` section offering every channel the model has |
 
 **The whole grammar, sections included.** A compiled model accepts the
-`record` and `log` sections and the `sim.duration` binding as `sec` does. A
+`record`, `log` and `inputs` sections and the `sim.duration` binding as `sec`
+does. A
 section's channel paths resolve against the model's channel table (§13.5), with
 `sec`'s qualified and bare forms and its wording for an ambiguous one; a
 channel's array index, like an override's (§13.4), is checked when
@@ -4131,10 +4247,17 @@ before `init()`:
 
 ```cpp
 bool        load_settings(const char* text, const char* origin = "settings");
+bool        load_settings_file(const char* path);
 const char* dump_settings();
 const char* list_signals();
 // resolve_settings is not a separate call: load_settings ends with it.
 ```
+
+`load_settings_file` reads the file and loads it as `load_settings` would,
+with the path as its origin. It differs in one way: a relative name in its
+`inputs` section resolves beside the file (§13.8). A file that can't be read
+is refused, with `cannot read PATH`, and like any refused source the refusal
+stands.
 
 A host that would rather not write text has the same operations one key at a
 time, with structured answers. Each call is exactly one line of a source, takes
@@ -4174,6 +4297,9 @@ bool record_every(std::uint64_t n);   std::uint64_t record_every() const;
 bool log_file(const char* file);   const char*   log_file() const;   // "" for console only
 bool log_level(const char* level);                // the global threshold
 bool log_level(const char* path, const char* level);
+
+// The inputs file (§13.8).
+bool inputs_file(const char* file);   const char*   inputs_file() const;   // "" for none
 ```
 
 `get` and `set(path, double)` speak the canonical unit, so a sweep or an
@@ -4182,7 +4308,8 @@ would, unit suffix and all. The lists are taken after configuration has
 settled what it can, so array rows appear at the extent the current settings
 give. `record_file()` and `log_file()` return the name as configured, a
 `{time}` pattern included (§13.5). Once `init()` has opened the file, they
-return the name it actually opened.
+return the name it actually opened. `inputs_file()` returns the name as it
+will be opened, joined to a settings file's directory where §13.8 says so.
 
 Two more pairs serve a host that watches a run rather than configures one.
 Unlike everything above, they are **not configuration**: they work before and
@@ -4252,7 +4379,7 @@ bool log_next(LogLine& line);                     // false when none is waiting
   afterwards includes every derived value.
 - **What a load may bind** is what §13.3 and §13.4 say an override may target —
   a setting at any depth, one leaf of a record setting, a scalar state's initial
-  value, or one element of an array state — plus `sim.duration` and the two
+  value, or one element of an array state — plus `sim.duration` and the three
   sections (§13.3), and nothing else. An output, a whole record, a whole array,
   and a path the model does not have are each rejected by name.
 - **A bound value is converted, not only checked.** A suffix compatible with
@@ -4269,8 +4396,8 @@ bool log_next(LogLine& line);                     // false when none is waiting
 is **the recipe for the run**: the settings, in configuration order; the initial
 conditions — every scalar state's, and each array-state element that a source
 bound; `sim.duration`; a `record` section that starts with `clear;` and then
-names the file, the rate and the selected channels in column order; and a `log`
-section. Numbers are written to round-trip exactly; units are the canonical ones
+names the file, the rate and the selected channels in column order; a `log`
+section; and an `inputs` section, `file = "";` when there is none. Numbers are written to round-trip exactly; units are the canonical ones
 (§15.6); enumerators are written by name. Because the record section clears
 first, loading a dump on top of any configuration reproduces the selection
 exactly, column order included.
@@ -4287,9 +4414,10 @@ text from its command line:
 
 | | |
 |---|---|
-| `--settings FILE [FILE …]` | load §14 files in order; the list may be comma-separated, and the flag repeated |
+| `--settings FILE [FILE …]` | load §14 files in order, each through `load_settings_file`; the list may be comma-separated, and the flag repeated |
 | `--set PATH=VALUE` | load one binding, `PATH = VALUE;`; repeatable, in order |
 | `--duration TIME` | shorthand for `--set sim.duration=TIME` |
+| `--inputs FILE` | shorthand for an `inputs` section naming `FILE` (§13.8), relative to the working directory |
 | `--dump-settings` | after any loads, print `dump_settings()` and exit without running |
 | `--list-signals` | after any loads, print `list_signals()` and exit without running |
 
@@ -4338,6 +4466,7 @@ SE_API void        se_destroy(se_sim* s);         /* NULL is allowed */
 
 /* ---- 1. configure: before se_init() --------------------------------- */
 SE_API int         se_load_settings(se_sim* s, const char* text, const char* origin);
+SE_API int         se_load_settings_file(se_sim* s, const char* path);
 SE_API const char* se_dump_settings(se_sim* s);
 SE_API const char* se_list_signals(se_sim* s);
 
@@ -4366,6 +4495,8 @@ SE_API int         se_log_file(se_sim* s, const char* file);
 SE_API const char* se_get_log_file(se_sim* s);
 SE_API int         se_log_level(se_sim* s, const char* level);
 SE_API int         se_log_path_level(se_sim* s, const char* path, const char* level);
+SE_API int         se_inputs_file(se_sim* s, const char* file);
+SE_API const char* se_get_inputs_file(se_sim* s);
 
 /* ---- 2. start ------------------------------------------------------- */
 SE_API int         se_init(se_sim* s);
@@ -5069,6 +5200,7 @@ of thing wearing the same name.
 | `SE0266` | 2 | An old-style `record:` or `log:` body (`file:`, `signals { }`, `levels { p: l; }`): the body is now a settings section's (§13.1) |
 | `SE0267` | 4 | `sim.duration` that is not a whole number of base steps, or an unknown `sim.` binding (§13.3) |
 | `SE0268` | 2 | A file name with a placeholder other than `{time}`, or a brace standing alone (§13.5) |
+| `SE0269` | 2 | `{time}` in an inputs file's name: the file is read, not written (§13.8) |
 | `SE0270` | 2 | Duplicate entry in `tests` |
 | `SE0271` | 2 | Unknown entry in `tests` |
 | `SE0272` | 2 | `~=` with no `within`, or `=` with one |
@@ -5354,7 +5486,7 @@ agg_named       = IDENT "=" expression { "," IDENT "=" expression } ;
 
 sim_file        = "sim" IDENT "{" { sim_item } "}" EOF ;
 
-sim_item        = root_entry | scalar_entry | record_entry | log_entry ;
+sim_item        = root_entry | scalar_entry | record_entry | log_entry | inputs_entry ;
 
 root_entry      = "root" ":" qualified_name
                   [ "{" { setting_binding } "}" ] ";" ;
@@ -5362,8 +5494,9 @@ scalar_entry    = IDENT ":" ( expression | IDENT | STRING ) ";" ;
 
 record_entry    = "record" ":" record_body ;
 log_entry       = "log" ":" log_body ;
+inputs_entry    = "inputs" ":" inputs_body ;
 
-(* §13.5, §13.7 — one body, shared with the settings source's sections. *)
+(* §13.5, §13.7, §13.8 — one body, shared with the settings source's sections. *)
 record_body     = "{" { record_item } "}" ;
 record_item     = "clear" ";"
                 | [ "-" ] signal_path ";"
@@ -5373,14 +5506,16 @@ log_body        = "{" { log_item } "}" ;
 log_item        = "file"  "=" STRING ";"
                 | "level" "=" IDENT ";"
                 | "levels" "{" { signal_path "=" IDENT ";" } "}" ;
+inputs_body     = "{" { "file" "=" STRING ";" } "}" ;
 signal_path     = IDENT { "." IDENT } [ "[" NUMBER "]" ] ;
 
 (* ─── settings source ────────────────────────────────────────────────── *)
 
-settings_file   = { override_binding | record_section | log_section } EOF ;
+settings_file   = { override_binding | record_section | log_section | inputs_section } EOF ;
 override_binding= signal_path "=" expression ";" ;
 record_section  = "record" record_body ;
 log_section     = "log" log_body ;
+inputs_section  = "inputs" inputs_body ;
 ```
 
 Two places where the grammar is deliberately looser than the semantics, so that a
