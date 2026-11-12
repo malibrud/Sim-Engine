@@ -220,7 +220,28 @@ through to it:
 ```
 
 That takes 5 seconds. Either way it writes `drivetrain.csv` and `drivetrain.log`
-into `out\drivetrain\`. Read
+into `out\drivetrain\`.
+
+The run's whole configuration (settings, initial conditions, its length, the
+recorded channels and the log) comes from settings files, applied left to right.
+From `out\drivetrain\`, after a build, save the menu of every channel the model
+can record, uncomment the ones you want, and run with it:
+
+```powershell
+cd out\drivetrain
+```
+
+```powershell
+.\build\release\bin\Drivetrain.exe --list-signals | Out-File -Encoding utf8 outputs.settings
+```
+
+```powershell
+.\build\release\bin\Drivetrain.exe --settings outputs.settings --duration 2s
+```
+
+`--settings` takes a list, `--settings default.settings, outputs.settings`, and
+each file edits what the one before it left. `--dump-settings` prints what a run
+would use, in a form `--settings` reads back. Read
 `out\drivetrain\Drivetrain.hpp` and `out\drivetrain\main.cpp` to see what a
 generated model looks like from outside.
 
@@ -323,10 +344,16 @@ Build the model as a library (`build.ps1 lib`). Then compile this against
 suite compiles and runs.
 
 `settings()` reaches the root node's settings. `load_settings()` takes the same
-text as a `.settings` file and reaches any setting or initial condition by path,
-with units checked and converted, and `dump_settings()` writes the whole
-configuration back out in that form. The generated executable offers the same
-through `--settings FILE`, `--set PATH=VALUE` and `--dump-settings`.
+text as a `.settings` file: any setting or initial condition by path, with units
+checked and converted, `sim.duration`, and `record { }` and `log { }` sections
+that choose the recorded channels, the CSV, and the log. `dump_settings()` writes
+the whole configuration back out in that form, and `list_signals()` writes every
+channel as a `record` section to edit. The same is available one key at a time,
+with structured answers: `settings_list()`, `get()` and `set()`;
+`channels_list()`, `record()`, `unrecord()` and `record_clear()`;
+`record_file()`, `record_every()`, `log_file()` and `log_level()`. The generated
+executable takes `--settings FILE...`, `--set PATH=VALUE`, `--duration TIME`,
+`--dump-settings` and `--list-signals`.
 
 **[What a generated model does](docs/generated-model.md)** describes precisely how
 settings and initial conditions are finalized, what is called on every tick and in
@@ -491,8 +518,9 @@ In rough order. Each step is decided on its own, so this list changes.
 3. ~~**Settings at run time.** `load_settings` / `dump_settings` in the compiled
    model (§14.1), and an application with `--settings`, `--set` and
    `--dump-settings`.~~ Done.
-4. **Recording at run time.** Choose the recorded signals without regenerating:
-   `--record`, `--list-signals`.
+4. ~~**Recording at run time.** One settings format for a whole run, layered
+   left to right: values, initial conditions, `sim.duration`, the recorded
+   channels and the log, with a key-value API beside it.~~ Done.
 5. **A C interface and a `dynamic` build.** A DLL / shared object callable by
    name from C, C#, Python, LabVIEW and others.
 6. **Later:** driving root inputs from a CSV file (`--inputs`); packaging as an

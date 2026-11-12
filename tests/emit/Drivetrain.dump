@@ -1,5 +1,5 @@
 // Drivetrain: how the run is configured (section 14.1): every setting and initial
-// condition, then the recording and the log.
+// condition, then the run's length, the recording and the log.
 
 // settings
 wheel_inertia = 0.95 (kg*m^2);
@@ -11,6 +11,9 @@ tc.gain       = 400 (N*m);
 // initial conditions
 whl.omega     = 5 (rad/s);
 tc.cut        = 0 (N*m);
+
+// the run (section 13.3)
+sim.duration = 5 (s);
 
 // the recording (section 13.5)
 record {

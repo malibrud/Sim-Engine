@@ -1,5 +1,5 @@
 // Finite: how the run is configured (section 14.1): every setting and initial
-// condition, then the recording and the log.
+// condition, then the run's length, the recording and the log.
 
 // settings
 cl.accel     = 50 (rad/s^2);
@@ -17,6 +17,9 @@ pi.integ     = 0;
 pi.ctl       = MANUAL;
 tx.range     = DRIVE;
 tx.gear      = 1;
+
+// the run (section 13.3)
+sim.duration = 3 (s);
 
 // the recording (section 13.5)
 record {

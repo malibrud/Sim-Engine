@@ -30,7 +30,7 @@ A host makes four kinds of call, in this order.
 
 | Phase | Host calls | What happens |
 |---|---|---|
-| Configure | `Sim()`, `settings()`, `load_settings()`, `dump_settings()`, `list_signals()`, the channel and log calls | Settings, initial-condition overrides, the recorded channels and the log are collected. No node code runs. |
+| Configure | `Sim()`, `settings()`, `load_settings()`, `dump_settings()`, `list_signals()`, `get()` / `set()`, the channel and log calls | Settings, initial-condition overrides, the run's length, the recorded channels and the log are collected. No node code runs. |
 | Start | `init()` | Settings are finalized, initial conditions are written, and every node's `init()` runs. |
 | Step | `inputs()`, `tick()`, `outputs()`, `done()`, `sync_realtime()` | One `tick()` samples the model at the current time and advances it one step. It never waits; `sync_realtime()` is how a host keeps pace with wall time. |
 | Finish | `finish()` | Every node's `final()` runs, the recording and log close, and the exit code is returned. |
@@ -87,7 +87,7 @@ happen in the compiled program.
 | 3 | The sim file's `root` block | `root: drivetrain.Corner { wheel_inertia = 0.9 (kg*m^2); };` | Compile time |
 | 4 | A `.settings` file given to `sec` | `whl.radius = 0.315 (m);` | Compile time |
 | 5 | `sim.settings()` | `sim.settings().wheel_inertia = 1.1;` | Run time, root settings only |
-| 6 | `sim.load_settings()`, or `--settings` and `--set` on the generated executable | `front.left.mass = 340 (kg);` | Run time, any depth |
+| 6 | `sim.load_settings()` or `sim.set()`, or `--settings` and `--set` on the generated executable | `front.left.mass = 340 (kg);` | Run time, any depth |
 
 Layers 5 and 6 are a single layer in time: whichever the host does later wins.
 
@@ -132,6 +132,18 @@ has been called. A node's `init()` reads final values and cannot change them.
 `load_settings()` itself ends with `resolve_settings()`, so `settings()` and
 `dump_settings()` are up to date between loads. `dump_settings()` shows exactly
 what `init()` would run with, in a form `load_settings()` reads back.
+
+The same paths are reachable one at a time. `settings_list()` returns every
+settable path with its kind, canonical unit, type and current value. `get(path)`
+reads one in the canonical unit, and `set(path, value)` writes one, either as a
+number in the canonical unit or as text a source line would hold
+(`"340 (kg)"`, `"CONNECTED"`). Each `set()` goes through the same reader as a
+source, so its checks and wording are the same, but a refused `set()` changes
+nothing and does not stop the run.
+
+The run's length is one of these paths: `sim.duration`, a whole number of base
+steps. `tick_count()` is that length in ticks. The step itself is fixed, because
+every rate in the model is a count of it.
 
 ### What can go wrong
 
@@ -246,7 +258,7 @@ One call to `sim.tick()` at index *k*, with *t*[k] = *k* · `step`:
 | 2 | Propagate outputs | `output()` | Every node, in topological order |
 | 3 | Jump map and per-tick work | `next()` | Every node that defines it, in any order, unless the run has already halted |
 | 4 | Record | | If this is a recording tick |
-| 5 | Exit | | If the run has halted, or *k* = `tick_count` |
+| 5 | Exit | | If the run has halted, or *k* = `tick_count()` |
 | 6 | Commit | | `dis = nxt`, `fin = fnx`, `x = xnx`, all at once |
 | 7 | Flow | `output()` and `derivative()` | Solver stages, below |
 
@@ -263,8 +275,8 @@ found it, and every state moves below the exit. That gives two guarantees:
 - **A stopped run is left holding a valid checkpoint**, because it never reaches
   the commit.
 
-The `tick_count` tick samples the final instant and does not advance, so a full run
-is `tick_count` + 1 calls to `tick()`.
+The `tick_count()` tick samples the final instant and does not advance, so a full
+run is `tick_count()` + 1 calls to `tick()`.
 
 ### The solver stages
 
@@ -377,7 +389,7 @@ A run ends in one of these ways, and `tick()` then sets `done()`:
 
 | Cause | `ctx.reason` |
 |---|---|
-| The `tick_count` tick | `completed` |
+| The `tick_count()` tick | `completed` |
 | `sim.stop(...)` | `stopped` |
 | `sim.abort(...)` | `aborted` |
 | A failed `sim.require(...)`, or a configuration failure | `error` |

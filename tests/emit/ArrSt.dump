@@ -1,5 +1,5 @@
 // ArrSt: how the run is configured (section 14.1): every setting and initial
-// condition, then the recording and the log.
+// condition, then the run's length, the recording and the log.
 
 // settings
 n     = 3;
@@ -9,6 +9,9 @@ k0    = 1 (1/s);
 total = 0;
 tick  = 0;
 x[1]  = 2;
+
+// the run (section 13.3)
+sim.duration = 2 (s);
 
 // the recording (section 13.5)
 record {

@@ -1191,6 +1191,7 @@ enum class RowKind : unsigned char {
     Setting,   // a setting, at any depth; one leaf of a record setting
     Initial,   // a scalar state's initial value (section 13.4)
     Element,   // an array state, bound one element at a time
+    Run,       // sim.duration, the run's length (section 13.3)
 };
 
 struct SettingRow {
@@ -1321,6 +1322,7 @@ struct Tables {
     std::size_t n_channels;
     const ChannelAlias* aliases;
     std::size_t n_aliases;
+    double step;             // s: sim.duration is a whole number of these
 };
 
 // A channel path as `sec` resolves one (section 13.5): canonical, or a bare
@@ -1405,8 +1407,11 @@ inline bool channel_text(const Tables& t, const char* text, Column& out, std::st
 // so rather than evaluating a section-7 expression.
 class SourceReader {
 public:
-    SourceReader(const char* text, const char* origin)
-        : s_(text ? text : ""), origin_(origin && *origin ? origin : "settings") {
+    // `located` false: a fault names only the path, as one key-value call
+    // reports it, with no origin and line.
+    SourceReader(const char* text, const char* origin, bool located = true)
+        : s_(text ? text : ""), origin_(origin && *origin ? origin : "settings"),
+          located_(located) {
         if (s_.compare(0, 3, "\xEF\xBB\xBF") == 0) i_ = 3;   // a UTF-8 BOM, as editors save one
     }
 
@@ -1425,7 +1430,7 @@ public:
                 continue;
             }
             Assignment a{};
-            if (!binding(t.rows, t.n_rows, a)) return false;
+            if (!binding(t, a)) return false;
             got.push_back(a);
         }
         out.swap(got);
@@ -1438,7 +1443,7 @@ private:
     // A fault is reported on the line its binding starts on, so a missing `;`
     // is blamed on the value that lacks it and not on the line after.
     bool fail(const std::string& path, const std::string& m) {
-        err_ = origin_ + ":" + std::to_string(at_line_) + ": " +
+        err_ = (located_ ? origin_ + ":" + std::to_string(at_line_) + ": " : std::string()) +
                (path.empty() ? "" : path + ": ") + m;
         return false;
     }
@@ -1723,7 +1728,9 @@ private:
         }
     }
 
-    bool binding(const SettingRow* rows, std::size_t n, Assignment& a) {
+    bool binding(const Tables& t, Assignment& a) {
+        const SettingRow* rows = t.rows;
+        const std::size_t n = t.n_rows;
         at_line_ = line_;
         std::string path, shown;
         bool indexed = false;
@@ -1848,6 +1855,16 @@ private:
         } else if (std::strcmp(row->type, "bool") == 0) {
             v = v != 0.0 ? 1.0 : 0.0;
         }
+        if (row->kind == RowKind::Run) {
+            // Section 13.3: a whole number of base steps, at least one.
+            const double ticks = std::floor(v / t.step + 0.5);
+            if (ticks < 1.0 || std::fabs(ticks * t.step - v) > 1e-9 * v) {
+                std::ostringstream o;
+                o << "not a whole number of base steps; the step is " << t.step
+                  << " s (section 13.3)";
+                return fail(shown, o.str());
+            }
+        }
         a.value = v;
         return true;
     }
@@ -1858,6 +1875,7 @@ private:
     int line_ = 1;
     int at_line_ = 1;
     std::string err_;
+    bool located_ = true;
 };
 
 )SERT"
@@ -1902,33 +1920,38 @@ inline std::string dump_source(const char* title, const SettingRow* rows, std::s
         if (std::strcmp(r.unit, "-") != 0 && !r.enumerators) s += std::string(" (") + r.unit + ")";
         return s;
     };
-    std::vector<Line> settings, initial;
+    std::vector<Line> settings, initial, run;
     for (std::size_t r = 0; r < n; ++r) {
         if (rows[r].kind == RowKind::Element) continue;
         Line l{rows[r].path, text(rows[r], values[r]), rows[r].structural};
-        (rows[r].kind == RowKind::Setting ? settings : initial).push_back(l);
+        (rows[r].kind == RowKind::Setting   ? settings
+         : rows[r].kind == RowKind::Initial ? initial
+                                            : run).push_back(l);
     }
     for (const Assignment& e : elements)
         initial.push_back(Line{std::string(rows[e.row].path) + "[" + std::to_string(e.index) + "]",
                                text(rows[e.row], e.value), false});
+    // The model's values share one column; the run's own line keeps to itself.
     std::size_t w = 0;
     for (const Line& l : settings) w = l.path.size() > w ? l.path.size() : w;
     for (const Line& l : initial) w = l.path.size() > w ? l.path.size() : w;
 
     std::string out = std::string("// ") + title +
                       ": how the run is configured (section 14.1): every setting and initial\n"
-                      "// condition, then the recording and the log.\n";
-    auto section = [&](const char* head, const std::vector<Line>& ls) {
+                      "// condition, then the run's length, the recording and the log.\n";
+    auto section = [&](const char* head, const std::vector<Line>& ls, std::size_t width) {
         if (ls.empty()) return;
         out += std::string("\n// ") + head + "\n";
         for (const Line& l : ls) {
-            std::string row = l.path + std::string(w - l.path.size(), ' ') + " = " + l.value + ";";
+            const std::size_t pad = width > l.path.size() ? width - l.path.size() : 0;
+            std::string row = l.path + std::string(pad, ' ') + " = " + l.value + ";";
             if (l.structural) row = "// " + row + "   structural: fixed when the model was generated";
             out += row + "\n";
         }
     };
-    section("settings", settings);
-    section("initial conditions", initial);
+    section("settings", settings, w);
+    section("initial conditions", initial, w);
+    section("the run (section 13.3)", run, 0);
     return out;
 }
 

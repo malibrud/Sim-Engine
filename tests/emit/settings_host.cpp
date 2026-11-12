@@ -12,6 +12,8 @@
 //       in, and init() will not run.
 //    4. Loads layer with the host's own settings() edits, last writer wins.
 //    5. dump_settings() reads back through load_settings() to the same text.
+//    6. The same paths one key at a time: settings_list(), get(), set() in the
+//       canonical unit or as text, and sim.duration among them.
 //
 //  Like host.cpp it #includes Drivetrain.cpp, so it can look at the members a
 //  binding lands in. Each check builds its own model, and a model's run state
@@ -22,8 +24,10 @@
 #include "Drivetrain.cpp"
 
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -130,6 +134,56 @@ int main() {
               "initial conditions follow the settings");
         check(b.load_settings(d1.c_str(), "dump"), "a dump loads");
         check(std::string(b.dump_settings()) == d1, "and dumps back to the same text");
+    }
+
+    // ── 6. one key at a time ─────────────────────────────────────────────────
+    {
+        drivetrain::Sim sim;
+        const std::vector<drivetrain::Sim::SettingInfo> list = sim.settings_list();
+        auto row = [&](const char* path) -> const drivetrain::Sim::SettingInfo* {
+            for (const auto& s : list)
+                if (s.path == path) return &s;
+            return nullptr;
+        };
+        const auto* radius = row("whl.radius");
+        const auto* omega = row("whl.omega");
+        const auto* length = row("sim.duration");
+        check(radius && radius->kind == drivetrain::Sim::SettingKind::Setting && radius->unit == "m",
+              "a setting is listed with its kind and canonical unit");
+        check(omega && omega->kind == drivetrain::Sim::SettingKind::Initial, "so is an initial condition");
+        check(length && length->kind == drivetrain::Sim::SettingKind::Run && length->unit == "s" &&
+                  near(length->value, 5.0),
+              "and the run's length, at the .sim's value");
+        check(list.back().path == "sim.duration", "the run's length comes last");
+
+        check(sim.set("whl.radius", 0.3) && near(sim.get("whl.radius"), 0.3),
+              "set() in the canonical unit, and get() reads it back");
+        check(sim.set("whl.radius", "31.5 (cm)") && near(sim.get("whl.radius"), 0.315),
+              "set() with a unit converts it");
+        check(!sim.set("whl.radius", "1 (s)"), "a wrong unit is refused");
+        check(std::string(sim.error()) == "whl.radius: incompatible units: (s) where (m) is declared",
+              "and error() names the path and the reason, with no origin or line");
+        check(near(sim.get("whl.radius"), 0.315), "and changed nothing");
+        check(!sim.set("whl.radius", "1; tc.slip_limit = 9"), "one value only");
+        check(!sim.set("whl.nope", 1.0), "a path the model does not have is refused");
+        check(std::isnan(sim.get("whl.nope")) && has(sim.error(), "whl.nope: not a setting"),
+              "and get() of one is NaN, with the reason");
+        check(!sim.set("sim.duration", "1.0005 (s)"), "a length that is not a whole number of steps");
+        check(has(sim.error(), "not a whole number of base steps"), "is refused, saying so");
+        check(sim.set("sim.duration", 2.0) && sim.tick_count() == 2000,
+              "the run's length moves tick_count()");
+        check(has(sim.dump_settings(), "\nsim.duration") && has(sim.dump_settings(), "= 2 (s);\n"),
+              "and the dump writes it");
+        check(sim.init(), "a refused set() did not stop the run");
+        std::uint64_t ticks = 0;
+        while (!sim.done()) {
+            sim.tick();
+            ++ticks;
+        }
+        check(ticks == 2001 && near(sim.time(), 2.0), "the run is as long as sim.duration said");
+        check(!sim.set("whl.radius", 0.2), "a set() after init() is refused");
+        check(has(sim.error(), "set() comes before init()"), "and says configuration is over");
+        sim.finish();
     }
 
     // ── the public interface, and a refused source stops the run ─────────────

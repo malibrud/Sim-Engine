@@ -172,7 +172,7 @@ int main() {
         drivetrain::Sim b;
         const Outcome rb = drive(b);
         check(ra.started && rb.started, "a fresh Sim starts after another has finished");
-        check(ra.ticks == drivetrain::Sim::tick_count && rb.ticks == drivetrain::Sim::tick_count,
+        check(ra.ticks == a.tick_count() && rb.ticks == b.tick_count(),
               "and both run to their configured length");
         check(ra.code == 0 && rb.code == 0, "and both finish clean");
         check(ra.speed == rb.speed && ra.cut == rb.cut,
@@ -212,7 +212,7 @@ int main() {
         check(!q->se_run_.checks.any(), "and has no contract failures");
 
         while (!q->done()) q->tick();
-        check(q->tick_index() == drivetrain::Sim::tick_count,
+        check(q->tick_index() == q->se_end_tick_,
               "the other model runs to its configured length");
         p->finish();
         q->finish();

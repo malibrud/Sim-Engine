@@ -417,7 +417,7 @@ private:
     // `m_.settings` is, so a setting's row number IS its pin; then each scalar
     // state's initial value; then each array state, bound by element.
     struct LoadRow {
-        enum class Kind { Setting, Initial, Element };
+        enum class Kind { Setting, Initial, Element, Run };
         Kind kind = Kind::Setting;
         std::string path;
         std::size_t setting = 0;           // Setting: index into m_.settings
@@ -1419,6 +1419,8 @@ void Emitter::sim_members() {
     o_ << "    std::string se_rerun_error_;  // a second init() on this Sim, refused\n";
     o_ << "\n    double        se_time_ = 0.0;\n";
     o_ << "    std::uint64_t se_tick_ = 0;\n";
+    o_ << "    double        se_duration_ = " << dbl(m_.duration) << ";   // s, sim.duration (§13.3)\n";
+    o_ << "    std::uint64_t se_end_tick_ = " << tick_count() << ";   // the last tick it allows\n";
     o_ << "    std::size_t   se_inited_ = 0;\n";
     o_ << "    bool          se_done_ = false;\n";
     o_ << "\n    // §13.3 — the run's own configuration: what is recorded, where and how\n";
@@ -1506,6 +1508,11 @@ void Emitter::sim_members() {
     o_ << "    bool        record_every(std::uint64_t n);\n";
     o_ << "    bool        log_file(const char* file);\n";
     o_ << "    bool        log_level(const char* path, const char* level);\n";
+    o_ << "    std::vector<Sim::SettingInfo> settings_list();\n";
+    o_ << "    double      get(const char* path);\n";
+    o_ << "    bool        set(const char* path, double value);\n";
+    o_ << "    bool        set(const char* path, const char* value);\n";
+    o_ << "    bool        set_text(const std::string& path, const std::string& value);\n";
 }
 
 // The C++ object holding a node's settings. A leaf keeps them in its own
@@ -2165,7 +2172,8 @@ void Emitter::sim_record() {
     }
     o_ << "    std::size_t n = 0;\n";
     o_ << "    const se_rt::SettingRow* rows = setting_rows(n);\n";
-    o_ << "    return {rows, n, channels, sizeof channels / sizeof channels[0], aliases, n_aliases};\n";
+    o_ << "    return {rows, n, channels, sizeof channels / sizeof channels[0], aliases, n_aliases,\n";
+    o_ << "            step_seconds};\n";
     o_ << "}\n";
 
     // ── one channel's value ──────────────────────────────────────────────────
@@ -2432,7 +2440,7 @@ void Emitter::sim_run() {
     o_ << "    publish_outputs();\n";
     if (any_next()) o_ << "    if (!se_run_.control.halted()) next_tick();\n";
     o_ << "    if (se_rec_.active() && se_tick_ % se_config_.every == 0) record_row();\n";
-    o_ << "    if (se_run_.control.halted() || se_tick_ >= tick_count) {\n";
+    o_ << "    if (se_run_.control.halted() || se_tick_ >= se_end_tick_) {\n";
     o_ << "        se_done_ = true;\n        return;\n    }\n";
     // §9.6 — the commit: below the exit, so a halted run keeps the state its
     // last row reported; above the flow, so the solver starts from the jump.
@@ -2651,6 +2659,11 @@ std::vector<Emitter::LoadRow> Emitter::load_rows() const {
                 r.state = &st;
                 rows.push_back(r);
             }
+    // §13.3 — last, so a setting's row stays its pin.
+    LoadRow run;
+    run.kind = LoadRow::Kind::Run;
+    run.path = "sim.duration";
+    rows.push_back(run);
     return rows;
 }
 
@@ -2662,7 +2675,13 @@ void Emitter::sim_settings_source() {
     bool any_element = false;
     for (const LoadRow& r : rows) any_element = any_element || r.kind == LoadRow::Kind::Element;
 
+    static const Unit seconds = [] {
+        Unit u;
+        lookup_unit_symbol("s", u);
+        return u;
+    }();
     auto member = [&](const LoadRow& r) -> std::string {
+        if (r.kind == LoadRow::Kind::Run) return "se_duration_";
         if (r.kind == LoadRow::Kind::Setting) {
             const SettingSlot& s = m_.settings[r.setting];
             return param_base(s.owner) + "." + s.name;
@@ -2670,12 +2689,15 @@ void Emitter::sim_settings_source() {
         return "se_ic_." + ic_member(*r.leaf, *r.state);
     };
     auto scalar_of = [&](const LoadRow& r) -> std::string {
+        if (r.kind == LoadRow::Kind::Run) return std::string("double");
         return r.kind == LoadRow::Kind::Setting ? m_.settings[r.setting].scalar : r.state->scalar;
     };
     auto enum_of = [&](const LoadRow& r) -> const EnumInfo* {
+        if (r.kind == LoadRow::Kind::Run) return nullptr;
         return r.kind == LoadRow::Kind::Setting ? m_.settings[r.setting].enm : r.state->enm;
     };
     auto unit_of = [&](const LoadRow& r) -> const Unit& {
+        if (r.kind == LoadRow::Kind::Run) return seconds;
         return r.kind == LoadRow::Kind::Setting ? m_.settings[r.setting].unit : r.state->unit;
     };
 
@@ -2718,6 +2740,7 @@ void Emitter::sim_settings_source() {
             c.push_back("{" + quote(r.path) + ",");
             c.push_back(r.kind == LoadRow::Kind::Setting   ? "K::Setting,"
                         : r.kind == LoadRow::Kind::Initial ? "K::Initial,"
+                        : r.kind == LoadRow::Kind::Run     ? "K::Run,"
                                                            : "K::Element,");
             c.push_back(quote(e ? e->fq : scalar_of(r)) + ",");
             c.push_back(quote(u.str()) + ",");
@@ -2791,6 +2814,9 @@ void Emitter::sim_settings_source() {
                                                      : "static_cast<" + sc + ">(v)";
             o_ << "        case " << i << ": " << member(r) << " = " << rhs << ";";
             if (r.kind == LoadRow::Kind::Setting) o_ << " se_pin_[" << i << "] = true;";
+            if (r.kind == LoadRow::Kind::Run)
+                o_ << "\n            se_end_tick_ = static_cast<std::uint64_t>("
+                      "std::floor(v / step_seconds + 0.5));";
             o_ << " break;\n";
         }
         o_ << "        default: break;\n";
@@ -2798,7 +2824,9 @@ void Emitter::sim_settings_source() {
     }
 
     // ── one row's value, out ─────────────────────────────────────────────────
-    o_ << "\n// One row's current value, as a double: what dump_settings() writes.\n";
+    o_ << "\n// One row's current value, as a double: what dump_settings() writes. An\n";
+    o_ << "// array state's row is its declared default, which every unbound element\n";
+    o_ << "// holds.\n";
     o_ << "double Sim::Impl::value_of(std::size_t row) const {\n";
     if (!any_scalar) {
         o_ << "    (void)row;\n    return 0.0;\n}\n";
@@ -2806,7 +2834,11 @@ void Emitter::sim_settings_source() {
         o_ << "    switch (row) {\n";
         for (std::size_t i = 0; i < rows.size(); ++i) {
             const LoadRow& r = rows[i];
-            if (r.kind == LoadRow::Kind::Element) continue;
+            if (r.kind == LoadRow::Kind::Element) {
+                o_ << "        case " << i << ": return " << dbl(r.state->initial) << ";   // "
+                   << r.path << "[*]\n";
+                continue;
+            }
             const std::string sc = scalar_of(r);
             const std::string m = member(r);
             const std::string v = enum_of(r)        ? "static_cast<double>(static_cast<int>(" + m + "))"
@@ -2903,6 +2935,139 @@ void Emitter::sim_settings_source() {
           "               se_rt::dump_run(se_config_);\n";
     o_ << "    return se_dump_.c_str();\n";
     o_ << "}\n";
+
+    // ── one key at a time ────────────────────────────────────────────────────
+    o_ << "\n// §14.1 — the same paths one at a time, with structured answers. Before\n";
+    o_ << "// init() each first takes the host's pending settings() edits, as the\n";
+    o_ << "// dump does, so what it reports is what init() would run with.\n";
+    o_ << "std::vector<Sim::SettingInfo> Sim::Impl::settings_list() {\n";
+    o_ << "    if (!se_started_) {\n";
+    o_ << "        const std::string refused = accept_settings();\n";
+    o_ << "        settle();\n";
+    o_ << "        if (!refused.empty() && se_load_error_.empty()) se_load_error_ = refused;\n";
+    o_ << "    }\n";
+    o_ << "    std::size_t n = 0;\n";
+    o_ << "    const se_rt::SettingRow* rows = setting_rows(n);\n";
+    o_ << "    std::vector<Sim::SettingInfo> out;\n";
+    o_ << "    for (std::size_t r = 0; r < n; ++r) {\n";
+    o_ << "        Sim::SettingInfo s;\n";
+    o_ << "        s.kind = rows[r].kind == se_rt::RowKind::Setting ? Sim::SettingKind::Setting\n";
+    o_ << "                 : rows[r].kind == se_rt::RowKind::Run   ? Sim::SettingKind::Run\n";
+    o_ << "                                                         : Sim::SettingKind::Initial;\n";
+    o_ << "        s.unit = rows[r].unit;\n";
+    o_ << "        s.type = rows[r].type;\n";
+    o_ << "        s.structural = rows[r].structural;\n";
+    if (any_element) {
+        o_ << "        if (rows[r].kind == se_rt::RowKind::Element) {   // one row per element\n";
+        o_ << "            for (std::size_t i = 0; i < element_extent(r); ++i) {\n";
+        o_ << "                s.path = std::string(rows[r].path) + \"[\" + std::to_string(i) + \"]\";\n";
+        o_ << "                s.value = value_of(r);\n";
+        o_ << "                for (const se_rt::Assignment& a : se_ic_elements_)\n";
+        o_ << "                    if (a.row == r && a.index == i) s.value = a.value;\n";
+        o_ << "                out.push_back(s);\n";
+        o_ << "            }\n";
+        o_ << "            continue;\n";
+        o_ << "        }\n";
+    }
+    o_ << "        s.path = rows[r].path;\n";
+    o_ << "        s.value = value_of(r);\n";
+    o_ << "        out.push_back(s);\n";
+    o_ << "    }\n";
+    o_ << "    return out;\n";
+    o_ << "}\n";
+
+    o_ << "\ndouble Sim::Impl::get(const char* path) {\n";
+    o_ << "    se_call_error_.clear();\n";
+    o_ << "    if (!se_started_) {\n";
+    o_ << "        const std::string refused = accept_settings();\n";
+    o_ << "        settle();\n";
+    o_ << "        if (!refused.empty() && se_load_error_.empty()) se_load_error_ = refused;\n";
+    o_ << "    }\n";
+    o_ << "    const std::string p = path ? path : \"\";\n";
+    o_ << "    const std::size_t lb = p.find('[');\n";
+    o_ << "    const bool indexed = lb != std::string::npos;\n";
+    o_ << "    const std::string stem = p.substr(0, lb);\n";
+    if (any_element)
+        o_ << "    const std::size_t index = indexed ? "
+              "static_cast<std::size_t>(std::strtoull(p.c_str() + lb + 1, nullptr, 10)) : 0;\n";
+    o_ << "    std::size_t n = 0;\n";
+    o_ << "    const se_rt::SettingRow* rows = setting_rows(n);\n";
+    o_ << "    for (std::size_t r = 0; r < n; ++r) {\n";
+    o_ << "        if (stem != rows[r].path) continue;\n";
+    o_ << "        const bool element = rows[r].kind == se_rt::RowKind::Element;\n";
+    o_ << "        if (element != indexed) {\n";
+    o_ << "            se_call_error_ = p + (indexed ? \": not an array state, so it takes no index\"\n";
+    o_ << "                                          : \": an array state is read one element at a \"\n";
+    o_ << "                                            \"time, as `\" + p + \"[0]`\");\n";
+    o_ << "            return std::nan(\"\");\n";
+    o_ << "        }\n";
+    if (any_element) {
+        o_ << "        if (element) {\n";
+        o_ << "            if (index >= element_extent(r)) {\n";
+        o_ << "                se_call_error_ = se_rt::index_error(p.c_str(), element_extent(r));\n";
+        o_ << "                return std::nan(\"\");\n";
+        o_ << "            }\n";
+        o_ << "            for (const se_rt::Assignment& a : se_ic_elements_)\n";
+        o_ << "                if (a.row == r && a.index == index) return a.value;\n";
+        o_ << "        }\n";
+    }
+    o_ << "        return value_of(r);\n";
+    o_ << "    }\n";
+    o_ << "    se_call_error_ = p + \": not a setting, a state or sim.duration of this model\";\n";
+    o_ << "    return std::nan(\"\");\n";
+    o_ << "}\n";
+
+    o_ << "\n// In the canonical unit. A finite type's value is written as the name of\n";
+    o_ << "// its enumerator, so the reader checks it as it checks any other.\n";
+    o_ << "bool Sim::Impl::set(const char* path, double value) {\n";
+    o_ << "    if (!configuring(\"set\")) return false;\n";
+    o_ << "    const std::string p = path ? path : \"\";\n";
+    o_ << "    const std::string stem = p.substr(0, p.find('['));\n";
+    o_ << "    std::size_t n = 0;\n";
+    o_ << "    const se_rt::SettingRow* rows = setting_rows(n);\n";
+    o_ << "    for (std::size_t r = 0; r < n; ++r) {\n";
+    o_ << "        if (stem != rows[r].path || !rows[r].enumerators) continue;\n";
+    o_ << "        for (std::size_t k = 0; k < rows[r].n_enumerators; ++k)\n";
+    o_ << "            if (static_cast<double>(rows[r].enumerators[k].value) == value)\n";
+    o_ << "                return set_text(p, rows[r].enumerators[k].name);\n";
+    o_ << "        se_call_error_ = p + \": \" + se_rt::source_number(value) + \" is not a value of \" +\n";
+    o_ << "                         rows[r].type;\n";
+    o_ << "        return false;\n";
+    o_ << "    }\n";
+    o_ << "    return set_text(p, se_rt::source_number(value));\n";
+    o_ << "}\n";
+
+    o_ << "\n// As a source line would have it: \"340 (kg)\", \"0.34 (t)\", \"CONNECTED\".\n";
+    o_ << "bool Sim::Impl::set(const char* path, const char* value) {\n";
+    o_ << "    if (!configuring(\"set\")) return false;\n";
+    o_ << "    const std::string v = value ? value : \"\";\n";
+    o_ << "    if (v.find(';') != std::string::npos || v.find('\\n') != std::string::npos) {\n";
+    o_ << "        se_call_error_ = std::string(path ? path : \"\") + \": one value, as `340 (kg)`\";\n";
+    o_ << "        return false;\n";
+    o_ << "    }\n";
+    o_ << "    return set_text(path ? path : \"\", v);\n";
+    o_ << "}\n";
+
+    o_ << "\n// One binding, read and checked as a source's would be, then applied as a\n";
+    o_ << "// later writer (§13.3). A refused one changes nothing.\n";
+    o_ << "bool Sim::Impl::set_text(const std::string& path, const std::string& value) {\n";
+    o_ << "    if (!se_load_error_.empty()) return false;   // a refused source stands\n";
+    o_ << "    const std::string text = path + \" = \" + value + \";\";\n";
+    o_ << "    se_rt::SourceReader reader(text.c_str(), \"set\", false);\n";
+    o_ << "    std::vector<se_rt::Assignment> got;\n";
+    o_ << "    std::vector<se_rt::RunEdit> edits;\n";
+    o_ << "    if (!reader.check(tables(), got, edits) || got.size() != 1 || !edits.empty()) {\n";
+    o_ << "        se_call_error_ = !reader.error().empty()\n";
+    o_ << "                             ? reader.error()\n";
+    o_ << "                             : path + \": not one setting, state or sim.duration\";\n";
+    o_ << "        return false;\n";
+    o_ << "    }\n";
+    o_ << "    const std::string refused = accept_settings();\n";
+    o_ << "    assign(got[0]);\n";
+    o_ << "    settle();\n";
+    o_ << "    if (!refused.empty() && se_load_error_.empty()) se_load_error_ = refused;\n";
+    o_ << "    return se_cfg_error_.empty() && se_load_error_.empty();\n";
+    o_ << "}\n";
 }
 
 // The public interface, each call one line onto Sim::Impl. Nothing here has any
@@ -2940,6 +3105,11 @@ void Emitter::sim_facade() {
     o_ << "const Sim::Outputs& Sim::outputs() const    { return impl_->se_outputs_; }\n";
     o_ << "bool                Sim::done() const       { return impl_->done(); }\n";
     o_ << "std::uint64_t       Sim::tick_index() const { return impl_->tick_index(); }\n";
+    o_ << "std::uint64_t       Sim::tick_count() const { return impl_->se_end_tick_; }\n";
+    o_ << "std::vector<Sim::SettingInfo> Sim::settings_list() { return impl_->settings_list(); }\n";
+    o_ << "double        Sim::get(const char* path) const { return impl_->get(path); }\n";
+    o_ << "bool          Sim::set(const char* path, double v) { return impl_->set(path, v); }\n";
+    o_ << "bool          Sim::set(const char* path, const char* v) { return impl_->set(path, v); }\n";
     o_ << "double              Sim::time() const       "
           "{ return static_cast<double>(tick_index()) * step_seconds; }\n";
     o_ << "Sim::RealtimeStats  Sim::realtime_stats() const {\n";
@@ -3175,6 +3345,17 @@ void Emitter::public_class() {
     o_ << "        std::uint64_t frames      = 0;     // sync_realtime() calls, the whole run\n";
     o_ << "        std::uint64_t overruns    = 0;     // of which overran, the whole run\n";
     o_ << "    };\n";
+    o_ << "    //  One settable path (§14.1): a setting, an initial condition, or the\n";
+    o_ << "    //  run's length, with its value in the canonical unit.\n";
+    o_ << "    enum class SettingKind { Setting, Initial, Run };\n";
+    o_ << "    struct SettingInfo {\n";
+    o_ << "        std::string path;               // \"whl.radius\", \"bw.w1[3]\", \"sim.duration\"\n";
+    o_ << "        SettingKind kind = SettingKind::Setting;\n";
+    o_ << "        std::string unit;               // canonical; \"-\" for none\n";
+    o_ << "        std::string type;               // double, int, bool, or a finite type\n";
+    o_ << "        double      value = 0.0;        // in `unit`; an enumerator's value\n";
+    o_ << "        bool        structural = false; // listed, never settable (§6.2)\n";
+    o_ << "    };\n";
     o_ << "    //  One channel the run can record (§13.5), and whether it is selected.\n";
     o_ << "    struct ChannelInfo {\n";
     o_ << "        std::string path;               // \"whl.state.omega\", \"bw.state.w1[3]\"\n";
@@ -3183,11 +3364,10 @@ void Emitter::public_class() {
     o_ << "    };\n";
     o_ << "\n";
     const std::string step = dbl(m_.step) + ";", ticks = std::to_string(tick_count()) + ";";
-    const std::size_t wv = std::max(step.size(), ticks.size());
-    o_ << "    static constexpr double        step_seconds = " << pad(step, wv)
-       << "   // s, one tick\n";
-    o_ << "    static constexpr std::uint64_t tick_count   = " << pad(ticks, wv)
-       << "   // the run's length, in ticks\n\n";
+    o_ << "    //  One tick. Fixed: every rate in the model is a count of it.\n";
+    o_ << "    static constexpr double step_seconds = " << step << "   // s\n";
+    (void)ticks;
+    o_ << "\n";
 
     o_ << "    Sim();\n";
     o_ << "    ~Sim();\n";
@@ -3209,6 +3389,15 @@ void Emitter::public_class() {
     o_ << "    //  Every channel as a `record` section, the unselected ones commented\n";
     o_ << "    //  out: save it, edit it, load it back. Valid until the next call.\n";
     o_ << "    const char* list_signals();\n\n";
+    o_ << "    //  The same paths one at a time (§14.1). get() and set(path, double)\n";
+    o_ << "    //  speak the canonical unit; set(path, text) takes what a source line\n";
+    o_ << "    //  would, \"340 (kg)\" or an enumerator. A refused set() returns false,\n";
+    o_ << "    //  changes nothing, and does not stop the run; error() says why, and\n";
+    o_ << "    //  get() of a path the model does not have is NaN.\n";
+    o_ << "    std::vector<SettingInfo> settings_list();\n";
+    o_ << "    double        get(const char* path) const;\n";
+    o_ << "    bool          set(const char* path, double value);\n";
+    o_ << "    bool          set(const char* path, const char* value);\n\n";
     o_ << "    //  The recording one line of a `record` section at a time (§13.5):\n";
     o_ << "    //  record() is `path;`, unrecord() is `-path;`, record_clear() is\n";
     o_ << "    //  `clear;`. A refused call returns false, changes nothing, and does\n";
@@ -3242,7 +3431,8 @@ void Emitter::public_class() {
     o_ << "    Inputs&        inputs();\n";
     o_ << "    void           tick();\n";
     o_ << "    const Outputs& outputs() const;\n";
-    o_ << "    bool           done() const;         // the run is over: tick_count, or stopped\n";
+    o_ << "    bool           done() const;         // the run is over: tick_count(), or stopped\n";
+    o_ << "    std::uint64_t  tick_count() const;   // the run's length in ticks: sim.duration\n";
     o_ << "    double         time() const;         // s, the instant the next tick() samples\n";
     o_ << "    std::uint64_t  tick_index() const;   // the next tick(); time() / step_seconds\n\n";
     o_ << "    //  To keep pace with wall time, tick() as many times as you like, then\n";
@@ -3441,12 +3631,15 @@ std::string Emitter::main_cpp() {
         t << "static const char* const usage =\n";
         t << "    " << line("usage: " + m_.name +
                             " [--settings FILE...]... [--set PATH=VALUE]... [--dump-settings]"
-                            " [--list-signals] [--realtime SYNC]")
+                            " [--duration TIME] [--list-signals] [--realtime SYNC]")
           << "\n";
         t << "    " << line("  --settings FILE... load settings files (section 14), left to "
                             "right; a comma-separated list too")
           << "\n";
         t << "    " << line("  --set PATH=VALUE   load one binding, as --set \"" + eg + "\"")
+          << "\n";
+        t << "    " << line("  --duration TIME    run this long, as --duration 20s; a whole "
+                            "number of steps")
           << "\n";
         t << "    " << line("  --dump-settings    print how the run is configured, and stop")
           << "\n";
@@ -3537,6 +3730,17 @@ std::string Emitter::main_cpp() {
     t << "            origin = \"--set\";\n";
     t << "            text = argv[++i];\n";
     t << "            if (text.empty() || text.back() != ';') text += ';';\n";
+    t << "        } else if (arg == \"--duration\" && i + 1 < argc) {\n";
+    t << "            // Shorthand for the binding `sim.duration = ...;` (section 13.3).\n";
+    t << "            const double d = read_time(argv[++i]);\n";
+    t << "            if (!(d > 0.0)) {\n";
+    t << "                std::fprintf(stderr, \"" << who << ": --duration %s is not a time\\n\", argv[i]);\n";
+    t << "                return 2;\n";
+    t << "            }\n";
+    t << "            char buf[64];\n";
+    t << "            std::snprintf(buf, sizeof buf, \"sim.duration = %.17g;\", d);\n";
+    t << "            origin = \"--duration\";\n";
+    t << "            text = buf;\n";
     t << "        } else if (arg == \"--dump-settings\") {\n";
     t << "            dump = true;\n";
     t << "            continue;\n";

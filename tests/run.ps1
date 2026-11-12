@@ -2176,6 +2176,27 @@ if (-not $cl) {
             $script:fail++
         }
 
+        # --duration is shorthand for `sim.duration = ...;`: a one-second run at
+        # the .sim's 100 Hz in the file is 101 rows and the header. A length
+        # that is not a whole number of steps is refused before the run.
+        & '.\build\release\bin\Drivetrain.exe' --duration 1s 2>&1 | Out-Null
+        $code = $LASTEXITCODE
+        $lines = @(Get-Content 'drivetrain.csv' -ErrorAction SilentlyContinue)
+        $said = ((& '.\build\release\bin\Drivetrain.exe' --duration '1.0005 (s)' 2>&1 |
+                  ForEach-Object { $_.ToString() }) -join "`n").Trim()
+        $code2 = $LASTEXITCODE
+        $want = 'Drivetrain: --duration:1: sim.duration: not a whole number of base steps; the step is 0.001 s (section 13.3)'
+        if ($code -eq 0 -and $lines.Count -eq 102 -and $code2 -eq 2 -and $said -eq $want) {
+            Write-Host "ok   build/emit/drivetrain --duration 1s : the run is one second long" -ForegroundColor Green
+            $script:pass++
+        } else {
+            Write-Host ("FAIL build/emit/drivetrain --duration : exit $code, " + $lines.Count +
+                        " lines; refused with exit $code2") -ForegroundColor Red
+            Write-Host ("    want: " + $want) -ForegroundColor DarkGray
+            Write-Host ("    got : " + $said) -ForegroundColor Yellow
+            $script:fail++
+        }
+
         # The menu is a settings file: saved, loaded back, it lists the same.
         $menu = ((& '.\build\release\bin\Drivetrain.exe' --list-signals) -join "`n") + "`n"
         [IO.File]::WriteAllText((Join-Path (Get-Location) 'menu.settings'), $menu)
