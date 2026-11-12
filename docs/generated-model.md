@@ -32,7 +32,7 @@ A host makes four kinds of call, in this order.
 |---|---|---|
 | Configure | `Sim()`, `settings()`, `load_settings()`, `dump_settings()`, `list_signals()`, `get()` / `set()`, the channel and log calls | Settings, initial-condition overrides, the run's length, the recorded channels and the log are collected. No node code runs. |
 | Start | `init()` | Settings are finalized, initial conditions are written, and every node's `init()` runs. |
-| Step | `inputs()`, `tick()`, `outputs()`, `done()`, `sync_realtime()` | One `tick()` samples the model at the current time and advances it one step. It never waits; `sync_realtime()` is how a host keeps pace with wall time. |
+| Step | `inputs()`, `tick()`, `outputs()`, `done()`, `sync_realtime()`, `read()`, `log_next()` | One `tick()` samples the model at the current time and advances it one step. It never waits; `sync_realtime()` is how a host keeps pace with wall time. |
 | Finish | `finish()` | Every node's `final()` runs, the recording and log close, and the exit code is returned. |
 
 ```cpp
@@ -228,6 +228,26 @@ A recorded element of an array state is checked against its extent when the
 source loads and when the run starts. The table and the log file open in
 `init()`, after configuration, so two copies of one model given a file each write
 two of each. A table is written only if at least one channel is selected.
+
+A file name may hold `{time}`, as in `file = "heavy-{time}.csv";`.
+- `init()` replaces it with the date and time the run started,
+  `heavy-20261112-143005.csv`. The table and the log share that one instant.
+- If the name is already taken, `init()` adds `-2`, `-3`, and so on. So two
+  copies given the same pattern still write two files.
+- The dump keeps the pattern.
+- After `init()`, `record_file()` and `log_file()` return the name actually
+  opened.
+
+Two calls watch a run without changing it, and work before or after `init()`:
+- `channel_handle(path)` resolves any channel once, selected or not.
+  `read(handle)` then returns its value as the last `tick()` sampled it: the
+  instant `outputs()` describes, and the value that tick's row records.
+  `tick()` stores the value where it records, because by the time it returns
+  the states have moved on.
+- `log_capture(true)` keeps the lines the console would have printed in a
+  queue, and `log_next()` takes them one at a time. This is for a host with
+  no console, such as a DLL inside another program. The log file is not
+  affected.
 
 ## 5. Starting the run
 

@@ -2672,11 +2672,34 @@ bool Parser::parse_sim_entry(ast::SimFile& out) {
     return true;
 }
 
+// §13.5 — `{time}` is the one placeholder a file name may hold. What is wrong
+// with `name`, or "" when nothing is; a compiled model words it the same way.
+static std::string file_name_fault(const std::string& name) {
+    for (std::size_t i = 0; i < name.size(); ++i) {
+        if (name[i] == '}') return "a `}` with no `{` before it";
+        if (name[i] != '{') continue;
+        const std::size_t close = name.find('}', i);
+        if (close == std::string::npos) return "a `{` with no `}` after it";
+        const std::string word = name.substr(i + 1, close - i - 1);
+        if (word != "time") return "`{" + word + "}` is not a placeholder";
+        i = close;
+    }
+    return "";
+}
+
 // §13.5 — a record body: edits to a selection, applied in order. The same body
 // is a `.sim` entry and a settings-source section (§14), so a block copies
 // between the two unchanged. `file` and `every` are keys only when `=` follows
 // them, and `clear` only when `;` does, so a node or port of that name is still
 // a channel.
+void Parser::file_name_check(const std::string& name, Loc at) {
+    const std::string fault = file_name_fault(name);
+    if (fault.empty()) return;
+    err("SE0268", at, fault + " in the file name", "not a file name the run can fill in",
+        {help("`{time}` is the only placeholder: it becomes the date and time the run "
+              "started, YYYYMMDD-HHMMSS (\xc2\xa7""13.5)")});
+}
+
 bool Parser::parse_record_block(ast::RecordBlock& out) {
     if (!expect(Tok::LBrace, "SE0201", "to open the `record` body")) return false;
 
@@ -2734,6 +2757,7 @@ bool Parser::parse_record_block(ast::RecordBlock& out) {
                     ok = false;
                 } else {
                     it.file = tok_.text;
+                    file_name_check(tok_.text, tok_.loc);
                     advance();
                 }
             } else {
@@ -2845,6 +2869,7 @@ bool Parser::parse_log_block(ast::LogBlock& out) {
                     ok = false;
                 } else {
                     it.text = tok_.text;
+                    file_name_check(tok_.text, tok_.loc);
                     advance();
                 }
             } else {

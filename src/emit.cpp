@@ -1430,6 +1430,10 @@ void Emitter::sim_members() {
     o_ << "    std::vector<double> se_row_;          // one row's values, reused every row\n";
     o_ << "    std::string         se_list_;         // what list_signals() last returned\n";
     o_ << "    std::string         se_call_error_;   // the last refused configuration call\n";
+    o_ << "    std::string         se_stamp_;        // the run's `{time}`, taken at init() (§13.5)\n";
+    o_ << "    std::vector<se_rt::Column> se_handles_;   // channel_handle()'s, by number (§14.1)\n";
+    o_ << "    std::vector<double> se_handle_vals_;  // each as the last tick sampled it\n";
+    o_ << "    bool                se_ticked_ = false;\n";
 
     if (m_.dynamic_states) {
         // Solver scratch, sized once at configuration. It is not a published
@@ -1508,6 +1512,12 @@ void Emitter::sim_members() {
     o_ << "    bool        record_every(std::uint64_t n);\n";
     o_ << "    bool        log_file(const char* file);\n";
     o_ << "    bool        log_level(const char* path, const char* level);\n";
+    o_ << "    const char* record_file_name() const;\n";
+    o_ << "    const char* log_file_name() const;\n";
+    o_ << "    int         channel_handle(const char* path);\n";
+    o_ << "    double      read(int handle);\n";
+    o_ << "    double      handle_value(const se_rt::Column& c);\n";
+    o_ << "    void        sample_handles();\n";
     o_ << "    std::vector<Sim::SettingInfo> settings_list();\n";
     o_ << "    double      get(const char* path);\n";
     o_ << "    bool        set(const char* path, double value);\n";
@@ -2255,9 +2265,9 @@ void Emitter::sim_record() {
     o_ << "\n// §13.5 — the header, once configuration is over. No channel, no table.\n";
     o_ << "void Sim::Impl::record_open() {\n";
     o_ << "    if (se_config_.columns.empty()) return;\n";
-    o_ << "    if (!se_rec_.open(se_config_.record_file)) {\n";
+    o_ << "    if (!se_rec_.open(se_config_.record_file, se_stamp_)) {\n";
     o_ << "        se_run_.log.write(se_rt::Level::Error, \"sim\", 0.0,\n";
-    o_ << "                          \"cannot open \" + se_config_.record_file + \" for writing\");\n";
+    o_ << "                          \"cannot open \" + se_rec_.used() + \" for writing\");\n";
     o_ << "        return;\n";
     o_ << "    }\n";
     o_ << "    const se_rt::Tables t = tables();\n";
@@ -2343,6 +2353,11 @@ void Emitter::sim_record() {
     o_ << "                         \"turns recording off\";\n";
     o_ << "        return false;\n";
     o_ << "    }\n";
+    o_ << "    const std::string bad = se_rt::file_pattern_error(file);\n";
+    o_ << "    if (!bad.empty()) {\n";
+    o_ << "        se_call_error_ = \"record_file: \" + bad;\n";
+    o_ << "        return false;\n";
+    o_ << "    }\n";
     o_ << "    se_config_.record_file = file;\n";
     o_ << "    return true;\n";
     o_ << "}\n";
@@ -2359,8 +2374,60 @@ void Emitter::sim_record() {
 
     o_ << "\nbool Sim::Impl::log_file(const char* file) {\n";
     o_ << "    if (!configuring(\"log_file\")) return false;\n";
+    o_ << "    const std::string bad = se_rt::file_pattern_error(file ? file : \"\");\n";
+    o_ << "    if (!bad.empty()) {\n";
+    o_ << "        se_call_error_ = \"log_file: \" + bad;\n";
+    o_ << "        return false;\n";
+    o_ << "    }\n";
     o_ << "    se_config_.log_file = file ? file : \"\";\n";
     o_ << "    return true;\n";
+    o_ << "}\n";
+
+    o_ << "\n// §13.5 — a file's name as configured, `{time}` and all, until the run\n";
+    o_ << "// opens it; then the name it opened.\n";
+    o_ << "const char* Sim::Impl::record_file_name() const {\n";
+    o_ << "    return se_rec_.used().empty() ? se_config_.record_file.c_str() : se_rec_.used().c_str();\n";
+    o_ << "}\n";
+    o_ << "\nconst char* Sim::Impl::log_file_name() const {\n";
+    o_ << "    return se_started_ ? se_run_.log.used().c_str() : se_config_.log_file.c_str();\n";
+    o_ << "}\n";
+
+    o_ << "\n// §14.1 — a channel read live: resolved once, as record() resolves it,\n";
+    o_ << "// then read as the last tick sampled it. Not configuration: either side\n";
+    o_ << "// of init() will do. By the time tick() returns, the states have moved\n";
+    o_ << "// and the solver has overwritten the signals, so tick() keeps each\n";
+    o_ << "// handle's value where it records a row; one taken mid-run is NaN\n";
+    o_ << "// until the next tick samples it.\n";
+    o_ << "int Sim::Impl::channel_handle(const char* path) {\n";
+    o_ << "    se_call_error_.clear();\n";
+    o_ << "    se_rt::Column c{0, 0, std::string()};\n";
+    o_ << "    std::string why;\n";
+    o_ << "    if (!se_rt::channel_text(tables(), path, c, why)) {\n";
+    o_ << "        se_call_error_ = std::string(path ? path : \"\") + \": \" + why;\n";
+    o_ << "        return -1;\n";
+    o_ << "    }\n";
+    o_ << "    se_handles_.push_back(c);\n";
+    o_ << "    se_handle_vals_.push_back(std::nan(\"\"));\n";
+    o_ << "    return static_cast<int>(se_handles_.size() - 1);\n";
+    o_ << "}\n";
+    o_ << "\ndouble Sim::Impl::read(int handle) {\n";
+    o_ << "    if (handle < 0 || static_cast<std::size_t>(handle) >= se_handles_.size())\n";
+    o_ << "        return std::nan(\"\");\n";
+    o_ << "    const std::size_t k = static_cast<std::size_t>(handle);\n";
+    o_ << "    // Before the first tick nothing has moved, so the storage is the answer.\n";
+    o_ << "    return se_ticked_ ? se_handle_vals_[k] : handle_value(se_handles_[k]);\n";
+    o_ << "}\n";
+    o_ << "\ndouble Sim::Impl::handle_value(const se_rt::Column& c) {\n";
+    if (any_array) {
+        o_ << "    if (tables().channels[c.row].array && c.index >= channel_extent(c.row))\n";
+        o_ << "        return std::nan(\"\");   // past the extent configuration settled\n";
+    }
+    o_ << "    return channel(c.row, c.index);\n";
+    o_ << "}\n";
+    o_ << "\nvoid Sim::Impl::sample_handles() {\n";
+    o_ << "    for (std::size_t k = 0; k < se_handles_.size(); ++k)\n";
+    o_ << "        se_handle_vals_[k] = handle_value(se_handles_[k]);\n";
+    o_ << "    se_ticked_ = true;\n";
     o_ << "}\n";
 
     o_ << "\n// `path` null: the global threshold; otherwise one node path's.\n";
@@ -2440,6 +2507,7 @@ void Emitter::sim_run() {
     o_ << "    publish_outputs();\n";
     if (any_next()) o_ << "    if (!se_run_.control.halted()) next_tick();\n";
     o_ << "    if (se_rec_.active() && se_tick_ % se_config_.every == 0) record_row();\n";
+    o_ << "    sample_handles();   // §14.1 — what read() returns until the next tick\n";
     o_ << "    if (se_run_.control.halted() || se_tick_ >= se_end_tick_) {\n";
     o_ << "        se_done_ = true;\n        return;\n    }\n";
     // §9.6 — the commit: below the exit, so a halted run keeps the state its
@@ -2462,7 +2530,7 @@ void Emitter::sim_run() {
     o_ << "    const se_rt::RunContext ctx = se_run_.control.context(se_time_);\n";
     o_ << "    final_all(ctx);\n";
     o_ << "    se_rec_.close();\n";
-    o_ << "    se_run_.realtime.summary();   // silent unless the host paced the run\n";
+    o_ << "    se_run_.realtime.summary(se_run_.log, se_time_);   // silent unless the host paced the run\n";
     // §10.6 -- after the realtime summary and before the closing line, so
     // the last thing a log carries is the run's outcome and not a contract detail.
     o_ << "    se_run_.checks.summary(se_run_.log, se_time_);\n";
@@ -2505,6 +2573,7 @@ void Emitter::sim_run() {
     o_ << "        return false;\n";
     o_ << "    }\n";
     o_ << "    se_started_ = true;\n";
+    o_ << "    se_stamp_ = se_rt::time_stamp();   // one `{time}` for the run's files (§13.5)\n";
     o_ << "    configure_run();\n";
     o_ << "    const std::string refused = accept_settings();\n";
     o_ << (m_.dynamic_states ? "    configure();\n" : "    resolve_settings();\n");
@@ -2534,7 +2603,7 @@ void Emitter::sim_run() {
     o_ << "// The file opens here, when the run starts, so a host that gives two copies\n";
     o_ << "// of one model a file each gets two logs.\n";
     o_ << "void Sim::Impl::configure_run() {\n";
-    o_ << "    se_run_.log.configure(se_config_.log_file.c_str(), se_config_.level);\n";
+    o_ << "    se_run_.log.configure(se_config_.log_file, se_config_.level, se_stamp_);\n";
     o_ << "    for (const auto& p : se_config_.levels)\n";
     o_ << "        se_run_.log.set_path_level(p.first.c_str(), p.second);\n";
     o_ << "}\n";
@@ -3089,11 +3158,11 @@ void Emitter::sim_facade() {
     o_ << "bool          Sim::unrecord(const char* path)  { return impl_->record(path, false); }\n";
     o_ << "void          Sim::record_clear()              { impl_->record_clear(); }\n";
     o_ << "bool          Sim::record_file(const char* f)  { return impl_->record_file(f); }\n";
-    o_ << "const char*   Sim::record_file() const         "
-          "{ return impl_->se_config_.record_file.c_str(); }\n";
+    o_ << "const char*   Sim::record_file() const         { return impl_->record_file_name(); }\n";
     o_ << "bool          Sim::record_every(std::uint64_t n) { return impl_->record_every(n); }\n";
     o_ << "std::uint64_t Sim::record_every() const        { return impl_->se_config_.every; }\n";
     o_ << "bool          Sim::log_file(const char* f)     { return impl_->log_file(f); }\n";
+    o_ << "const char*   Sim::log_file() const            { return impl_->log_file_name(); }\n";
     o_ << "bool          Sim::log_level(const char* l)    { return impl_->log_level(nullptr, l); }\n";
     o_ << "bool          Sim::log_level(const char* p, const char* l) "
           "{ return impl_->log_level(p, l); }\n";
@@ -3115,6 +3184,18 @@ void Emitter::sim_facade() {
     o_ << "Sim::RealtimeStats  Sim::realtime_stats() const {\n";
     o_ << "    const se_rt::Realtime& r = impl_->se_run_.realtime;\n";
     o_ << "    return {r.utilization(), r.overrun_pct(), r.lag(), r.frames(), r.overruns()};\n";
+    o_ << "}\n";
+    o_ << "int           Sim::channel_handle(const char* p) { return impl_->channel_handle(p); }\n";
+    o_ << "double        Sim::read(int handle) const      { return impl_->read(handle); }\n";
+    o_ << "void          Sim::log_capture(bool on)        { impl_->se_run_.log.capture(on); }\n";
+    o_ << "bool          Sim::log_next(LogLine& line) {\n";
+    o_ << "    se_rt::LogLine l;\n";
+    o_ << "    if (!impl_->se_run_.log.next(l)) return false;\n";
+    o_ << "    line.level = static_cast<LogLevel>(static_cast<int>(l.level));\n";
+    o_ << "    line.path  = std::move(l.path);\n";
+    o_ << "    line.time  = l.time;\n";
+    o_ << "    line.text  = std::move(l.text);\n";
+    o_ << "    return true;\n";
     o_ << "}\n";
     o_ << "int                 Sim::finish()           "
           "{ impl_->finish(); return impl_->exit_code(); }\n";
@@ -3362,6 +3443,15 @@ void Emitter::public_class() {
     o_ << "        std::string unit;               // the CSV header's bracket: a unit, a type\n";
     o_ << "        bool        selected = false;\n";
     o_ << "    };\n";
+    o_ << "    //  One line the console would have received, kept for a host that\n";
+    o_ << "    //  has none (§14.1).\n";
+    o_ << "    enum class LogLevel { Trace, Debug, Info, Warn, Error };\n";
+    o_ << "    struct LogLine {\n";
+    o_ << "        LogLevel    level = LogLevel::Info;\n";
+    o_ << "        std::string path;               // the node, or \"sim\"\n";
+    o_ << "        double      time = 0.0;         // s, model time\n";
+    o_ << "        std::string text;\n";
+    o_ << "    };\n";
     o_ << "\n";
     const std::string step = dbl(m_.step) + ";", ticks = std::to_string(tick_count()) + ";";
     o_ << "    //  One tick. Fixed: every rate in the model is a count of it.\n";
@@ -3406,6 +3496,8 @@ void Emitter::public_class() {
     o_ << "    bool          record(const char* path);\n";
     o_ << "    bool          unrecord(const char* path);\n";
     o_ << "    void          record_clear();\n";
+    o_ << "    //  A file name may hold `{time}` (§13.5): the getters give it as\n";
+    o_ << "    //  configured, then, once init() opens the file, the name it opened.\n";
     o_ << "    bool          record_file(const char* file);\n";
     o_ << "    const char*   record_file() const;\n";
     o_ << "    bool          record_every(std::uint64_t ticks);\n";
@@ -3413,6 +3505,7 @@ void Emitter::public_class() {
     o_ << "    //  The log (§13.7): its file, \"\" for the console only, then the threshold,\n";
     o_ << "    //  overall or for one node path: trace, debug, info, warn or error.\n";
     o_ << "    bool          log_file(const char* file);\n";
+    o_ << "    const char*   log_file() const;\n";
     o_ << "    bool          log_level(const char* level);\n";
     o_ << "    bool          log_level(const char* path, const char* level);\n\n";
 
@@ -3442,6 +3535,15 @@ void Emitter::public_class() {
     o_ << "    void           sync_realtime();\n";
     o_ << "    //  How well the run is keeping pace. Zero until sync_realtime() is called.\n";
     o_ << "    RealtimeStats  realtime_stats() const;\n\n";
+    o_ << "    //  Watching the run (§14.1); not configuration, so before or after\n";
+    o_ << "    //  init(). channel_handle() resolves a path as record() does, -1 if\n";
+    o_ << "    //  refused; read() is that channel as the last tick() sampled it, NaN\n";
+    o_ << "    //  for a bad handle. log_capture(true) keeps the console's lines for\n";
+    o_ << "    //  log_next() instead of printing them; the log file is unaffected.\n";
+    o_ << "    int            channel_handle(const char* path);\n";
+    o_ << "    double         read(int handle) const;\n";
+    o_ << "    void           log_capture(bool on);\n";
+    o_ << "    bool           log_next(LogLine& line);   // false when none is waiting\n\n";
 
     o_ << "    // ---- 4. finish " << std::string(57, '-') << "\n";
     o_ << "    //  Runs every node's final(), closes the recording and the log. 0 for a\n";

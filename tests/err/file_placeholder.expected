@@ -1,0 +1,15 @@
+﻿error[SE0268]: `{model}` is not a placeholder in the file name
+  --> tests/err/file_placeholder.sim:10:17
+   |
+10 |         file  = "run-{model}.csv";
+   |                 ^^^^^^^^^^^^^^^^^ not a file name the run can fill in
+   = help: `{time}` is the only placeholder: it becomes the date and time the run started, YYYYMMDD-HHMMSS (§13.5)
+
+error[SE0268]: a `{` with no `}` after it in the file name
+  --> tests/err/file_placeholder.sim:15:17
+   |
+15 |         file  = "run-{time.log";
+   |                 ^^^^^^^^^^^^^^^ not a file name the run can fill in
+   = help: `{time}` is the only placeholder: it becomes the date and time the run started, YYYYMMDD-HHMMSS (§13.5)
+
+2 errors emitted

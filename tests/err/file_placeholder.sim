@@ -1,0 +1,17 @@
+// SE0268: `{time}` is the only placeholder a file name may hold, in `record`
+// and `log` alike; anything else in braces, or a brace on its own, is an
+// error. §13.5
+sim Placeholder {
+    root:     tests.Vehicle;
+    step:     1 (ms);
+    duration: 1 (s);
+
+    record: {
+        file  = "run-{model}.csv";
+        front.left.out.force;
+    }
+
+    log: {
+        file  = "run-{time.log";
+    }
+}

@@ -18,6 +18,12 @@
 //       the same text; list_signals() reads back to the same selection.
 //    5. Two copies of one model, each given its own files, write two tables
 //       and two logs: the collision phase 2 left open is closed.
+//    6. A channel handle reads, live, what the last tick sampled: the same
+//       value outputs() holds and the CSV row records, selected or not.
+//    7. A captured log keeps the console's lines for the host, and a full
+//       queue says how many it dropped.
+//    8. `{time}` in a file name: a fresh file each run, `-2` when the name is
+//       taken, the pattern kept in the dump, the name used reported.
 //
 //  Like settings_host.cpp it #includes Drivetrain.cpp, so it can look at the
 //  configuration a call lands in.
@@ -26,6 +32,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 #include "Drivetrain.cpp"
 
+#include <cmath>
 #include <cstdio>
 #include <fstream>
 #include <string>
@@ -207,6 +214,130 @@ int main() {
         const std::vector<std::string> pl = lines_of("rh_p.log"), ql = lines_of("rh_q.log");
         check(!pl.empty() && !ql.empty() && has(pl.back(), "run complete"),
               "two logs, each ending with its own run's outcome");
+    }
+
+    // ── 6. a channel read live ───────────────────────────────────────────────
+    {
+        Sim sim;
+        const int omega = sim.channel_handle("whl.state.omega");
+        const int bare = sim.channel_handle("whl.omega");
+        const int slip = sim.channel_handle("ws.slip");
+        const int cut = sim.channel_handle("tc.out.torque_cut");   // not selected
+        check(omega == 0 && bare == 1 && slip == 2 && cut == 3, "handles are numbered in order");
+        check(sim.channel_handle("whl.nope") == -1, "a path that names nothing gets no handle");
+        check(has(sim.error(), "whl.nope: not a recordable signal"), "and error() says why");
+        check(std::isnan(sim.read(-1)) && std::isnan(sim.read(99)), "a bad handle reads NaN");
+        check(sim.record_file("rh_live.csv") && sim.record_every(1), "a table to compare against");
+        check(sim.init(), "the run starts");
+        std::vector<double> seen;
+        bool same_as_outputs = true, same_twice = true;
+        while (!sim.done()) {
+            sim.inputs().axle_torque = 300.0;
+            sim.inputs().ground_speed = 5.0;
+            sim.tick();
+            same_as_outputs = same_as_outputs && sim.read(slip) == sim.outputs().ws.slip &&
+                              sim.read(cut) == sim.outputs().torque_cut;
+            same_twice = same_twice && sim.read(omega) == sim.read(bare);
+            seen.push_back(sim.read(omega));
+        }
+        check(sim.channel_handle("whl.drive_torque") == 4, "a handle may be taken after init()");
+        check(std::isnan(sim.read(4)), "and reads NaN until a tick samples it");
+        check(sim.finish() == 0, "the run finishes clean");
+        check(same_as_outputs, "a port's handle reads what outputs() holds");
+        check(same_twice, "both spellings read the same storage");
+        const std::vector<std::string> csv = lines_of("rh_live.csv");
+        const std::size_t col = 1 + [&] {   // whl.state.omega's column after time
+            const std::string& h = csv.empty() ? std::string() : csv[0];
+            std::size_t n = 0;
+            for (std::size_t at = 0, comma; (comma = h.find(',', at)) != std::string::npos;
+                 at = comma + 1, ++n)
+                if (h.compare(comma + 1, 15, "whl.state.omega") == 0) return n;
+            return std::size_t(99);
+        }();
+        bool rows_agree = csv.size() == seen.size() + 1 && col < 99;
+        for (std::size_t r = 1; rows_agree && r < csv.size(); ++r) {
+            std::size_t at = 0;
+            for (std::size_t c = 0; c < col; ++c) at = csv[r].find(',', at) + 1;
+            const double v = std::strtod(csv[r].c_str() + at, nullptr);
+            rows_agree = std::fabs(v - seen[r - 1]) <= 1e-8 * (1.0 + std::fabs(v));
+        }
+        check(rows_agree, "a state's handle reads what that tick's row records");
+    }
+
+    // ── 7. the console's lines, kept ─────────────────────────────────────────
+    {
+        se_rt::LogSink sink;
+        sink.capture(true);
+        for (int i = 0; i < 10003; ++i)
+            sink.write(se_rt::Level::Warn, "n", static_cast<double>(i), "line " + std::to_string(i));
+        se_rt::LogLine l;
+        check(sink.next(l) && l.level == se_rt::Level::Warn && l.path == "sim" &&
+                  l.text == "3 log lines dropped: the queue holds 10000" && l.time == 2.0,
+              "a full queue first says how many it dropped");
+        check(sink.next(l) && l.text == "line 3" && l.path == "n", "then the oldest kept line");
+        std::size_t rest = 0;
+        while (sink.next(l)) ++rest;
+        check(rest == 9999 && l.text == "line 10002", "and every other one, in order");
+
+        Sim sim;
+        sim.log_capture(true);
+        check(sim.log_file(""), "no log file: the console gets every line");
+        check(run(sim) == 0, "a captured run finishes clean");
+        Sim::LogLine line;
+        check(sim.log_next(line) && line.level == Sim::LogLevel::Info && line.path == "sim" &&
+                  has(line.text, "run completed") && line.time == 5.0,
+              "the run's closing line is kept, not printed");
+        check(!sim.log_next(line), "and nothing else is waiting");
+    }
+
+    // ── 8. {time} ────────────────────────────────────────────────────────────
+    {
+        const char* stamp = "20000101-000000";
+        std::remove("rh_t_20000101-000000.txt");
+        std::remove("rh_t_20000101-000000-2.txt");
+        std::string u1, u2;
+        std::FILE* f1 = se_rt::open_output("rh_t_{time}.txt", stamp, u1);
+        std::FILE* f2 = se_rt::open_output("rh_t_{time}.txt", stamp, u2);
+        check(f1 && u1 == "rh_t_20000101-000000.txt", "{time} becomes the stamp");
+        check(f2 && u2 == "rh_t_20000101-000000-2.txt", "a name already taken gets -2");
+        if (f1) std::fclose(f1);
+        if (f2) std::fclose(f2);
+        std::string u3;
+        std::FILE* f3 = se_rt::open_output("rh_plain.txt", stamp, u3);
+        check(f3 && u3 == "rh_plain.txt", "a name without {time} is opened as it is");
+        if (f3) std::fclose(f3);
+
+        std::string pa, pb, la, dump;
+        {
+            Sim a, b;
+            check(a.record_file("rh_{time}.csv") && a.log_file("rh_{time}.log"), "a pattern is accepted");
+            check(std::string(a.record_file()) == "rh_{time}.csv", "before init(), the pattern");
+            check(b.record_file("rh_{time}.csv"), "the same pattern on a second copy");
+            check(a.init() && b.init(), "both start");
+            pa = a.record_file();
+            pb = b.record_file();
+            la = a.log_file();
+            dump = a.dump_settings();
+            a.finish();
+            b.finish();
+        }
+        check(pa.size() == std::string("rh_00000000-000000.csv").size() && pa.rfind("rh_", 0) == 0,
+              "after init(), the name opened");
+        check(pa != pb, "two copies, two tables");
+        check(la.size() == std::string("rh_00000000-000000.log").size(), "the log's name too");
+        check(!lines_of(pa.c_str()).empty() && !lines_of(pb.c_str()).empty(), "both were written");
+        check(has(dump, "file  = \"rh_{time}.csv\";"), "the dump keeps the pattern");
+        std::remove(pa.c_str());
+        std::remove(pb.c_str());
+        std::remove(la.c_str());
+
+        Sim c;
+        check(!c.record_file("x{model}.csv"), "another placeholder is refused");
+        check(has(c.error(), "`{model}` is not a placeholder"), "and error() names it");
+        check(!c.log_file("x{.log"), "a lone brace is refused");
+        check(has(c.error(), "log_file: a `{` with no `}` after it"), "and error() says so");
+        check(has(refusal_text("record { file = \"a}b.csv\"; }"), "t:1: file: a `}` with no `{`"),
+              "a source's file name is checked the same way");
     }
 
     if (failures == 0) std::printf("record_host: all checks passed\n");

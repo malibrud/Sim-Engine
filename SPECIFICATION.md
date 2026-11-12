@@ -4212,8 +4212,14 @@ bool log_next(LogLine& line);                     // false when none is waiting
     tick that doesn't read it.
   - `read` returns the model at the instant the last `tick()` sampled. That is
     the same instant as `outputs()`, and the same value that tick's row
-    records. Before the first tick it returns what `init()` left. Before
-    `init()` the value is not meaningful.
+    records.
+  - The value is kept, not looked up. By the time `tick()` returns, the
+    states have moved on and the solver has overwritten the signals, so
+    `tick()` stores each handle's value at the point where it records a row.
+    A handle taken partway through the run reads NaN until the next tick has
+    sampled it.
+  - Before the first tick, `read` returns what `init()` left. Before `init()`
+    the value is not meaningful.
   - An array element is checked against the extent when it is read. An
     element past the extent, like a handle the model never issued, reads NaN.
 - **Captured lines are the console's.**

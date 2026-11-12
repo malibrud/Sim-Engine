@@ -59,6 +59,7 @@ const char kRuntime[] =
 #ifndef SE_RUNTIME_@VER@
 #define SE_RUNTIME_@VER@
 
+#include <cerrno>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
@@ -66,6 +67,7 @@ const char kRuntime[] =
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <deque>
 #include <sstream>
 #include <string>
@@ -113,6 +115,66 @@ std::string format(const char* f, const A&... a) {
     return o.str();
 }
 
+// ─── Output files (section 13.5) ─────────────────────────────────────────────
+// `{time}` is the one placeholder a file name may hold. A name with it is a
+// new file every run; a name without it is opened as it always was.
+
+// Why `name` is not a well-formed file name, or "" when it is.
+inline std::string file_pattern_error(const std::string& name) {
+    for (std::size_t i = 0; i < name.size(); ++i) {
+        if (name[i] == '}')
+            return "a `}` with no `{` before it; `{time}` is the only placeholder (section 13.5)";
+        if (name[i] != '{') continue;
+        const std::size_t close = name.find('}', i);
+        if (close == std::string::npos)
+            return "a `{` with no `}` after it; `{time}` is the only placeholder (section 13.5)";
+        const std::string word = name.substr(i + 1, close - i - 1);
+        if (word != "time")
+            return "`{" + word + "}` is not a placeholder; `{time}` is the only one (section 13.5)";
+        i = close;
+    }
+    return "";
+}
+
+// Now, as `{time}` writes it: local time, YYYYMMDD-HHMMSS.
+inline std::string time_stamp() {
+    const std::time_t now = std::time(nullptr);
+    std::tm tm{};
+#ifdef _WIN32
+    localtime_s(&tm, &now);
+#else
+    localtime_r(&now, &tm);
+#endif
+    char text[32];
+    std::strftime(text, sizeof text, "%Y%m%d-%H%M%S", &tm);
+    return text;
+}
+
+// Opens `pattern` for writing; `used` is the name it opened. Without `{time}`
+// it replaces a file already there. With it, `stamp` goes in (now, if empty),
+// and the file is created exclusively: a name already taken gets `-2`, `-3`,
+// ... before its extension, so two runs started in the same second write two
+// files.
+inline std::FILE* open_output(const std::string& pattern, std::string stamp, std::string& used) {
+    used = pattern;
+    if (pattern.find("{time}") == std::string::npos) return std::fopen(pattern.c_str(), "w");
+    if (stamp.empty()) stamp = time_stamp();
+    std::string name = pattern;
+    for (std::size_t at = name.find("{time}"); at != std::string::npos;
+         at = name.find("{time}", at + stamp.size()))
+        name.replace(at, 6, stamp);
+    const std::size_t slash = name.find_last_of("/\\");
+    const std::size_t start = slash == std::string::npos ? 0 : slash + 1;
+    std::size_t dot = name.rfind('.');
+    if (dot == std::string::npos || dot <= start) dot = name.size();
+    for (int n = 1; n < 10000; ++n) {
+        used = n == 1 ? name : name.substr(0, dot) + "-" + std::to_string(n) + name.substr(dot);
+        if (std::FILE* f = std::fopen(used.c_str(), "wx")) return f;
+        if (errno != EEXIST) return nullptr;
+    }
+    return nullptr;
+}
+
 // ─── Logging (section 13.7) ──────────────────────────────────────────────────
 
 enum class Level { Trace = 0, Debug, Info, Warn, Error };
@@ -128,6 +190,15 @@ inline const char* level_name(Level l) {
     return "?";
 }
 
+// One line the console would have received, kept for a host that has no
+// console (section 14.1).
+struct LogLine {
+    Level       level = Level::Info;
+    std::string path;
+    double      time = 0.0;
+    std::string text;
+};
+
 class LogSink {
 public:
     ~LogSink() {
@@ -135,13 +206,46 @@ public:
     }
 
     // Re-runnable: a second configure() closes the first file rather than
-    // leaking it, and starts the path levels over.
-    void configure(const char* path, Level global) {
+    // leaking it, and starts the path levels over. `path` may hold `{time}`,
+    // which `stamp` fills (section 13.5).
+    void configure(const std::string& path, Level global, const std::string& stamp) {
         if (file_) std::fclose(file_);
         file_ = nullptr;
+        used_.clear();
         paths_.clear();
         global_ = global;
-        if (path && *path) file_ = std::fopen(path, "w");
+        if (!path.empty()) file_ = open_output(path, stamp, used_);
+    }
+
+    // The file's name as opened, `{time}` filled in; empty before configure().
+    const std::string& used() const { return used_; }
+
+    // Section 14.1 -- while capturing, the console's lines are kept here
+    // instead, up to a cap, for the host to take one at a time.
+    void capture(bool on) { capture_ = on; }
+    bool capturing() const { return capture_; }
+
+    void keep(Level l, const char* path, double t, const std::string& msg) {
+        if (kept_.size() >= kCap) {
+            dropped_time_ = kept_.front().time;
+            kept_.pop_front();
+            ++dropped_;
+        }
+        kept_.push_back(LogLine{l, path, t, msg});
+    }
+
+    // The oldest kept line; first, if the cap dropped any, one saying so.
+    bool next(LogLine& out) {
+        if (dropped_) {
+            out = LogLine{Level::Warn, "sim", dropped_time_,
+                          se_rt::format("{} log lines dropped: the queue holds {}", dropped_, kCap)};
+            dropped_ = 0;
+            return true;
+        }
+        if (kept_.empty()) return false;
+        out = std::move(kept_.front());
+        kept_.pop_front();
+        return true;
     }
 
     // Per-node-path thresholds; the longest matching prefix wins.
@@ -177,7 +281,9 @@ public:
             std::fputs(msg.c_str(), file_);
             std::fputc('\n', file_);
         }
-        if (to_console) {
+        if (to_console && capture_) {
+            keep(l, path, t, msg);
+        } else if (to_console) {
             std::fputs(head, stderr);
             std::fputs(msg.c_str(), stderr);
             std::fputc('\n', stderr);
@@ -189,9 +295,16 @@ public:
     bool trace_enabled = false;
 
 private:
+    static constexpr std::size_t kCap = 10000;
+
     std::FILE* file_ = nullptr;
+    std::string used_;
     Level global_ = Level::Info;
     std::vector<std::pair<std::string, Level>> paths_;
+    bool capture_ = false;
+    std::deque<LogLine> kept_;
+    std::uint64_t dropped_ = 0;
+    double dropped_time_ = 0.0;
 };
 
 // The `log` objects a body writes through are below, after `Run`: each one
@@ -640,10 +753,14 @@ class Recorder {
 public:
     ~Recorder() { close(); }
 
-    bool open(const std::string& path) {
-        file_ = std::fopen(path.c_str(), "w");
+    // `path` may hold `{time}`, which `stamp` fills (section 13.5).
+    bool open(const std::string& path, const std::string& stamp) {
+        file_ = open_output(path, stamp, used_);
         return file_ != nullptr;
     }
+
+    // The table's name as opened, `{time}` filled in.
+    const std::string& used() const { return used_; }
 
     void header(const std::vector<std::string>& columns) {
         if (!file_) return;
@@ -674,6 +791,7 @@ public:
 
 private:
     std::FILE* file_ = nullptr;
+    std::string used_;
     std::uint64_t rows_ = 0;
 };
 
@@ -747,15 +865,17 @@ public:
     std::uint64_t overruns() const { return overruns_; }   // of which overran
 
     // The whole-run cumulative summary, free off the same counters. Silent
-    // when the host never paced the run.
-    void summary() const {
+    // when the host never paced the run. On the console, or in the log's
+    // queue while the host is capturing it (section 14.1).
+    void summary(LogSink& log, double t) const {
         if (frames_ == 0) return;
-        std::fprintf(stderr,
-                     "realtime: %llu frames, %llu overran (%.2f%% of the run)\n",
-                     static_cast<unsigned long long>(frames_),
-                     static_cast<unsigned long long>(overruns_),
-                     100.0 * static_cast<double>(overruns_) /
-                         static_cast<double>(frames_));
+        char text[128];
+        std::snprintf(text, sizeof text, "realtime: %llu frames, %llu overran (%.2f%% of the run)",
+                      static_cast<unsigned long long>(frames_),
+                      static_cast<unsigned long long>(overruns_),
+                      100.0 * static_cast<double>(overruns_) / static_cast<double>(frames_));
+        if (log.capturing()) log.keep(Level::Info, "sim", t, text);
+        else std::fprintf(stderr, "%s\n", text);
     }
 
 private:
@@ -1626,6 +1746,8 @@ private:
                         e.kind = RunEdit::Kind::File;
                         if (!string_lit(e.text) || e.text.empty())
                             return fail(w, "expected a file name, in quotes");
+                        const std::string bad = file_pattern_error(e.text);
+                        if (!bad.empty()) return fail(w, bad);
                     } else if (w == "every") {
                         double v = 0.0;
                         if (!number(v) || v < 1.0 || std::floor(v) != v)
@@ -1719,6 +1841,8 @@ private:
                 e.kind = RunEdit::Kind::LogFile;
                 if (!string_lit(e.text))
                     return fail(w, "expected a file name, in quotes; \"\" for the console only");
+                const std::string bad = file_pattern_error(e.text);
+                if (!bad.empty()) return fail(w, bad);
             } else {
                 e.kind = RunEdit::Kind::LogLevel;
                 if (!level_word(w, e.level)) return false;

@@ -123,6 +123,7 @@ private:
 
     // ─── Sim file ────────────────────────────────────────────────────────────
     bool parse_sim_entry(ast::SimFile& out);
+    void file_name_check(const std::string& name, Loc at);   // SE0268 (§13.5)
     bool parse_record_block(ast::RecordBlock& out);
     bool parse_log_block(ast::LogBlock& out);
 
