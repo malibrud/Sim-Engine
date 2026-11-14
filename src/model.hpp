@@ -527,6 +527,13 @@ struct LogConfig {
     std::vector<std::pair<std::string, std::string>> levels;   // path, level
 };
 
+// §13.8 — the file that drives the root inputs, as the layers left it. The
+// name is kept as written: the run opens it from its working directory.
+struct InputsConfig {
+    bool present = false;
+    std::string file;
+};
+
 struct RecordConfig {
     bool present = false;
     std::string file;
@@ -618,6 +625,7 @@ struct Model {
 
     RecordConfig record;
     LogConfig log;
+    InputsConfig inputs;
     std::vector<Channel> channels;
     std::vector<ChannelAlias> channel_aliases;
 

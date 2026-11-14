@@ -348,6 +348,11 @@ static void dump_log_body(std::ostream& o, int depth, const ast::LogBlock& b) {
     }
 }
 
+// §13.8 — the inputs body.
+static void dump_inputs_body(std::ostream& o, int depth, const ast::InputsBlock& b) {
+    for (const ast::InputsItem& it : b.items) o << indent(depth) << "file: \"" << it.file << "\"\n";
+}
+
 void dump(std::ostream& o, const ast::SimFile& f) {
     o << "sim-file " << f.name << "\n";
     for (const ast::SimEntry& e : f.entries) {
@@ -373,6 +378,10 @@ void dump(std::ostream& o, const ast::SimFile& f) {
                 o << indent(1) << "log\n";
                 dump_log_body(o, 2, e.log);
                 break;
+            case ast::SimEntry::Kind::Inputs:
+                o << indent(1) << "inputs\n";
+                dump_inputs_body(o, 2, e.inputs);
+                break;
         }
     }
 }
@@ -390,6 +399,10 @@ void dump(std::ostream& o, const ast::SettingsFile& f) {
     for (const ast::LogBlock& b : f.logs) {
         o << indent(1) << "log\n";
         dump_log_body(o, 2, b);
+    }
+    for (const ast::InputsBlock& b : f.inputs) {
+        o << indent(1) << "inputs\n";
+        dump_inputs_body(o, 2, b);
     }
 }
 

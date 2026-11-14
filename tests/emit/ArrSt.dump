@@ -1,5 +1,5 @@
 // ArrSt: how the run is configured (section 14.1): every setting and initial
-// condition, then the run's length, the recording and the log.
+// condition, then the run's length, the recording, the log and the inputs.
 
 // settings
 n     = 3;
@@ -33,4 +33,9 @@ record {
 log {
     file  = "";
     level = info;
+}
+
+// the inputs (section 13.8)
+inputs {
+    file = "";
 }

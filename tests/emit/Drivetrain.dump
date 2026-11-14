@@ -1,5 +1,5 @@
 // Drivetrain: how the run is configured (section 14.1): every setting and initial
-// condition, then the run's length, the recording and the log.
+// condition, then the run's length, the recording, the log and the inputs.
 
 // settings
 wheel_inertia = 0.95 (kg*m^2);
@@ -35,4 +35,9 @@ log {
     levels {
         tc = debug;
     }
+}
+
+// the inputs (section 13.8)
+inputs {
+    file = "";
 }

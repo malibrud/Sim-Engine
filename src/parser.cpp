@@ -72,7 +72,7 @@ const std::vector<const char*>& platform_atoms() {
 
 const std::vector<const char*>& sim_keys() {
     static const std::vector<const char*> v = {"root",     "step",   "solver", "duration",
-                                               "settings", "record", "log"};
+                                               "settings", "record", "log",    "inputs"};
     return v;
 }
 
@@ -2616,7 +2616,7 @@ bool Parser::parse_sim_entry(ast::SimFile& out) {
         const std::string did = closest(e.key, sim_keys());
         if (!did.empty()) att.push_back(help("did you mean `" + did + "`?"));
         att.push_back(note("the entries are root, step, solver, duration, settings, "
-                           "record, log (\xc2\xa7""13.1)"));
+                           "record, log, inputs (\xc2\xa7""13.1)"));
         err("SE0261", e.key_loc, "unknown `sim` entry `" + e.key + "`", "", std::move(att));
     }
 
@@ -2631,21 +2631,25 @@ bool Parser::parse_sim_entry(ast::SimFile& out) {
         return true;
     }
 
-    if (e.key == "record" || e.key == "log") {
-        const bool is_record = (e.key == "record");
-        e.kind = is_record ? ast::SimEntry::Kind::Record : ast::SimEntry::Kind::Log;
+    if (e.key == "record" || e.key == "log" || e.key == "inputs") {
         bool ok;
-        if (is_record) {
+        if (e.key == "record") {
+            e.kind = ast::SimEntry::Kind::Record;
             e.record.loc = tok_.loc;
             ok = parse_record_block(e.record);
-        } else {
+        } else if (e.key == "log") {
+            e.kind = ast::SimEntry::Kind::Log;
             e.log.loc = tok_.loc;
             ok = parse_log_block(e.log);
+        } else {
+            e.kind = ast::SimEntry::Kind::Inputs;
+            e.inputs.loc = tok_.loc;
+            ok = parse_inputs_block(e.inputs);
         }
         if (!ok) return false;
         if (at(Tok::Semi)) {
             warn("SE0201", tok_.loc, "no `;` is needed after a block entry", "remove this `;`",
-                 {note("block-valued entries (`record:`, `log:`) take no trailing "
+                 {note("block-valued entries (`record:`, `log:`, `inputs:`) take no trailing "
                        "semicolon (\xc2\xa7""13.1)")});
             advance();
         }
@@ -2692,9 +2696,15 @@ static std::string file_name_fault(const std::string& name) {
 // between the two unchanged. `file` and `every` are keys only when `=` follows
 // them, and `clear` only when `;` does, so a node or port of that name is still
 // a channel.
-void Parser::file_name_check(const std::string& name, Loc at) {
+void Parser::file_name_check(const std::string& name, Loc at, bool read) {
     const std::string fault = file_name_fault(name);
     if (fault.empty()) return;
+    if (read) {
+        err("SE0268", at, fault + " in the file name", "not a file name",
+            {help("an inputs file is read, so its name is the file's own, with no "
+                  "placeholder (\xc2\xa7""13.8)")});
+        return;
+    }
     err("SE0268", at, fault + " in the file name", "not a file name the run can fill in",
         {help("`{time}` is the only placeholder: it becomes the date and time the run "
               "started, YYYYMMDD-HHMMSS (\xc2\xa7""13.5)")});
@@ -2921,10 +2931,65 @@ bool Parser::parse_log_block(ast::LogBlock& out) {
     return expect(Tok::RBrace, "SE0201", "to close the `log` body");
 }
 
+// §13.8 — an inputs body, shared with the settings source's `inputs` section:
+// `file = "...";` and nothing else. The file is read, so `{time}`, which makes
+// a written name unique, is refused here.
+bool Parser::parse_inputs_block(ast::InputsBlock& out) {
+    if (!expect(Tok::LBrace, "SE0201", "to open the `inputs` body")) return false;
+    while (!at(Tok::RBrace) && !at_end()) {
+        const std::uint32_t before = tok_.loc.offset;
+        const Loc start = tok_.loc;
+        bool ok = true;
+        if (tok_.is_word() && tok_.text == "file" && peek().kind == Tok::Equal) {
+            advance();
+            advance();
+            ast::InputsItem it;
+            it.loc = start;
+            if (!at(Tok::String)) {
+                err("SE0201", tok_.loc, std::string("expected a file name, found ") + describe(tok_.kind),
+                    "expected a string");
+                ok = false;
+            } else {
+                it.file = tok_.text;
+                if (it.file.find("{time}") != std::string::npos)
+                    err("SE0269", tok_.loc, "`{time}` in an inputs file's name",
+                        "this file is read, not written",
+                        {note("`{time}` makes the name of a file the run writes unique "
+                              "(\xc2\xa7""13.5); an inputs file already exists "
+                              "(\xc2\xa7""13.8)"),
+                         help("name the file itself, as `file = \"drive.csv\";`")});
+                else
+                    file_name_check(it.file, tok_.loc, true);
+                advance();
+            }
+            if (ok) ok = expect(Tok::Semi, "SE0208", "after the file name");
+            if (ok) out.items.push_back(std::move(it));
+        } else if (tok_.is_word() && (peek().kind == Tok::Equal || peek().kind == Tok::Colon)) {
+            static const std::vector<const char*> keys = {"file"};
+            const std::string key = tok_.text;
+            std::vector<Attachment> att;
+            const std::string did = closest(key, keys);
+            if (!did.empty()) att.push_back(help("did you mean `" + did + "`?"));
+            att.push_back(note("an `inputs` body takes `file = …;` (\xc2\xa7""13.8)"));
+            err("SE0261", start, "unknown `inputs` key `" + key + "`", "", std::move(att));
+            ok = false;
+        } else {
+            err("SE0201", tok_.loc, std::string("expected `file =`, found ") + describe(tok_.kind),
+                "expected an inputs line");
+            ok = false;
+        }
+        if (!ok) recover_in_list(Tok::RBrace);
+        if (give_up()) return false;
+        if (tok_.loc.offset == before && !at(Tok::RBrace)) advance();
+    }
+    return expect(Tok::RBrace, "SE0201", "to close the `inputs` body");
+}
+
 // ─── The settings source (§14) ───────────────────────────────────────────────
 
-// Bindings, and the run's own sections. `record` and `log` are contextual: a
-// section only when `{` follows, so `record.x = 1;` is still a binding.
+// Bindings, and the run's own sections. `record`, `log` and `inputs` are
+// contextual: a section only when `{` follows, so `record.x = 1;` is still a
+// binding.
 std::unique_ptr<ast::SettingsFile> Parser::parse_settings_file() {
     auto file = std::make_unique<ast::SettingsFile>();
     advance();
@@ -2932,15 +2997,22 @@ std::unique_ptr<ast::SettingsFile> Parser::parse_settings_file() {
     while (!at_end() && !give_up()) {
         const std::uint32_t before = tok_.loc.offset;
 
-        if (tok_.is_word() && (tok_.text == "record" || tok_.text == "log") &&
+        if (tok_.is_word() &&
+            (tok_.text == "record" || tok_.text == "log" || tok_.text == "inputs") &&
             peek().kind == Tok::LBrace) {
             const bool is_record = tok_.text == "record";
+            const bool is_inputs = tok_.text == "inputs";
             const Loc at_kw = tok_.loc;
             advance();
             if (is_record) {
                 ast::RecordBlock b;
                 b.loc = at_kw;
                 if (parse_record_block(b)) file->records.push_back(std::move(b));
+                else recover_in_list(Tok::End);
+            } else if (is_inputs) {
+                ast::InputsBlock b;
+                b.loc = at_kw;
+                if (parse_inputs_block(b)) file->inputs.push_back(std::move(b));
                 else recover_in_list(Tok::End);
             } else {
                 ast::LogBlock b;

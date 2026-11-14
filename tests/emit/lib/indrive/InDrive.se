@@ -1,0 +1,45 @@
+// §13.8 — a root input of every kind an inputs file can drive, each echoed
+// to an output, so that a host reading outputs() sees exactly what the file
+// wrote at that tick: a double that interpolates, an int, a bool and a finite
+// input that hold, a record whose fields are columns of their own, and one
+// input, `h`, that no test file names and so stays the host's.
+package indrive;
+
+finite Gear {
+    PARK,
+    LOW  = 2,
+    HIGH = 5
+}
+
+type Airflow {
+    speed:   double(m/s);
+    heading: double(rad);
+}
+
+node InDrive {
+    inputs {
+        u:    double(m/s);
+        n:    int(-);
+        on:   bool;
+        gear: Gear;
+        w:    Airflow;
+        h:    double(m);
+    }
+    outputs {
+        u_out:    double(m/s);
+        n_out:    int(-);
+        on_out:   bool;
+        gear_out: Gear;
+        w_out:    Airflow;
+        h_out:    double(m);
+    }
+
+    output(u, n, on, gear, w, h) {
+        out.u_out    = in.u;
+        out.n_out    = in.n;
+        out.on_out   = in.on;
+        out.gear_out = in.gear;
+        out.w_out    = in.w;
+        out.h_out    = in.h;
+    }
+}

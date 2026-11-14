@@ -516,6 +516,18 @@ struct LogBlock {
     Loc loc;
 };
 
+// §13.8 — the inputs body: one key, `file`, and a later line replaces an
+// earlier one.
+struct InputsItem {
+    std::string file;
+    Loc loc;
+};
+
+struct InputsBlock {
+    std::vector<InputsItem> items;
+    Loc loc;
+};
+
 struct SimEntry {
     enum class Kind {
         Root,      // root: Vehicle { … };
@@ -524,6 +536,7 @@ struct SimEntry {
         Text,      // settings: "file.settings";
         Record,
         Log,
+        Inputs,
     };
 
     Kind kind = Kind::Value;
@@ -538,6 +551,7 @@ struct SimEntry {
     std::string text;                // Text
     RecordBlock record;              // Record
     LogBlock log;                    // Log
+    InputsBlock inputs;              // Inputs
 };
 
 struct SimFile {
@@ -560,6 +574,7 @@ struct SettingsFile {
     // binding's position among them does not matter: bindings layer per path.
     std::vector<RecordBlock> records;
     std::vector<LogBlock> logs;
+    std::vector<InputsBlock> inputs;
 };
 
 }  // namespace ast

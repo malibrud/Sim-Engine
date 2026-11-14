@@ -1,0 +1,23 @@
+﻿error[SE0269]: `{time}` in an inputs file's name
+  --> tests/err/inputs_bad.sim:11:17
+   |
+11 |         file  = "drive-{time}.csv";
+   |                 ^^^^^^^^^^^^^^^^^^ this file is read, not written
+   = note: `{time}` makes the name of a file the run writes unique (§13.5); an inputs file already exists (§13.8)
+   = help: name the file itself, as `file = "drive.csv";`
+
+error[SE0268]: `{run}` is not a placeholder in the file name
+  --> tests/err/inputs_bad.sim:12:17
+   |
+12 |         file  = "drive-{run}.csv";
+   |                 ^^^^^^^^^^^^^^^^^ not a file name
+   = help: an inputs file is read, so its name is the file's own, with no placeholder (§13.8)
+
+error[SE0261]: unknown `inputs` key `rows`
+  --> tests/err/inputs_bad.sim:13:9
+   |
+13 |         rows  = 10;
+   |         ^^^^
+   = note: an `inputs` body takes `file = …;` (§13.8)
+
+3 errors emitted

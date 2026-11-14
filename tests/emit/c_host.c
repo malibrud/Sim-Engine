@@ -16,6 +16,8 @@
  *       channel handle reading what se_get_outputs reads. It writes c_host.csv,
  *       which tests/run.ps1 compares with the C++ exe's table of the same run.
  *    6. The log queue holding the console's closing line.
+ *    7. The inputs file: none by default, one named and read back, `{time}`
+ *       refused, and a settings file that cannot be read refused and standing.
  *
  *  Built with `cl /TC` and run by tests/run.ps1. Exit status 0 means every
  *  check passed.
@@ -44,6 +46,7 @@
     X(se_sim*, se_create, (void))                                              \
     X(void, se_destroy, (se_sim*))                                             \
     X(int, se_load_settings, (se_sim*, const char*, const char*))              \
+    X(int, se_load_settings_file, (se_sim*, const char*))                      \
     X(const char*, se_dump_settings, (se_sim*))                                \
     X(const char*, se_list_signals, (se_sim*))                                 \
     X(int, se_setting_count, (se_sim*))                                        \
@@ -70,6 +73,8 @@
     X(const char*, se_get_log_file, (se_sim*))                                 \
     X(int, se_log_level, (se_sim*, const char*))                               \
     X(int, se_log_path_level, (se_sim*, const char*, const char*))             \
+    X(int, se_inputs_file, (se_sim*, const char*))                             \
+    X(const char*, se_get_inputs_file, (se_sim*))                              \
     X(int, se_init, (se_sim*))                                                 \
     X(const char*, se_error, (se_sim*))                                        \
     X(int, se_set_input, (se_sim*, int, double))                               \
@@ -246,6 +251,22 @@ int main(int argc, char** argv) {
     }
 
     p_se_destroy(s);
+
+    /* ---- 7. the inputs file -------------------------------------------- */
+    {
+        se_sim* t = p_se_create();
+        check(same(p_se_get_inputs_file(t), ""), "no inputs file unless one is named");
+        check(p_se_inputs_file(t, "drive.csv") && same(p_se_get_inputs_file(t), "drive.csv"),
+              "an inputs file, named and read back");
+        check(has(p_se_dump_settings(t), "inputs {\n    file = \"drive.csv\";\n}"), "and dumped");
+        check(!p_se_inputs_file(t, "drive-{time}.csv"), "{time} in its name is refused");
+        check(has(p_se_error(t), "`{time}` names a file the run writes"), "and se_error says why");
+        check(!p_se_load_settings_file(t, "no_such.settings"), "an unreadable settings file is refused");
+        check(has(p_se_error(t), "cannot read no_such.settings"), "and se_error says so");
+        check(!p_se_load_settings(t, "", "after"), "the refusal stands");
+        p_se_destroy(t);
+    }
+
     p_se_destroy(NULL);
     FreeLibrary(dll);
     if (failures == 0) printf("c_host: all checks passed\n");

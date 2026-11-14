@@ -123,9 +123,12 @@ private:
 
     // ─── Sim file ────────────────────────────────────────────────────────────
     bool parse_sim_entry(ast::SimFile& out);
-    void file_name_check(const std::string& name, Loc at);   // SE0268 (§13.5)
+    // SE0268 (§13.5). `read`: an inputs file's name (§13.8), which takes no
+    // placeholder at all.
+    void file_name_check(const std::string& name, Loc at, bool read = false);
     bool parse_record_block(ast::RecordBlock& out);
     bool parse_log_block(ast::LogBlock& out);
+    bool parse_inputs_block(ast::InputsBlock& out);
 
     const Source& src_;
     Diagnostics& diag_;

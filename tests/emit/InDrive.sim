@@ -1,0 +1,8 @@
+// §13.8 — root inputs driven from a CSV table. See lib/indrive/InDrive.se;
+// tests/emit/inputs_host.cpp writes the tables and checks what each tick saw.
+sim InDrive {
+    root: indrive.InDrive {};
+
+    step:     10 (ms);
+    duration: 1 (s);
+}

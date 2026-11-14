@@ -2644,6 +2644,100 @@ if (-not $cl) {
         }
     }
 
+    # SPEC 13.8 -- root inputs from a CSV table. tests/emit/inputs_host.cpp
+    # writes its tables and checks every rule against InDrive, which has a
+    # root input of every kind, each echoed to an output: interpolation and
+    # holds, steps, units, the file's end, the refusals, and where a relative
+    # name is found.
+    if ($emitDirs.ContainsKey('InDrive')) {
+        $inDir = $emitDirs['InDrive']
+        Copy-Item (Join-Path $root 'tests\emit\inputs_host.cpp') $inDir -Force
+        Push-Location $inDir
+        $out = (& cl /nologo /std:c++20 /EHsc /W4 /permissive- /utf-8 /O2 /MD `
+                    /D_CRT_SECURE_NO_WARNINGS /Fe:inputs_host.exe inputs_host.cpp 2>&1 | Out-String)
+        $built = ($LASTEXITCODE -eq 0 -and $out -notmatch 'warning')
+        $said = ''
+        $ran = $false
+        if ($built) {
+            $said = (& '.\inputs_host.exe' 2>&1 | Out-String)
+            $ran = ($LASTEXITCODE -eq 0)
+        }
+        Pop-Location
+        if ($built -and $ran) {
+            Write-Host "ok   tests/emit/inputs_host.cpp : root inputs driven from a CSV table" -ForegroundColor Green
+            $script:pass++
+        } else {
+            Write-Host "FAIL tests/emit/inputs_host.cpp" -ForegroundColor Red
+            if (-not $built) { Write-Host $out } else { Write-Host $said }
+            $script:fail++
+        }
+    }
+
+    # SPEC 13.8 -- a recorded run replays. The drivetrain exe is driven by a
+    # hand-written table (a ramp, a step, a km/h column), recording its own
+    # inputs at every tick; then that recording drives a second run. The
+    # inputs must come back as recorded, the model columns must agree to the
+    # recorder's 9 digits, the table must end the run at 3 s where
+    # sim.duration says 5, and the zero-input warning must be gone.
+    if ($emitDirs.ContainsKey('drivetrain')) {
+        $dtDir = $emitDirs['drivetrain']
+        [IO.File]::WriteAllText((Join-Path $dtDir 'ramp.csv'),
+            "time (s),axle_torque [N*m],ground_speed [km/h]`n0,0,0`n1,200,18`n1,300,18`n3,300,36`n")
+        foreach ($n in 1, 2) {
+            [IO.File]::WriteAllText((Join-Path $dtDir "replay$n.settings"),
+                ("record {`n    clear;`n    file  = `"replay$n.csv`";`n    every = 1;`n" +
+                 "    axle_torque;`n    ground_speed;`n    whl.state.omega;`n    tc.out.torque_cut;`n}`n"))
+        }
+        Push-Location $dtDir
+        $said1 = (& '.\build\release\bin\Drivetrain.exe' --inputs ramp.csv --settings replay1.settings 2>&1 | Out-String)
+        $code1 = $LASTEXITCODE
+        $said2 = (& '.\build\release\bin\Drivetrain.exe' --settings replay2.settings --inputs replay1.csv 2>&1 | Out-String)
+        $code2 = $LASTEXITCODE
+        $a = @(); $b = @()
+        if (Test-Path 'replay1.csv') { $a = @(Get-Content 'replay1.csv') }
+        if (Test-Path 'replay2.csv') { $b = @(Get-Content 'replay2.csv') }
+        Pop-Location
+        $why = @()
+        if ($code1 -ne 0 -or $code2 -ne 0) { $why += "exit codes $code1, $code2" }
+        if (($said1 + $said2) -match 'nothing drives the root inputs') { $why += 'the zero-input warning is still printed' }
+        if ($a.Count -ne 3002 -or $b.Count -ne 3002) { $why += ("rows " + $a.Count + " and " + $b.Count + ", want 3002 (a header, 0 to 3 s)") }
+        if ($why.Count -eq 0) {
+            if (-not $a[3001].StartsWith('3,')) { $why += ("the last row is " + $a[3001]) }
+            if (-not $a[1001].StartsWith('1,300,5,')) { $why += ("at 1 s, the step and 18 km/h as 5 m/s: " + $a[1001]) }
+            $worst = 0.0
+            for ($i = 1; $i -lt $a.Count -and $why.Count -eq 0; $i++) {
+                $x = $a[$i].Split(','); $y = $b[$i].Split(',')
+                if (($x[0..2] -join ',') -ne ($y[0..2] -join ',')) { $why += "row ${i}: inputs differ"; break }
+                foreach ($c in 3, 4) {
+                    # The same text is the same value, and that covers an
+                    # `inf`, which the model's torque cut reaches on the
+                    # first tick and [double] does not read.
+                    if ($x[$c] -eq $y[$c]) { continue }
+                    $p = 0.0; $q = 0.0
+                    $inv = [Globalization.CultureInfo]::InvariantCulture
+                    $any = [Globalization.NumberStyles]::Float
+                    if (-not ([double]::TryParse($x[$c], $any, $inv, [ref]$p) -and
+                              [double]::TryParse($y[$c], $any, $inv, [ref]$q))) {
+                        $why += ("row ${i}: " + $x[$c] + " replays as " + $y[$c]); break
+                    }
+                    $e = [Math]::Abs($p - $q) / (1.0 + [Math]::Abs($p))
+                    if ($e -gt $worst) { $worst = $e }
+                }
+            }
+            if ($worst -gt 1e-6) { $why += ("model columns differ by " + $worst.ToString('E2')) }
+        }
+        if ($why.Count -eq 0) {
+            Write-Host ("ok   build/emit/drivetrain --inputs : a recorded run replays, model columns within " +
+                        $worst.ToString('E2')) -ForegroundColor Green
+            $script:pass++
+        } else {
+            Write-Host ("FAIL build/emit/drivetrain --inputs : " + ($why -join '; ')) -ForegroundColor Red
+            Write-Host $said1
+            Write-Host $said2
+            $script:fail++
+        }
+    }
+
     # tests/emit/two_models.cpp includes two public headers in one TU and
     # links both implementations, each of which carries the engine runtime.
     if ($emitDirs.ContainsKey('drivetrain') -and $emitDirs.ContainsKey('Decay')) {

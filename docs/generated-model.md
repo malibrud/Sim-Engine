@@ -31,7 +31,7 @@ A host makes four kinds of call, in this order.
 
 | Phase | Host calls | What happens |
 |---|---|---|
-| Configure | `Sim()`, `settings()`, `load_settings()`, `dump_settings()`, `list_signals()`, `get()` / `set()`, the channel and log calls | Settings, initial-condition overrides, the run's length, the recorded channels and the log are collected. No node code runs. |
+| Configure | `Sim()`, `settings()`, `load_settings()`, `load_settings_file()`, `dump_settings()`, `list_signals()`, `get()` / `set()`, the channel, log and inputs-file calls | Settings, initial-condition overrides, the run's length, the recorded channels, the log and the inputs file are collected. No node code runs. |
 | Start | `init()` | Settings are finalized, initial conditions are written, and every node's `init()` runs. |
 | Step | `inputs()`, `tick()`, `outputs()`, `done()`, `sync_realtime()`, `read()`, `log_next()` | One `tick()` samples the model at the current time and advances it one step. It never waits; `sync_realtime()` is how a host keeps pace with wall time. |
 | Finish | `finish()` | Every node's `final()` runs, the recording and log close, and the exit code is returned. |
@@ -250,19 +250,57 @@ Two calls watch a run without changing it, and work before or after `init()`:
   no console, such as a DLL inside another program. The log file is not
   affected.
 
+### Inputs from a file
+
+The root inputs can come from a CSV table instead of from the host
+([§13.8](../SPECIFICATION.md#138-driving-the-root-inputs-from-a-file)):
+
+```
+inputs { file = "drive.csv"; }
+```
+
+```
+time (s), axle_torque [N*m], ground_speed [km/h]
+0,        0,                 0
+2,        250,               36
+4,        400,               90
+```
+
+- **Columns are matched by name**, records flattened as `ws.speed`. The first
+  column is the time. Header units are converted, and a missing one is refused
+  for an input with a dimension. A column that is not a root input is ignored,
+  and one info line names it, so a table the run recorded drives a run as it
+  stands.
+- **A double is interpolated**, and an int, a bool or a finite input holds the
+  last row. Two rows at one time make a step: the later row applies from that
+  time.
+- **The table's columns win.** Each `tick()` writes them over whatever the
+  host wrote to those inputs. An input the table doesn't name stays the
+  host's, and one info line at `init()` says which is which.
+- **The table must start by t = 0, and its end ends the run** if it comes
+  before `sim.duration`. `tick_count()` reports the shorter length once
+  `init()` has read the table, and the run ends with reason `completed`.
+- **A relative name** in a file loaded with `load_settings_file()` (as
+  `--settings` loads them) is found beside that file. From anywhere else it
+  is relative to the working directory. The dump writes the name as joined.
+
+`inputs_file()` sets and reads the name one call at a time. `--inputs FILE` on
+the generated executable is shorthand for the section.
+
 ## 5. Starting the run
 
 `sim.init()` does the following, in order.
 
 1. Configures logging, as configuration left it ([section 4](#4-what-is-recorded-and-logged)).
 2. Finalizes the settings ([section 2](#what-is-fixed-and-when)).
-3. If a configuration failure stands, stops here. No node runs.
-4. Writes every state's initial value (layers 1 and 2 above).
-5. Opens the recording, if any channel is selected.
-6. Calls each node's `init()` in elaboration order, stopping if one halts the run.
+3. Reads the inputs file, if one is named ([section 4](#inputs-from-a-file)).
+4. If a configuration failure stands, stops here. No node runs.
+5. Writes every state's initial value (layers 1 and 2 above).
+6. Opens the recording, if any channel is selected.
+7. Calls each node's `init()` in elaboration order, stopping if one halts the run.
 
-`init()` returns false if a load was refused or a node halted the run. `error()`
-says why.
+`init()` returns false if a load was refused, the inputs file could not drive
+the model, or a node halted the run. `error()` says why.
 
 No output has been computed yet. The first values appear during the first
 `tick()`.
@@ -275,7 +313,7 @@ One call to `sim.tick()` at index *k*, with *t*[k] = *k* · `step`:
 
 | # | Step | Called | Runs |
 |---|---|---|---|
-| 1 | Set the time | | |
+| 1 | Set the time, and write an inputs file's columns over `inputs()` | | |
 | 2 | Propagate outputs | `output()` | Every node, in topological order |
 | 3 | Jump map and per-tick work | `next()` | Every node that defines it, in any order, unless the run has already halted |
 | 4 | Record | | If this is a recording tick |
@@ -286,7 +324,8 @@ One call to `sim.tick()` at index *k*, with *t*[k] = *k* · `step`:
 The first `tick()` also starts the clock that `sync_realtime()` measures from.
 Nothing in the tick waits on wall time.
 
-The host writes `inputs()` before calling `tick()`. `outputs()` afterwards hold
+The host writes `inputs()` before calling `tick()`, and an inputs file's columns
+are written over the inputs they name in step 1. `outputs()` afterwards hold
 y[k], the values computed in step 2. Steps 2 to 4 all see the state as the tick
 found it, and every state moves below the exit. That gives two guarantees:
 
@@ -410,7 +449,7 @@ A run ends in one of these ways, and `tick()` then sets `done()`:
 
 | Cause | `ctx.reason` |
 |---|---|
-| The `tick_count()` tick | `completed` |
+| The `tick_count()` tick: the end of `sim.duration`, or of the inputs file if it ends first | `completed` |
 | `sim.stop(...)` | `stopped` |
 | `sim.abort(...)` | `aborted` |
 | A failed `sim.require(...)`, or a configuration failure | `error` |
@@ -472,6 +511,10 @@ is the `Sim` member of the same name, and runs at the same point in a run.
   caller.
 - **One error for both sides.** `se_error` reports a refusal made by the C
   layer, such as a bad port index, as well as the model's own.
+- **Files by name.** `se_load_settings_file` reads a settings file and finds
+  the inputs file it names beside it. `se_inputs_file` names the table that
+  drives the root inputs, so a host can replay a recorded run without writing
+  a single input itself.
 
 ## Further reading
 
@@ -485,4 +528,5 @@ is the `Sim` member of the same name, and runs at the same point in a run.
 | The tick | [§9.6](../SPECIFICATION.md#96-the-tick) |
 | Settings layers and initial conditions | [§13.3](../SPECIFICATION.md#133-settings-inflow), [§13.4](../SPECIFICATION.md#134-initial-conditions) |
 | Loading settings into a compiled model | [§14.1](../SPECIFICATION.md#141-the-third-carrier-a-compiled-model) |
+| Inputs from a file | [§13.8](../SPECIFICATION.md#138-driving-the-root-inputs-from-a-file) |
 | The C interface | [§14.2](../SPECIFICATION.md#142-the-c-interface) |

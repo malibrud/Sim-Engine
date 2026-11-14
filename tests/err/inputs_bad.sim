@@ -1,0 +1,15 @@
+// SE0269: an inputs file is read, not written, so `{time}`, which makes a
+// written name unique, has nothing to do in its name. Any other brace is
+// SE0268, as in every file name, and `file` is the body's only key (SE0261).
+// §13.8
+sim InputsBad {
+    root:     tests.Vehicle;
+    step:     1 (ms);
+    duration: 1 (s);
+
+    inputs: {
+        file  = "drive-{time}.csv";
+        file  = "drive-{run}.csv";
+        rows  = 10;
+    }
+}

@@ -64,16 +64,10 @@ and the node code written directly in C++.
 - **The specification is a draft** (version 0.1).
   [Appendix C](SPECIFICATION.md#appendix-c--known-gaps-and-open-issues) lists
   the gaps and open questions deliberately left in it.
-- **The generated interface is mid-redesign.** It is being built out in phases,
-  listed under [Roadmap](#roadmap). Among the pieces that do not exist yet:
-  choosing recorded signals at run time, and a C interface / DLL build.
-- **Two copies of one model running at once share a log file.** Each `Sim`
-  has its own run state and its own log, but both copies open the file their
-  `.sim` names, and the run-time configuration cannot change that path yet.
+- **The generated interface is still being built out**, in the phases listed
+  under [Roadmap](#roadmap). The next one packages a model as an FMU.
 - **Windows and MSVC are the only toolchain actually exercised.** `build.sh` is
   generated for GCC/Clang but has not been run on Linux or macOS.
-- **The sim file cannot drive a model's root inputs.** A model with root inputs
-  runs with those inputs at zero unless a host program writes them.
 - **`examples/drivetrain/` holds stale files.** `Sim.generated.cpp`,
   `Sim.units.txt` and `state_ref.hpp` there are hand-written illustrations from
   before the generator existed, and they no longer match its output. Run
@@ -241,7 +235,24 @@ cd out\drivetrain
 
 `--settings` takes a list, `--settings default.settings, outputs.settings`, and
 each file edits what the one before it left. `--dump-settings` prints what a run
-would use, in a form `--settings` reads back. Read
+would use, in a form `--settings` reads back.
+
+Left alone, the drivetrain's root inputs stay at zero. A CSV table can drive
+them instead: a time column, then a column per input, with units that are
+converted. A double is interpolated between rows, and the run ends where the
+table does:
+
+```powershell
+Set-Content drive.csv "time (s),axle_torque [N*m],ground_speed [km/h]", "0,0,0", "2,250,36", "4,400,90"
+```
+
+```powershell
+.\build\release\bin\Drivetrain.exe --inputs drive.csv
+```
+
+A table the run recorded drives a run the same way, so a recorded run can be
+replayed. `--inputs` is shorthand for an `inputs { file = "drive.csv"; }`
+section, which a settings file can carry too. Read
 `out\drivetrain\Drivetrain.hpp` and `out\drivetrain\main.cpp` to see what a
 generated model looks like from outside.
 
@@ -341,8 +352,8 @@ directives, so C++ compiler errors point at the `.se` source.
 ## Using a generated model from your own program
 
 Include the header and do four things in order. `main.cpp` is a complete
-example. This one also drives the root inputs, which the sim file has no syntax
-for:
+example. This one also drives the root inputs itself, where `main.cpp` leaves
+them to an inputs file:
 
 ```cpp
 #include "Drivetrain.hpp"
@@ -368,15 +379,17 @@ suite compiles and runs.
 
 `settings()` reaches the root node's settings. `load_settings()` takes the same
 text as a `.settings` file: any setting or initial condition by path, with units
-checked and converted, `sim.duration`, and `record { }` and `log { }` sections
-that choose the recorded channels, the CSV, and the log. `dump_settings()` writes
-the whole configuration back out in that form, and `list_signals()` writes every
-channel as a `record` section to edit. The same is available one key at a time,
-with structured answers: `settings_list()`, `get()` and `set()`;
-`channels_list()`, `record()`, `unrecord()` and `record_clear()`;
-`record_file()`, `record_every()`, `log_file()` and `log_level()`. The generated
-executable takes `--settings FILE...`, `--set PATH=VALUE`, `--duration TIME`,
-`--dump-settings` and `--list-signals`.
+checked and converted, `sim.duration`, and `record { }`, `log { }` and
+`inputs { }` sections that choose the recorded channels, the CSV, the log, and
+the table that drives the root inputs. `load_settings_file()` reads a file, and
+finds the inputs table it names beside it. `dump_settings()` writes the whole
+configuration back out in that form, and `list_signals()` writes every channel
+as a `record` section to edit. The same is available one key at a time, with
+structured answers: `settings_list()`, `get()` and `set()`; `channels_list()`,
+`record()`, `unrecord()` and `record_clear()`; `record_file()`,
+`record_every()`, `log_file()`, `log_level()` and `inputs_file()`. The
+generated executable takes `--settings FILE...`, `--set PATH=VALUE`,
+`--inputs FILE`, `--duration TIME`, `--dump-settings` and `--list-signals`.
 
 A host that watches a run can read any channel live through
 `channel_handle()` and `read()`. With `log_capture()` and `log_next()`, the
@@ -559,10 +572,13 @@ In rough order. Each step is decided on its own, so this list changes.
    channels and the log, with a key-value API beside it.~~ Done.
 5. ~~**A C interface and a `dynamic` build.** A DLL / shared object callable by
    name from C, C#, Python, LabVIEW and others.~~ Done.
-6. **Later:** driving root inputs from a CSV file (`--inputs`); packaging as an
-   FMI co-simulation FMU; clean-ups to the generated code's readability; and
-   the open items in the spec's Appendix C, such as display units for recording
-   and field-level wires.
+6. ~~**Inputs from a file.** A run's root inputs driven from a CSV table, an
+   `inputs` section in the settings format, and `--inputs` (§13.8), so a
+   recorded run replays.~~ Done.
+7. **An FMU.** Packaging a model as an FMI co-simulation FMU.
+8. **Later:** clean-ups to the generated code's readability, and the open items
+   in the spec's Appendix C, such as display units for recording and
+   field-level wires.
 
 ---
 

@@ -136,6 +136,25 @@ inline std::string file_pattern_error(const std::string& name) {
     return "";
 }
 
+// An inputs file is read, not written (section 13.8), so `{time}`, which
+// makes a written name unique, has nothing to do in its name.
+inline std::string inputs_file_error(const std::string& name) {
+    if (name.find("{time}") != std::string::npos)
+        return "`{time}` names a file the run writes, and an inputs file is read (section 13.8)";
+    if (name.find_first_of("{}") != std::string::npos)
+        return "a brace in the name: an inputs file is read, so its name is the file's own, "
+               "with no placeholder (section 13.8)";
+    return "";
+}
+
+// `name` as a source in directory `base` means it (section 13.8): joined,
+// unless it is absolute or there is no directory to join.
+inline std::string beside(const std::string& base, const std::string& name) {
+    const bool absolute = !name.empty() && (name[0] == '/' || name[0] == '\\' ||
+                                            (name.size() > 1 && name[1] == ':'));
+    return base.empty() || name.empty() || absolute ? name : base + name;
+}
+
 // Now, as `{time}` writes it: local time, YYYYMMDD-HHMMSS.
 inline std::string time_stamp() {
     const std::time_t now = std::time(nullptr);
@@ -1338,9 +1357,10 @@ struct Assignment {
 // ─── The run's own configuration (section 13.3) ─────────────────────────────
 //
 // What a source says about the run rather than the model: which channels are
-// recorded, where and how often (section 13.5), and the log (section 13.7).
-// The .sim's entries are where a run starts; each `record` or `log` section
-// edits that, in order, and a later source edits what an earlier one left.
+// recorded, where and how often (section 13.5), the log (section 13.7), and
+// the file that drives the root inputs (section 13.8). The .sim's entries are
+// where a run starts; each section edits that, in order, and a later source
+// edits what an earlier one left.
 
 // One recordable channel. An array state is one row, its elements named by
 // index at the extent configuration settles.
@@ -1374,6 +1394,7 @@ struct RunConfig {
     std::string log_file;                 // empty: the console only
     Level level = Level::Info;
     std::vector<std::pair<std::string, Level>> levels;
+    std::string inputs_file;              // empty: the host drives every input (section 13.8)
 
     // Adding a channel that is already selected keeps its place; removing one
     // that is not does nothing, so a "turn these off" source layers on any
@@ -1403,7 +1424,9 @@ struct RunConfig {
 // One edit a source makes to it. A source's edits are kept, in order, until
 // the whole source has been checked, so a refused source changes nothing.
 struct RunEdit {
-    enum class Kind : unsigned char { Clear, Add, Remove, File, Every, LogFile, LogLevel, PathLevel };
+    enum class Kind : unsigned char {
+        Clear, Add, Remove, File, Every, LogFile, LogLevel, PathLevel, InputsFile
+    };
     Kind kind = Kind::Clear;
     Column column{0, 0, std::string()};
     std::string text;        // a file name, or the path a level is for
@@ -1421,6 +1444,7 @@ inline void apply(RunConfig& c, const RunEdit& e) {
         case RunEdit::Kind::LogFile:   c.log_file = e.text; break;
         case RunEdit::Kind::LogLevel:  c.level = e.level; break;
         case RunEdit::Kind::PathLevel: c.path_level(e.text, e.level); break;
+        case RunEdit::Kind::InputsFile: c.inputs_file = e.text; break;
     }
 }
 
@@ -1522,16 +1546,19 @@ inline bool channel_text(const Tables& t, const char* text, Column& out, std::st
     R"SERT(// ─── The settings source, read by a compiled model (section 14.1) ───────────
 
 // One source as the loader reads it: bindings of a number with an optional
-// unit, or a bare name for an enumerator, and the run's `record` and `log`
-// sections. Section 14.1 accepts nothing more at run time, and the reader says
-// so rather than evaluating a section-7 expression.
+// unit, or a bare name for an enumerator, and the run's `record`, `log` and
+// `inputs` sections. Section 14.1 accepts nothing more at run time, and the
+// reader says so rather than evaluating a section-7 expression.
 class SourceReader {
 public:
     // `located` false: a fault names only the path, as one key-value call
-    // reports it, with no origin and line.
-    SourceReader(const char* text, const char* origin, bool located = true)
+    // reports it, with no origin and line. `base`: the directory of the file
+    // the text came from, with its trailing separator, where a relative
+    // inputs file is found (section 13.8); empty for the working directory.
+    SourceReader(const char* text, const char* origin, bool located = true,
+                 const std::string& base = std::string())
         : s_(text ? text : ""), origin_(origin && *origin ? origin : "settings"),
-          located_(located) {
+          located_(located), base_(base) {
         if (s_.compare(0, 3, "\xEF\xBB\xBF") == 0) i_ = 3;   // a UTF-8 BOM, as editors save one
     }
 
@@ -1546,7 +1573,10 @@ public:
             if (i_ >= s_.size()) break;
             std::string which;
             if (at_section(which)) {
-                if (!(which == "record" ? record_section(t, run) : log_section(run))) return false;
+                const bool ok = which == "record" ? record_section(t, run)
+                                : which == "log"  ? log_section(run)
+                                                  : inputs_section(run);
+                if (!ok) return false;
                 continue;
             }
             Assignment a{};
@@ -1693,13 +1723,13 @@ private:
         return fail(shown, std::string("expected `;` after ") + what);
     }
 
-    // `record` or `log`, then `{`: a section (section 14). Anything else, even
-    // a path that starts `record.`, is a binding.
+    // `record`, `log` or `inputs`, then `{`: a section (section 14). Anything
+    // else, even a path that starts `record.`, is a binding.
     bool at_section(std::string& which) {
         const std::size_t save_i = i_;
         const int save_line = line_;
         std::string w;
-        if (ident(w) && (w == "record" || w == "log")) {
+        if (ident(w) && (w == "record" || w == "log" || w == "inputs")) {
             const std::string saved_err = err_;
             if (blank() && i_ < s_.size() && s_[i_] == '{') {
                 ++i_;
@@ -1852,6 +1882,38 @@ private:
         }
     }
 
+    // Section 13.8: `file = "...";`, found beside the source when it came
+    // from a file.
+    bool inputs_section(std::vector<RunEdit>& run) {
+        for (;;) {
+            if (!blank()) return false;
+            at_line_ = line_;
+            if (i_ >= s_.size()) return fail("", "expected `}` to close the `inputs` section");
+            if (s_[i_] == '}') {
+                ++i_;
+                return true;
+            }
+            std::string w;
+            if (!ident(w)) return fail("", "expected `file`");
+            if (!blank()) return false;
+            if (w != "file")
+                return fail(w, "not an `inputs` key; an `inputs` section takes `file = ...;` "
+                               "(section 13.8)");
+            if (i_ >= s_.size() || s_[i_] != '=') return fail(w, "expected `=`");
+            ++i_;
+            if (!blank()) return false;
+            RunEdit e;
+            e.kind = RunEdit::Kind::InputsFile;
+            if (!string_lit(e.text))
+                return fail(w, "expected a file name, in quotes; \"\" for none");
+            const std::string bad = inputs_file_error(e.text);
+            if (!bad.empty()) return fail(w, bad);
+            e.text = beside(base_, e.text);
+            if (!semi(w, "the file name")) return false;
+            run.push_back(e);
+        }
+    }
+
     bool binding(const Tables& t, Assignment& a) {
         const SettingRow* rows = t.rows;
         const std::size_t n = t.n_rows;
@@ -2000,6 +2062,7 @@ private:
     int at_line_ = 1;
     std::string err_;
     bool located_ = true;
+    std::string base_;
 };
 
 )SERT"
@@ -2062,7 +2125,7 @@ inline std::string dump_source(const char* title, const SettingRow* rows, std::s
 
     std::string out = std::string("// ") + title +
                       ": how the run is configured (section 14.1): every setting and initial\n"
-                      "// condition, then the run's length, the recording and the log.\n";
+                      "// condition, then the run's length, the recording, the log and the inputs.\n";
     auto section = [&](const char* head, const std::vector<Line>& ls, std::size_t width) {
         if (ls.empty()) return;
         out += std::string("\n// ") + head + "\n";
@@ -2099,6 +2162,8 @@ inline std::string dump_run(const RunConfig& c) {
                    level_name(p.second) + ";\n";
         out += "    }\n";
     }
+    out += "}\n\n// the inputs (section 13.8)\ninputs {\n";
+    out += "    file = " + source_string(c.inputs_file) + ";\n";
     return out + "}\n";
 }
 
@@ -2133,6 +2198,268 @@ inline std::string list_source(const char* title, const ChannelRow* rows, std::s
         out += "    " + l.path + std::string(w - l.path.size(), ' ') + "   // [" + l.label + "]\n";
     return out + "}\n";
 }
+
+)SERT"
+    R"SERT(// ─── Inputs from a file (section 13.8) ──────────────────────────────────────
+//
+// A CSV table that drives root inputs. It is read whole when the run starts,
+// its columns matched to the inputs by name and converted to their canonical
+// units, and then sampled once a tick: a double is interpolated between rows,
+// and an int, a bool or a finite input holds the last row at or before the
+// tick. The inputs are SettingRows, which already carry what a column is
+// checked against.
+
+class InputTable {
+public:
+    // Reads `path` for the inputs in `rows`. False, with `why` naming the file
+    // and where in it, when the table cannot drive them.
+    bool load(const std::string& path, const SettingRow* rows, std::size_t n, double step,
+              std::string& why) {
+        *this = InputTable();
+        file_ = path;
+        step_ = step;
+        tol_ = step * 1e-3;   // a row meets a tick within a thousandth of a step
+        std::string text;
+        if (!read_all(path, text)) return fail(why, 0, "", "cannot read it");
+        std::size_t at = text.compare(0, 3, "\xEF\xBB\xBF") == 0 ? 3 : 0;
+        int line = 0;
+        std::vector<std::string> head, cells;
+        std::vector<int> drives;   // per field: the input column it fills, or -1
+        bool have_head = false;
+        Unit second, time_unit;
+        UnitParser("s").parse(second);
+        while (at < text.size()) {
+            std::size_t end = text.find('\n', at);
+            if (end == std::string::npos) end = text.size();
+            std::string l = text.substr(at, end - at);
+            at = end + 1;
+            ++line;
+            if (!l.empty() && l.back() == '\r') l.pop_back();
+            if (l.find_first_not_of(" \t") == std::string::npos) continue;
+            if (!have_head) {
+                have_head = true;
+                split(l, head);
+                if (!header(head, rows, n, second, time_unit, drives, why, line)) return false;
+                continue;
+            }
+            split(l, cells);
+            if (cells.size() != head.size())
+                return fail(why, line, "", std::to_string(cells.size()) + " fields where the header has " +
+                                               std::to_string(head.size()));
+            double t = 0.0;
+            if (!number(cells[0], t)) return fail(why, line, head[0], "`" + cells[0] + "` is not a number");
+            t = unit_convert(t, time_unit, second);
+            if (!times_.empty() && t < times_.back()) {
+                std::ostringstream o;
+                o << "the time goes backwards, from " << times_.back() << " s to " << t << " s";
+                return fail(why, line, "", o.str());
+            }
+            times_.push_back(t);
+            for (std::size_t f = 1; f < cells.size(); ++f) {
+                if (drives[f] < 0) continue;
+                double v = 0.0;
+                const std::string bad = value(cells[f], cols_[static_cast<std::size_t>(drives[f])], rows, v);
+                if (!bad.empty()) return fail(why, line, head[f], bad);
+                values_.push_back(v);
+            }
+        }
+        if (!have_head) return fail(why, 0, "", "it is empty; the first line is the header, `time (s), ...`");
+        if (times_.empty()) return fail(why, 0, "", "it has a header and no rows");
+        if (times_.front() > tol_) {
+            std::ostringstream o;
+            o << "it starts at " << times_.front() << " s, and the run starts at 0 (section 13.8)";
+            return fail(why, 0, "", o.str());
+        }
+        last_tick_ = static_cast<std::uint64_t>(std::floor((times_.back() + tol_) / step_));
+        active_ = true;
+        return true;
+    }
+
+    bool active() const { return active_; }
+    const std::string& file() const { return file_; }
+    std::size_t columns() const { return cols_.size(); }
+    std::size_t column_row(std::size_t c) const { return cols_[c].row; }
+    const std::vector<std::string>& ignored() const { return ignored_; }
+    std::uint64_t last_tick() const { return last_tick_; }   // at or before the last row
+
+    // Each column's value at tick k, canonical unit. Ticks only go forward,
+    // so the search starts where the last one ended. At a step, two rows at
+    // one time, the later row is the one at or before the tick.
+    void at(std::uint64_t k, double* out) {
+        const double t = static_cast<double>(k) * step_;
+        const std::size_t rows = times_.size(), nc = cols_.size();
+        while (row_ + 1 < rows && times_[row_ + 1] <= t + tol_) ++row_;
+        const double t0 = times_[row_];
+        const bool on_row = std::fabs(t0 - t) <= tol_ || row_ + 1 == rows;
+        for (std::size_t c = 0; c < nc; ++c) {
+            const double v0 = values_[row_ * nc + c];
+            if (cols_[c].hold || on_row) {
+                out[c] = v0;
+                continue;
+            }
+            const double t1 = times_[row_ + 1], v1 = values_[(row_ + 1) * nc + c];
+            out[c] = v0 + (v1 - v0) * ((t - t0) / (t1 - t0));
+        }
+    }
+
+private:
+    struct Col {
+        std::size_t row;     // the input it drives
+        bool hold;           // int, bool, finite: no interpolation
+        Unit from, to;       // the header's unit and the input's
+        bool convert;
+    };
+
+    bool fail(std::string& why, int line, const std::string& column, const std::string& m) {
+        why = file_ + (line ? ":" + std::to_string(line) : std::string()) + ": " +
+              (column.empty() ? "" : "column `" + column + "`: ") + m;
+        return false;
+    }
+
+    static bool read_all(const std::string& path, std::string& out) {
+        std::FILE* f = std::fopen(path.c_str(), "rb");
+        if (!f) return false;
+        char buf[65536];
+        for (std::size_t got; (got = std::fread(buf, 1, sizeof buf, f)) > 0;) out.append(buf, got);
+        std::fclose(f);
+        return true;
+    }
+
+    static std::string trim(const std::string& s) {
+        const std::size_t a = s.find_first_not_of(" \t");
+        if (a == std::string::npos) return "";
+        std::string t = s.substr(a, s.find_last_not_of(" \t") - a + 1);
+        if (t.size() >= 2 && t.front() == '"' && t.back() == '"') t = t.substr(1, t.size() - 2);
+        return t;
+    }
+
+    static void split(const std::string& l, std::vector<std::string>& out) {
+        out.clear();
+        std::size_t at = 0;
+        for (;;) {
+            const std::size_t comma = l.find(',', at);
+            out.push_back(trim(l.substr(at, comma == std::string::npos ? std::string::npos : comma - at)));
+            if (comma == std::string::npos) return;
+            at = comma + 1;
+        }
+    }
+
+    // The whole cell, as a finite number.
+    static bool number(const std::string& s, double& out) {
+        if (s.empty()) return false;
+        char* end = nullptr;
+        out = std::strtod(s.c_str(), &end);
+        return end && *end == '\0' && std::isfinite(out);
+    }
+
+    // `name [unit]` or `name (unit)`: the name, and the bracket's text.
+    static void name_unit(const std::string& h, std::string& name, std::string& unit, bool& has) {
+        name = h;
+        unit.clear();
+        has = false;
+        if (h.empty() || (h.back() != ']' && h.back() != ')')) return;
+        const char open = h.back() == ']' ? '[' : '(';
+        int depth = 0;
+        for (std::size_t k = h.size(); k-- > 0;) {
+            if (h[k] == h.back()) ++depth;
+            if (h[k] == open && --depth == 0) {
+                name = trim(h.substr(0, k));
+                unit = trim(h.substr(k + 1, h.size() - k - 2));
+                has = true;
+                return;
+            }
+        }
+    }
+
+)SERT"
+    // Inside InputTable: the split only has to keep each piece under the cap.
+    R"SERT(    bool header(const std::vector<std::string>& head, const SettingRow* rows, std::size_t n,
+                const Unit& second, Unit& time_unit, std::vector<int>& drives, std::string& why,
+                int line) {
+        std::string name, unit;
+        bool has = false;
+        name_unit(head[0], name, unit, has);
+        UnitParser tp(unit);
+        if (name != "time" || !has || !tp.parse(time_unit) || !unit_compatible(time_unit, second))
+            return fail(why, line, head[0], "the first column is the time, with its unit, as `time (s)`");
+        drives.assign(head.size(), -1);
+        for (std::size_t f = 1; f < head.size(); ++f) {
+            name_unit(head[f], name, unit, has);
+            std::size_t r = 0;
+            while (r < n && name != rows[r].path) ++r;
+            if (r == n) {
+                ignored_.push_back(name);
+                continue;
+            }
+            for (const Col& c : cols_)
+                if (c.row == r) return fail(why, line, head[f], "a second column for `" + name + "`");
+            const SettingRow& row = rows[r];
+            Col c{r, row.enumerators || std::strcmp(row.type, "int") == 0 ||
+                         std::strcmp(row.type, "bool") == 0,
+                  Unit{}, Unit{}, false};
+            for (int k = 0; k < 8; ++k) c.to.dim[k] = row.dim[k];
+            c.to.scale = row.scale;
+            c.to.offset = row.offset;
+            const bool dimensioned = std::strcmp(row.unit, "-") != 0;
+            if (row.enumerators) {
+                if (has && !unit.empty() && unit != row.type)
+                    return fail(why, line, head[f], std::string("a finite input's bracket is its type, [") +
+                                                        row.type + "], or nothing");
+            } else if (!has || unit.empty() || unit == "-") {
+                if (dimensioned)
+                    return fail(why, line, head[f], std::string("`") + name + "` needs a unit, as [" +
+                                                        row.unit + "] (section 13.8)");
+            } else {
+                UnitParser p(unit);
+                if (!p.parse(c.from)) return fail(why, line, head[f], p.error());
+                if (!unit_compatible(c.from, c.to))
+                    return fail(why, line, head[f], "incompatible units: [" + unit + "] where [" +
+                                                        row.unit + "] is declared");
+                c.convert = true;
+            }
+            drives[f] = static_cast<int>(cols_.size());
+            cols_.push_back(c);
+        }
+        return true;
+    }
+
+    // One cell for column `c`, checked and converted; "" or why not.
+    std::string value(const std::string& cell, const Col& c, const SettingRow* rows, double& v) {
+        const SettingRow& row = rows[c.row];
+        if (cell.empty()) return "the cell is empty";
+        if (row.enumerators) {
+            const bool by_name = (cell[0] >= 'a' && cell[0] <= 'z') || (cell[0] >= 'A' && cell[0] <= 'Z') ||
+                                 cell[0] == '_';
+            double num = 0.0;
+            if (!by_name && !number(cell, num)) return "`" + cell + "` is not a number";
+            for (std::size_t k = 0; k < row.n_enumerators; ++k)
+                if (by_name ? cell == row.enumerators[k].name
+                            : num == static_cast<double>(row.enumerators[k].value)) {
+                    v = static_cast<double>(row.enumerators[k].value);
+                    return "";
+                }
+            return "`" + cell + "` is not an enumerator of " + row.type;
+        }
+        if (!number(cell, v)) return "`" + cell + "` is not a number";
+        if (c.convert) v = unit_convert(v, c.from, c.to);
+        if (std::strcmp(row.type, "int") == 0 && std::fabs(v - std::floor(v + 0.5)) > 1e-9)
+            return "`" + cell + "` is not a whole number, and `" + row.path + "` is an int";
+        if (std::strcmp(row.type, "int") == 0) v = std::floor(v + 0.5);
+        if (std::strcmp(row.type, "bool") == 0 && v != 0.0 && v != 1.0)
+            return "`" + cell + "` is not 0 or 1, and `" + row.path + "` is a bool";
+        return "";
+    }
+
+    std::string file_;
+    double step_ = 0.0, tol_ = 0.0;
+    std::vector<Col> cols_;
+    std::vector<std::string> ignored_;
+    std::vector<double> times_;    // s
+    std::vector<double> values_;   // row-major, one per column, canonical units
+    std::size_t row_ = 0;          // the last row at or before the last tick sampled
+    std::uint64_t last_tick_ = 0;
+    bool active_ = false;
+};
 
 }  // inline namespace @VER@
 }  // namespace se_rt

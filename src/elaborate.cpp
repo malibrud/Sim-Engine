@@ -3000,10 +3000,12 @@ bool Elaborator::run(const ast::SimFile& sim, const Source& sim_src,
     const ast::SimEntry* root_entry = nullptr;
     const ast::SimEntry* record_entry = nullptr;
     const ast::SimEntry* log_entry = nullptr;
+    const ast::SimEntry* inputs_entry = nullptr;
     for (const ast::SimEntry& e : sim.entries) {
         if (e.key == "root") root_entry = &e;
         else if (e.key == "record") record_entry = &e;
         else if (e.key == "log") log_entry = &e;
+        else if (e.key == "inputs") inputs_entry = &e;
         else if (e.key == "settings")
             load_settings_file(join_file(sim_dir, e.text), sim_src, e.loc, m);
     }
@@ -3133,6 +3135,18 @@ bool Elaborator::run(const ast::SimFile& sim, const Source& sim_src,
             record_layers.push_back({&b, settings_srcs_[i].get()});
         for (const ast::LogBlock& b : settings_asts_[i]->logs)
             log_layers.push_back({&b, settings_srcs_[i].get()});
+    }
+    // §13.8 — the inputs file: one value, the last writer wins. The names are
+    // kept as written, because the run opens them where it runs, not where
+    // this file is.
+    {
+        std::vector<const ast::InputsBlock*> inputs_layers;
+        if (inputs_entry) inputs_layers.push_back(&inputs_entry->inputs);
+        for (std::size_t i = 0; i < settings_asts_.size(); ++i)
+            for (const ast::InputsBlock& b : settings_asts_[i]->inputs) inputs_layers.push_back(&b);
+        m.inputs.present = !inputs_layers.empty();
+        for (const ast::InputsBlock* b : inputs_layers)
+            for (const ast::InputsItem& it : b->items) m.inputs.file = it.file;
     }
     resolve_record(record_layers, m);
     resolve_log(log_layers, m);
