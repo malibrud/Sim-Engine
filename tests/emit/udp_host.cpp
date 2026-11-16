@@ -5,14 +5,17 @@
 //
 //  What a host can rely on:
 //
-//    1. A sender's datagrams arrive, in order, the counter rising.
+//    1. A sender's datagrams arrive, in order, at its rate: at 300 Hz on a
+//       1 kHz model, exactly the steps where floor(k * 0.3) goes up, which
+//       is 4, 3, 3, 4, 3, 3 ... steps apart.
 //    2. A client's datagrams reach the server, and the server's replies come
 //       back to the client: full duplex, over one connected socket.
 //    3. The server knows who it is talking to: `peer` is the client's address
 //       and `peer_port` its port, and before anyone has written both are
 //       empty and the server sends nothing.
-//    4. A sender with no host, a port out of range, and a server on a port
-//       already taken all stop the run at init().
+//    4. A sender with no host, a sender faster than the model, a port out of
+//       range, and a server on a port already taken all stop the run at
+//       init().
 //
 //  Built and run by tests/run.ps1, from the emitted UdpLoop directory. Exit
 //  status 0 means every check passed.
@@ -20,9 +23,11 @@
 #include "UdpLoop.cpp"
 
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace {
 
@@ -39,6 +44,15 @@ bool has(const std::string& text, const std::string& part) {
 }
 
 std::string str(const char* p) { return p ? std::string(p) : std::string("(null)"); }
+
+// Whether UdpSender at `rate` sends on step k of a model at `step`: the same
+// rule, in the same arithmetic, as its next().
+bool sends(std::uint64_t k, double rate, double step) {
+    if (k == 0) return true;
+    const double r = rate * step;
+    return std::floor(static_cast<double>(k) * r + 1e-9) !=
+           std::floor(static_cast<double>(k - 1) * r + 1e-9);
+}
 
 using Sim = udploop::Sim;
 
@@ -65,7 +79,9 @@ int main() {
         check(sim.read(port) == 0.0, "and no peer port");
         check(sim.read(cli) == -1.0, "and nothing has come back to the client");
 
-        int last_rx = -1, rises = 0;
+        // Each datagram carries the step it was sent on, so the distinct values
+        // the receiver shows are the steps the sender sent on.
+        std::vector<int> got;
         bool in_order = true;
         while (!sim.done()) {
             // Loopback is fast but not instant: give each datagram a moment to
@@ -73,18 +89,29 @@ int main() {
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
             sim.tick();
             const int v = static_cast<int>(sim.read(rx));
-            if (v >= 0) {
-                if (v < last_rx) in_order = false;
-                if (v > last_rx) ++rises;
-                last_rx = v;
-            }
+            if (v < 0) continue;
+            if (!got.empty() && v < got.back()) in_order = false;
+            if (got.empty() || v != got.back()) got.push_back(v);
         }
         const int sent = static_cast<int>(sim.read(k));
         check(in_order, "the receiver's counter never goes backwards");
-        check(rises > sent / 2, "most of the sender's datagrams arrived: " + std::to_string(rises) +
-                                    " of " + std::to_string(sent));
-        check(last_rx > sent - 20, "the receiver keeps up: last " + std::to_string(last_rx) +
-                                       ", sent " + std::to_string(sent));
+        std::string off_rate;
+        for (const int v : got)
+            if (!sends(static_cast<std::uint64_t>(v), 300.0, 0.001)) off_rate += " " + std::to_string(v);
+        check(off_rate.empty(), "every datagram was sent on a step the 300 Hz rule picks; not:" +
+                                    off_rate);
+        std::string first;
+        for (int s = 0; s <= 20; ++s)
+            if (sends(static_cast<std::uint64_t>(s), 300.0, 0.001)) first += " " + std::to_string(s);
+        check(first == " 0 4 7 10 14 17 20", "the rule spaces 300 Hz 4, 3, 3 steps apart:" + first);
+        int owed = 0;
+        for (int s = 0; s <= sent; ++s) owed += sends(static_cast<std::uint64_t>(s), 300.0, 0.001);
+        check(static_cast<int>(got.size()) >= owed - 3 && static_cast<int>(got.size()) <= owed,
+              "and about 300 a second arrived: " + std::to_string(got.size()) + " of " +
+                  std::to_string(owed) + " in " + std::to_string(sent) + " steps");
+        check(owed == 1 + (sent * 3) / 10, "the rate is exact over the run, not 250 or 333: " +
+                                               std::to_string(owed) + " in steps 0.." +
+                                               std::to_string(sent));
         const int at_srv = static_cast<int>(sim.read(srv));
         const int back = static_cast<int>(sim.read(cli));
         check(at_srv > sent - 20, "the client's datagrams reach the server: " + std::to_string(at_srv));
@@ -109,6 +136,15 @@ int main() {
         check(has(sim.error(), "UdpSender has no host to send to"), "naming why: " +
                                                                     std::string(sim.error()));
         check(sim.finish() != 0, "and the run is not clean");
+    }
+    {
+        Sim sim;
+        sim.log_capture(true);
+        check(sim.set("tx.rate", 2000.0), "a rate above the model's is a number");
+        check(!sim.init(), "but the sender refuses it");
+        check(has(sim.error(), "0 < rate <= sample_rate at tx"), "as a contract: " +
+                                                                  std::string(sim.error()));
+        sim.finish();
     }
     {
         Sim sim;

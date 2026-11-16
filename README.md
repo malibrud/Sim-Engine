@@ -489,7 +489,7 @@ itself, so no `-I` is needed to use it.
 | `se.sig.ct` | Continuous-time blocks: integrators, first- and second-order systems and low-passes, a sine |
 | `se.sig.dt` | Discrete-time blocks: biquad, Butterworth, integrator, differentiator, second-order low-pass |
 | `se.sig.src` | Sources: constant, step, ramp, sine, square, triangle, sawtooth, rectangular pulse, chirp, PRBS, and uniform, white and pink noise |
-| `se.net` | Non-blocking UDP, datagrams as buffers: `UdpReceiver`, `UdpSender`, and full-duplex `UdpClient` (one fixed peer) and `UdpServer` (replies to whoever wrote last) |
+| `se.net` | Non-blocking UDP, datagrams as buffers: `UdpReceiver`, `UdpSender` (streams at a set rate), and full-duplex `UdpClient` (one fixed peer) and `UdpServer` (replies to whoever wrote last) |
 
 Several nodes carry a `tests { }` section (§6.13): tables of inputs and expected
 outputs that `sec --test` turns into a test program.

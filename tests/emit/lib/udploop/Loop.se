@@ -1,7 +1,8 @@
-// se.net over loopback: a sender streams a counter to a receiver, and a
-// client talks to a server that echoes whatever arrives back to whoever sent
-// it. Decoders turn each received datagram back into the counter, so
-// tests/emit/udp_host.cpp can read through handles what crossed the wire.
+// se.net over loopback: a sender streams a counter to a receiver at 300 Hz,
+// a rate the 1 kHz model does not divide evenly, and a client talks to a
+// server that echoes whatever arrives back to whoever sent it. Decoders turn
+// each received datagram back into the counter, so tests/emit/udp_host.cpp
+// can read through handles what crossed the wire.
 package udploop;
 
 // The counter, as four little-endian bytes. Registered: next() counts, and
@@ -47,7 +48,7 @@ node Fresh {
 node Loop {
     structure {
         node src     : Counter;
-        node tx      : se.net.UdpSender   { port = 47002; };
+        node tx      : se.net.UdpSender   { port = 47002; rate = 300; };
         node rx      : se.net.UdpReceiver { port = 47002; };
         node cli     : se.net.UdpClient   { host = "localhost"; port = 47003; local_port = 47004; };
         node srv     : se.net.UdpServer   { port = 47003; };
@@ -57,7 +58,7 @@ node Loop {
         node dec_srv : Decode;
 
         src.payload --> tx.payload, cli.payload;
-        1 --> tx.send, cli.send;
+        1 --> cli.send;
         rx.data  --> dec_rx.b;
         cli.data --> dec_cli.b;
         srv.data --> srv.payload, dec_srv.b;

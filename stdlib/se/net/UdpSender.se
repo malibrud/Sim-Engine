@@ -1,5 +1,5 @@
 // A non-blocking UDP sender: the `payload` input as one datagram to a fixed
-// host and port, on every step `send` is true.
+// host and port, `rate` times a second.
 //
 // `host` is an IPv4 address or a name, looked up once in `init()` through the
 // system's resolver; the address it found is logged, so a name that resolves
@@ -7,11 +7,15 @@
 // run, as a receiver's failed bind does: it is a fault a person has to fix.
 // Nothing is looked up again during the run.
 //
-// SENDS ON A FLAG. A datagram goes out in `next()`, on every step whose
-// `send` input is true, carrying that step's `payload`. Wire a literal `true` to
-// stream every step, an edge from a decoder to send on an event, or anything
-// else to decide. A rate slower than the model's is the job of whatever drives
-// `send`.
+// STREAMS AT A RATE. A datagram goes out in `next()`, carrying that step's
+// `payload`, on the first step and then `rate` times a second ON AVERAGE. The
+// default is every step. A rate that divides the model's evenly is evenly
+// spaced; one that does not is exact over time, with gaps a step apart: 300 Hz
+// on a 1 kHz model sends after 4, 3, 3, 4, 3, 3 ... steps, never drifting. Which
+// steps send follows from the step count alone, so a run sends on the same
+// steps every time. A rate above the model's, or not above zero, ends the run
+// at `init()`. To send on an event instead, use UdpClient, which sends on a
+// flag.
 //
 // REPORTS NOTHING. A sent datagram has no acknowledgement to wait for, and a
 // failed send (no route, a full buffer, a datagram over 65,507 bytes) never
@@ -27,14 +31,15 @@ node UdpSender {
     settings {
         host: string(64) = "127.0.0.1";   // an IPv4 address or a name
         port: int(-);                     // 1..65535
+        rate: double(Hz) = sample_rate;   // datagrams a second, on average
     }
 
-    inputs {
-        payload: buffer;                  // the datagram, all of it
-        send:    bool;                    // send `payload` on this step
-    }
+    inputs { payload: buffer; }           // the datagram, all of it
 
-    vars { failing: bool; }               // the last send failed
+    vars {
+        per_step: double(-);              // datagrams per step, 0 < per_step <= 1
+        failing:  bool;                   // the last send failed
+    }
 
     native {
         sock: se_net_detail::UdpSocket;
@@ -45,6 +50,13 @@ node UdpSender {
         if (!sim.require(param.port >= 1 && param.port <= 65535, "1 <= port <= 65535",
                          static_cast<double>(param.port)))
             return;
+        // rate * step is exactly 1 at the default (sec. 10.4). The slack lets a
+        // rate written as the model's own, say 1000 Hz at 1 ms, through.
+        var.per_step = param.rate * sim.step();
+        if (!sim.require(var.per_step > 0.0 && var.per_step <= 1.0 + 1e-9,
+                         "0 < rate <= sample_rate", param.rate))
+            return;
+        if (var.per_step > 1.0) var.per_step = 1.0;
         if (param.host.empty()) {
             sim.abort("UdpSender has no host to send to");
             return;
@@ -56,12 +68,21 @@ node UdpSender {
             return;
         }
         var.failing = false;
-        log.info("sending to {} ({}):{}", param.host, se_net_detail::UdpSocket::address(to),
-                 param.port);
+        log.info("sending to {} ({}):{} at {} Hz", param.host,
+                 se_net_detail::UdpSocket::address(to), param.port, param.rate);
     }
 
-    next(payload, send) {
-        if (!in.send) return;
+    next(payload) {
+        // Step k sends when the count of datagrams owed by then, floor(k * r),
+        // has gone up since step k - 1; step 0 always sends. The 1e-9 keeps a
+        // product that should be a whole number, 10 * 0.3 say, from landing just
+        // under it and moving that send a step late.
+        const std::uint64_t k = sim.tick();
+        if (k > 0) {
+            const double now  = std::floor(static_cast<double>(k) * var.per_step + 1e-9);
+            const double then = std::floor(static_cast<double>(k - 1) * var.per_step + 1e-9);
+            if (now == then) return;
+        }
         if (!sock.send_to(to, in.payload.data(), in.payload.size())) {
             if (!var.failing)
                 log.warn("send to {}:{} failed: {}", param.host, param.port, sock.error_text());
