@@ -83,6 +83,17 @@ bool buffer_refused(Diagnostics& diag, const Source& src, const ast::TypeRef& t,
     return true;
 }
 
+// §5.1b — text is configuration or a message, not the evolving condition of a
+// system, and a record stays a bundle of numbers. A string SETTING is legal.
+bool string_refused(Diagnostics& diag, const Source& src, const ast::TypeRef& t,
+                    const char* what, const char* why) {
+    if (!t.is_string) return false;
+    diag.error("SE0325", src, t.loc, std::string("a ") + what + " may not be a string",
+               "a string", {note(why), note("a string goes on a setting, an input, an output "
+                                            "or a var (\xc2\xa7""5.1b)")});
+    return true;
+}
+
 }  // namespace
 
 // ─── NodeInfo helpers ────────────────────────────────────────────────────────
@@ -480,6 +491,16 @@ bool Resolver::resolve_type(const FileInfo& file, const ast::TypeRef& ref, Type&
         out.unit = Unit{};
         return true;
     }
+    if (ref.is_string) {
+        // §5.1b — the same split: storage is `string<N>`, a reader the view.
+        out.is_record = false;
+        out.text = true;
+        out.capacity = ref.capacity;
+        out.scalar = ref.capacity > 0 ? "se_rt::string<" + std::to_string(ref.capacity) + ">"
+                                      : "std::string_view";
+        out.unit = Unit{};
+        return true;
+    }
     if (ref.is_scalar) {
         out.is_record = false;
         out.scalar = ref.scalar.empty() ? "double" : ref.scalar;
@@ -634,7 +655,10 @@ RecordInfo* Resolver::resolve_record(FileInfo& file, const ast::TypeDef& def,
         field.loc = f.loc;
         if (buffer_refused(diag_, *file.src, f.type, "record field",
                            "a record lowers to a plain struct of numbers with a unit each, "
-                           "and is listed field by field in the manifest (\xc2\xa7""5.2)"))
+                           "and is listed field by field in the manifest (\xc2\xa7""5.2)") ||
+            string_refused(diag_, *file.src, f.type, "record field",
+                           "a record is a bundle of numbers that converts field by field "
+                           "(\xc2\xa7""5.2)"))
             continue;
         resolve_type(file, f.type, field.type);
         info->fields.push_back(std::move(field));
@@ -780,6 +804,16 @@ NodeInfo* Resolver::resolve_node(FileInfo& file, const ast::NodeDef& def,
                            "language of numbers with dimensions"))
             continue;
         resolve_type(file, s.type, si.type);
+        // §5.1b — a string setting holds its text, so it is storage and says
+        // how many bytes it can hold.
+        if (s.type.is_string && s.type.capacity == 0)
+            diag_.error("SE0323", *file.src, s.type.loc,
+                        "string setting `" + s.name + "` declares no capacity",
+                        "storage needs a size",
+                        {note("a setting holds its own text, so it says how many bytes it "
+                              "can (\xc2\xa7""5.1b)"),
+                         help("write `" + s.name + ": string(64);` with the longest text it "
+                              "must hold")});
         info->settings.push_back(std::move(si));
     }
 
@@ -796,7 +830,9 @@ NodeInfo* Resolver::resolve_node(FileInfo& file, const ast::NodeDef& def,
         st.loc = s.loc;
         if (buffer_refused(diag_, *file.src, s.type, "state",
                            "a state has an initial condition and an override path, both "
-                           "numbers (\xc2\xa7""6.4); keep the bytes in a var"))
+                           "numbers (\xc2\xa7""6.4); keep the bytes in a var") ||
+            string_refused(diag_, *file.src, s.type, "state",
+                           "text a node keeps from one step to the next lives in a var"))
             continue;
         const bool typed = resolve_type(file, s.type, st.type);
         // §5.2 — moved here from the parser once a named type could also be an
@@ -875,6 +911,32 @@ NodeInfo* Resolver::resolve_node(FileInfo& file, const ast::NodeDef& def,
             // §5.1a — a capacity exactly where there is storage: a leaf's
             // output (the wire's own member, §15.3) and a var. Everything else
             // only reads, or passes through a composite that evaporates (§15.2).
+            // §5.1b — a string follows the same rule, except that a string
+            // INPUT is storage on the root and a reader everywhere else. Which
+            // one it is depends on where the node is used, so elaboration
+            // checks it (SE0324 / SE0326) once the root is known.
+            if (f.type.is_string && g.to != &info->inputs) {
+                const bool storage =
+                    g.to == &info->vars || (g.to == &info->outputs && !def.is_composite());
+                if (storage && f.type.capacity == 0) {
+                    diag_.error("SE0323", *file.src, f.type.loc,
+                                std::string("string ") + g.what + " `" + f.name +
+                                    "` declares no capacity",
+                                "storage needs a size",
+                                {note("a leaf's output is the wire's storage and a var is the "
+                                      "node's own, so each holds the text and says how many "
+                                      "bytes it can (\xc2\xa7""5.1b)"),
+                                 help("write `" + f.name + ": string(64);` with the longest "
+                                      "text it must hold")});
+                } else if (!storage && f.type.capacity > 0) {
+                    diag_.error("SE0324", *file.src, f.type.capacity_loc,
+                                "a capacity on a composite's output string",
+                                "a reader holds no text",
+                                {note("a composite's port is a pass-through, so it has no size "
+                                      "of its own; it accepts any capacity (\xc2\xa7""5.1b)"),
+                                 help("write `" + f.name + ": string;`")});
+                }
+            }
             if (f.type.is_buffer) {
                 const bool storage =
                     g.to == &info->vars || (g.to == &info->outputs && !def.is_composite());

@@ -1,0 +1,79 @@
+// §5.1b — a string in every place one can go: a setting that flows down two
+// levels, a literal driving an input, a var, recorded outputs, a root input
+// and root outputs, and a leaf that writes more than fits. tests/emit/
+// text_host.cpp, c_text.c and c_text.py check it from outside.
+package text;
+
+node Text {
+    settings { label: string(32) = "hello"; }
+    inputs   { cmd: string(16); gain: double(-); }
+    outputs  { echo: string; status: string; name: string; said: string; }
+
+    structure {
+        node mid : Mid { label = param.label; };
+        node lit : Say;
+        node cut : Cut;
+
+        self.cmd --> mid.cmd;
+        "a, \"quoted\" literal" --> lit.text;
+        mid.echo --> self.echo;
+        mid.name --> self.name;
+        lit.name --> self.said;
+        cut.msg  --> self.status;
+    }
+}
+
+// The label passes through a composite on its way to the leaf that holds it.
+node Mid {
+    settings { label: string(32); }
+    inputs   { cmd: string; }
+    outputs  { echo: string; name: string; }
+
+    structure {
+        node tag : Tag { label = param.label; };
+        self.cmd --> tag.cmd;
+        tag.echo --> self.echo;
+        tag.name --> self.name;
+    }
+}
+
+// A string(32) setting flows into a string(40) one, which is allowed. Each
+// tick echoes the command, and next() keeps the commands it has seen in a var.
+node Tag {
+    settings { label: string(40); }
+    inputs   { cmd: string; }
+    outputs  { echo: string(16); name: string(40); }
+    vars     { seen: string(64); }
+
+    init() { log.debug("labelled {}", param.label); }   // a string formats as text
+
+    output(cmd) {
+        out.echo = in.cmd;
+        out.name = param.label;
+    }
+
+    next(cmd) {
+        if (!in.cmd.empty() && std::string_view(var.seen).find(in.cmd) == std::string_view::npos) {
+            std::string s(std::string_view(var.seen));
+            if (!s.empty()) s += ";";
+            s += std::string(in.cmd);
+            var.seen = s;
+        }
+    }
+}
+
+// A literal arrives as a view, with its comma and its quotes.
+node Say {
+    inputs  { text: string; }
+    outputs { name: string(48); }
+
+    output(text) { out.name = in.text; }
+}
+
+// More than fits: 11 bytes into 8, where the 8th byte is the first of a
+// two-byte character, so the cut keeps 7 and logs one warning.
+node Cut {
+    outputs { msg: string(8); }
+
+    output() { out.msg = "abcdefg\xc3\xa9xy"; }
+}

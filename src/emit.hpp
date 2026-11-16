@@ -66,6 +66,10 @@ bool emit(Diagnostics& diag, const Model& m, const EmitOptions& opt);
 // filled in (see runtime_src.cpp).
 const std::string& se_runtime_hpp();
 
+// §5.1b — the bounded string type, guarded, which the public header carries
+// as well as the runtime (see runtime_src.cpp).
+const char* se_string_type();
+
 // The interactive topology page, with the model pasted in (see
 // topology_page.cpp). `json` is the topology; `base_json` is a JSON string
 // naming the directory relative source paths are relative to.

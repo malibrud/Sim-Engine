@@ -256,6 +256,15 @@ bool TestGen::resolve_column(const ast::TestColumn& c, bool expected, Col& out) 
     } else if (c.ns == "param") {
         const NodeInfo::SettingInfo* s = info_->setting(head);
         if (!s) return none();
+        if (s->type.text) {
+            diag_.error("SE0363", *src_, c.loc,
+                        "`param." + head + "` is a string setting, which a test column "
+                        "cannot name yet",
+                        "cells are numbers",
+                        {note("a test row's cells are compared as numbers; a string setting "
+                              "the rows don't name keeps its default (\xc2\xa7""6.13)")});
+            return false;
+        }
         base = bind_type(s->type, binding_);
     } else if (c.ns == "var") {
         const Field* f = nullptr;
@@ -309,6 +318,20 @@ bool TestGen::run(const std::string& fq, const Source& req_src, Loc req_loc) {
     // be on the root (§5.1a, SE0445); nor could a §7 cell spell one.
     for (const std::vector<Field>* ports : {&info_->inputs, &info_->outputs})
         for (const Field& f : *ports) {
+            if (f.type.text) {
+                // §6.13 / §5.1b — a string input on the root must state a
+                // capacity, which a reader port does not.
+                diag_.error("SE0363", *src_, def.sec_tests.loc,
+                            "`" + def.name + "` has a string port, `" + f.name +
+                                "`, so it cannot carry tests yet",
+                            "a test program runs this node as the root",
+                            {note("a string input on the root must state a capacity, which "
+                                  "a reader does not, and a cell is compared as a number "
+                                  "(\xc2\xa7""5.1b, \xc2\xa7""6.13)"),
+                             help("test the node's logic through a helper with no string "
+                                  "ports, or exercise it in a model")});
+                return false;
+            }
             if (!f.type.buffer) continue;
             diag_.error("SE0363", *src_, def.sec_tests.loc,
                         "`" + def.name + "` has a buffer port, `" + f.name +

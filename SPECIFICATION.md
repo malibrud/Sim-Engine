@@ -848,9 +848,10 @@ a bundle of numbers that converts field by field (§4.1).
 **Text too long for its destination is cut, and the run is told once.** `sec`
 checks every capacity it can see, but C++ in a body may write anything. A
 write longer than the capacity keeps the longest prefix that ends on a whole
-UTF-8 character, so a cut never leaves half a character behind. After each
-method of a leaf, the engine looks at that leaf's string outputs and vars,
-and the first time one has been cut it logs one `warn` line naming it:
+UTF-8 character, so a cut never leaves half a character behind. After
+`init()` and after each tick, the engine looks at every string output and
+var, and the first time one has been cut it logs one `warn` line naming it,
+stamped with that tick's time:
 `tx.out.status: 61 bytes into string(32), truncated`. Later cuts of the same
 destination are silent, the run carries on, and logging never halts a run (§10.1).
 Text from the host is never cut: a host value that doesn't fit is refused

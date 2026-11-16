@@ -1,0 +1,5 @@
+sim StrRoot {
+    root:     strroot.StrRoot;
+    step:     1 (ms);
+    duration: 1 (ms);
+}

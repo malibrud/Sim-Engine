@@ -1,0 +1,85 @@
+﻿error[SE0323]: string setting `tag` declares no capacity
+ --> tests/emit/lib/strbad/StrBad.se:8:21
+  |
+8 |     settings { tag: string = "x"; }               // SE0323: a setting holds its text
+  |                     ^^^^^^ storage needs a size
+  = note: a setting holds its own text, so it says how many bytes it can (§5.1b)
+  = help: write `tag: string(64);` with the longest text it must hold
+
+error[SE0325]: a state may not be a string
+  --> tests/emit/lib/strbad/StrBad.se:11:29
+   |
+11 |     states   { discrete st: string(8) = 0; }      // SE0325: a state
+   |                             ^^^^^^ a string
+   = note: text a node keeps from one step to the next lives in a var
+   = note: a string goes on a setting, an input, an output or a var (§5.1b)
+
+error[SE0323]: string output `q` declares no capacity
+  --> tests/emit/lib/strbad/StrBad.se:10:19
+   |
+10 |     outputs  { q: string; }                       // SE0323: storage with none
+   |                   ^^^^^^ storage needs a size
+   = note: a leaf's output is the wire's storage and a var is the node's own, so each holds the text and says how many bytes it can (§5.1b)
+   = help: write `q: string(64);` with the longest text it must hold
+
+error[SE0323]: string var `v` declares no capacity
+  --> tests/emit/lib/strbad/StrBad.se:12:19
+   |
+12 |     vars     { v: string; lb: Labelled; }         // SE0323
+   |                   ^^^^^^ storage needs a size
+   = note: a leaf's output is the wire's storage and a var is the node's own, so each holds the text and says how many bytes it can (§5.1b)
+   = help: write `v: string(64);` with the longest text it must hold
+
+error[SE0325]: a record field may not be a string
+ --> tests/emit/lib/strbad/StrBad.se:5:23
+  |
+5 | type Labelled { name: string(8); x: double(-); }  // SE0325: a record field
+  |                       ^^^^^^ a string
+  = note: a record is a bundle of numbers that converts field by field (§5.2)
+  = note: a string goes on a setting, an input, an output or a var (§5.1b)
+
+error[SE0324]: a capacity on a composite's output string
+  --> tests/emit/lib/strbad/StrBad.se:20:25
+   |
+20 |     outputs { q: string(8); }                     // SE0324: a composite's port holds nothing
+   |                         ^ a reader holds no text
+   = note: a composite's port is a pass-through, so it has no size of its own; it accepts any capacity (§5.1b)
+   = help: write `q: string;`
+
+error[SE0410]: a string can be wired only to a string
+  --> tests/emit/lib/strbad/StrBad.se:65:17
+   |
+65 |         m.s --> num.u;                            // SE0410: text into a number
+   |                 ^^^^^ `string(8)` -> `double(-)`
+   = note: a string is text, not a number, and nothing converts one into the other (§5.1b)
+
+error[SE0410]: a string can be wired only to a string
+  --> tests/emit/lib/strbad/StrBad.se:66:17
+   |
+66 |         m.x --> rdr.p;                            // SE0410: a number into text
+   |                 ^^^^^ `double(-)` -> `string`
+   = note: a string is text, not a number, and nothing converts one into the other (§5.1b)
+
+error[SE0410]: a string can be wired only to a string
+  --> tests/emit/lib/strbad/StrBad.se:67:20
+   |
+67 |         "text" --> lit.u;                         // SE0410: a string literal is not a number
+   |                    ^^^^^ `string(4)` -> `double(-)`
+   = note: a string is text, not a number, and nothing converts one into the other (§5.1b)
+
+error[SE0410]: a string can be wired only to a string
+  --> tests/emit/lib/strbad/StrBad.se:68:21
+   |
+68 |         param.k --> par.p;                        // SE0410: nor is a number setting text
+   |                     ^^^^^ `double(-)` -> `string`
+   = note: a string is text, not a number, and nothing converts one into the other (§5.1b)
+
+error[SE0324]: a capacity on string input `p` of `strbad.StrBad#Sized`, which is not the root
+  --> tests/emit/lib/strbad/StrBad.se:36:15
+   |
+36 |     inputs  { p: string(8); }                     // SE0324: away from the root, a reader
+   |               ^ a reader holds no text
+   = note: an input reads the producer's storage, so away from the root it has no size of its own and accepts any capacity; only the root's inputs are the host's storage (§5.1b)
+   = help: write `p: string;`
+
+11 errors emitted

@@ -53,6 +53,13 @@ struct Value {
     // enum's C++ type, which no arithmetic may touch (SE0404).
     const EnumInfo* enm = nullptr;
 
+    // §7.2b — text, which has no unit and no arithmetic. `text` is the value,
+    // `cap` the most bytes it can be: its own length for a literal, the
+    // capacity of the setting a `param.` copy reads (SE0427 compares it).
+    bool is_text = false;
+    std::string text;
+    long cap = 0;
+
     // The number, its unit and whether it was written bare; every site that
     // builds a `Value` from parts then sets `code`, `constant` and `enm` by
     // name. A constructor rather than a three-field brace list, which compilers
@@ -73,6 +80,7 @@ struct Pin {
     double value = 0.0;
     ExprCode code;
     bool constant = true;
+    std::string text;      // §5.1b — a string setting's value
 };
 
 // One path-addressed override from the sim file's root block or a `.settings`
@@ -307,6 +315,7 @@ private:
     // the SOURCE's unit; a bare literal has none of its own (§7.2 gives it the
     // site's), so for one the source and destination units coincide.
     std::map<std::string, double> literal_sources_;
+    std::map<std::string, std::string> literal_texts_;   // §5.1b — string literals
     std::map<std::string, std::size_t> leaf_by_path_;
     // The root's own inputs, by bare name — where a producer chain terminates
     // when the host drives it (§15.6). Filled by `resolve_inputs`, which runs
@@ -327,6 +336,9 @@ private:
     };
     std::vector<ElementSite> element_sites_;
     bool failed_ = false;
+    // §5.1b — definitions already told that a string input away from the root
+    // is a reader (SE0324), so a node used many times is told once.
+    std::set<const NodeInfo*> string_input_reported_;
 };
 
 }  // namespace se

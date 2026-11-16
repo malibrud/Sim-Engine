@@ -1,0 +1,71 @@
+package strbad;
+
+// §5.1b — every place a string's TYPE is refused, one per helper node.
+
+type Labelled { name: string(8); x: double(-); }  // SE0325: a record field
+
+node Sites {
+    settings { tag: string = "x"; }               // SE0323: a setting holds its text
+    inputs   { s: string; }
+    outputs  { q: string; }                       // SE0323: storage with none
+    states   { discrete st: string(8) = 0; }      // SE0325: a state
+    vars     { v: string; lb: Labelled; }         // SE0323
+
+    output(s) { }
+    next(s) { }
+}
+
+node Pass {
+    inputs  { p: string; }
+    outputs { q: string(8); }                     // SE0324: a composite's port holds nothing
+
+    structure {
+        node r : Reader;
+        self.p --> r.p;
+        r.n --> self.q;
+    }
+}
+
+node Reader {
+    inputs  { p: string; }
+    outputs { n: string(8); }
+    output(p) { out.n = in.p; }
+}
+
+node Sized {
+    inputs  { p: string(8); }                     // SE0324: away from the root, a reader
+    outputs { n: int(-); }
+    output(p) { out.n = static_cast<int>(in.p.size()); }
+}
+
+node Maker {
+    outputs { s: string(8); x: double(-); }
+    output() { out.x = 0.0; }
+}
+
+node Num {
+    inputs  { u: double(-); }
+    outputs { n: int(-); }
+    output(u) { out.n = 0; }
+}
+
+node StrBad {
+    settings { k: double(-) = 1.0; }
+
+    structure {
+        node sites : Sites;
+        node pass  : Pass;
+        node sized : Sized;
+        node m     : Maker;
+        node num   : Num;
+        node lit   : Num;
+        node rdr   : Reader;
+        node par   : Reader;
+
+        m.s --> num.u;                            // SE0410: text into a number
+        m.x --> rdr.p;                            // SE0410: a number into text
+        "text" --> lit.u;                         // SE0410: a string literal is not a number
+        param.k --> par.p;                        // SE0410: nor is a number setting text
+        m.s --> pass.p, sites.s, sized.p;
+    }
+}

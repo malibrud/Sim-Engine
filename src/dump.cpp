@@ -31,8 +31,8 @@ std::string trim_1line(const std::string& s, std::size_t max = 48) {
 // Renders exactly as the source spells it: `name: type(unit)`, one shape for
 // scalars and records alike (§5.1). `bool` takes no argument list.
 void dump_type(std::ostream& o, const ast::TypeRef& t) {
-    if (t.is_buffer) {   // §5.1a — a capacity, or bare
-        o << ": buffer";
+    if (t.is_buffer || t.is_string) {   // §5.1a / §5.1b — a capacity, or bare
+        o << (t.is_string ? ": string" : ": buffer");
         if (t.capacity > 0) o << "(" << t.capacity << ")";
         return;
     }
@@ -124,6 +124,7 @@ std::string expr_to_string(const ast::Expr* e) {
             return s;
         }
         case K::Param:  return "param." + e->text;
+        case K::String: return ast::string_literal(e->text);
         case K::Name:   return e->text;
         case K::Unary:  return std::string(1, e->op) + expr_to_string(e->lhs.get());
         case K::Binary: return "(" + expr_to_string(e->lhs.get()) + " " +

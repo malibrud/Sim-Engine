@@ -72,13 +72,15 @@ struct Expr {
         Unary,      // + -
         Binary,     // + - * / ^
         Aggregate,  // { … } — a record brace list (§6.2c)
+        String,     // "…" — text, only where a string is expected (§7.2b)
     };
 
     Kind kind = Kind::Number;
     Loc loc;
 
     double number = 0.0;
-    std::string text;            // Number: source spelling; Param/Call/Name: the name
+    std::string text;            // Number: source spelling; Param/Call/Name: the name;
+                                 // String: the decoded text
     UnitPtr unit;                // Number: optional unit suffix
     char op = 0;                 // Unary / Binary
     ExprPtr lhs, rhs;            // Binary; Unary uses lhs
@@ -107,6 +109,9 @@ struct TypeRef {
     // dimensionless) since it is one member with no fields; `capacity` is 0
     // when the declaration is bare, which is what a reader writes.
     bool is_buffer = false;
+    // §5.1b — `string` / `string(N)`, bounded text, the same shape as a
+    // buffer: one member, dimensionless, capacity 0 when bare.
+    bool is_string = false;
     long capacity = 0;
     Loc capacity_loc;
     Loc loc;
@@ -259,6 +264,24 @@ struct Instance {             // node whl : Wheel { … };
     DiagramHints diagram;
 };
 
+// §3.6 — `text` as the language writes it: in double quotes, with exactly
+// the escapes the lexer reads, so it lexes back to the same characters.
+inline std::string string_literal(const std::string& text) {
+    std::string out = "\"";
+    for (char c : text) {
+        switch (c) {
+            case '"':  out += "\\\""; break;
+            case '\\': out += "\\\\"; break;
+            case '\n': out += "\\n"; break;
+            case '\r': out += "\\r"; break;
+            case '\t': out += "\\t"; break;
+            case '\0': out += "\\0"; break;
+            default:   out += c;
+        }
+    }
+    return out + "\"";
+}
+
 struct Endpoint {             // self.port | instance.port | instance.rec.field | 0.0 (m)
     bool is_self = false;
     std::vector<std::string> segs;   // excludes the `self` head
@@ -272,7 +295,9 @@ struct Endpoint {             // self.port | instance.port | instance.rec.field 
     // endpoint into two wires. Nothing mutates a unit after parsing, so sharing
     // one is sound.
     bool is_literal = false;
+    bool is_text = false;                   // §5.1b — a string literal; `str` holds it
     double value = 0.0;
+    std::string str_value;                  // is_text: the decoded text
     std::string text;                       // the source spelling, for diagnostics
     std::shared_ptr<UnitExpr> unit;         // null when the literal is bare (§7.2)
 

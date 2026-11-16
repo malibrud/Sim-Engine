@@ -1,0 +1,5 @@
+sim StrBad {
+    root:     strbad.StrBad;
+    step:     1 (ms);
+    duration: 1 (ms);
+}

@@ -56,6 +56,7 @@
     X(const char*, se_setting_type, (se_sim*, int))                            \
     X(int, se_setting_structural, (se_sim*, int))                              \
     X(double, se_get, (se_sim*, const char*))                                  \
+    X(const char*, se_get_text, (se_sim*, const char*))                        \
     X(int, se_set, (se_sim*, const char*, double))                             \
     X(int, se_set_text, (se_sim*, const char*, const char*))                   \
     X(int, se_channel_count, (se_sim*))                                        \
@@ -79,9 +80,11 @@
     X(const char*, se_error, (se_sim*))                                        \
     X(int, se_set_input, (se_sim*, int, double))                               \
     X(int, se_set_inputs, (se_sim*, const double*, int))                       \
+    X(int, se_set_input_text, (se_sim*, int, const char*))                     \
     X(void, se_tick, (se_sim*))                                                \
     X(double, se_get_output, (se_sim*, int))                                   \
     X(int, se_get_outputs, (se_sim*, double*, int))                            \
+    X(const char*, se_get_output_text, (se_sim*, int))                         \
     X(int, se_done, (se_sim*))                                                 \
     X(double, se_time, (se_sim*))                                              \
     X(uint64_t, se_tick_index, (se_sim*))                                      \
@@ -89,6 +92,7 @@
     X(int, se_channel_handle, (se_sim*, const char*))                          \
     X(double, se_read, (se_sim*, int))                                         \
     X(int, se_read_many, (se_sim*, const int*, int, double*))                  \
+    X(const char*, se_read_text, (se_sim*, int))                               \
     X(void, se_sync_realtime, (se_sim*))                                       \
     X(double, se_realtime_utilization, (se_sim*))                              \
     X(double, se_realtime_overrun_pct, (se_sim*))                              \

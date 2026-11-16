@@ -1,0 +1,32 @@
+// §5.1b strings, every legal shape. Parse-only, so the recorded AST shows the
+// types, the literal defaults with their escapes, and string literals as
+// wire sources and bindings, as written.
+package tests;
+
+node Sender {
+    settings {
+        host:  string(64) = "127.0.0.1";
+        motd:  string(80) = "line one\nline \"two\"\t\\ end";
+        empty: string(4)  = "";
+    }
+    inputs  { cmd: string; n: double(-); }
+    outputs { status: string(32); }
+    vars    { line: string(128); }
+
+    output(cmd) { out.status = in.cmd; }
+}
+
+node Relay {
+    settings { host: string(64) = "rig-pc"; }
+    inputs   { cmd: string; }
+    outputs  { status: string; }
+
+    structure {
+        node tx : Sender { host = param.host; motd = "relayed"; };
+        node lit : Sender { host = "10.0.0.2"; };
+        self.cmd --> tx.cmd;
+        "stop" --> lit.cmd;
+        1.0 --> tx.n, lit.n;
+        tx.status --> self.status;
+    }
+}

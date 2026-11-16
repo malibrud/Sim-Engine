@@ -100,16 +100,48 @@ struct Type {
     // for storage and `se_rt::buffer_view` for a reader (capacity 0), and
     // `unit` is dimensionless, so no wire ever converts one.
     bool buffer = false;
+    // §5.1b — bounded text, the same shape: `se_rt::string<N>` for storage,
+    // `std::string_view` for a reader (capacity 0). `capacity` is shared.
+    bool text = false;
     long capacity = 0;
     Loc loc;
 
     const char* cpp() const { return scalar.c_str(); }
 };
 
-// §5.1a — how the DSL spells a buffer type, for diagnostics, the manifest, the
-// topology page and a recorded column's header.
-inline std::string buffer_label(const Type& t) {
-    return t.capacity > 0 ? "buffer(" + std::to_string(t.capacity) + ")" : "buffer";
+// §5.1a / §5.1b — how the DSL spells a buffer or string type, for
+// diagnostics, the manifest, the topology page and a recorded column's header.
+inline std::string bounded_label(const Type& t) {
+    const char* name = t.text ? "string" : "buffer";
+    return t.capacity > 0 ? std::string(name) + "(" + std::to_string(t.capacity) + ")" : name;
+}
+inline std::string buffer_label(const Type& t) { return bounded_label(t); }
+
+// §5.1b — `text` as a C++ string literal: every byte the same, whatever it
+// is. A control character is written as a three-digit octal escape, so a
+// digit that follows can never extend it.
+inline std::string cpp_string(const std::string& text) {
+    static const char* const kOct = "01234567";
+    std::string out = "\"";
+    for (char ch : text) {
+        const unsigned char c = static_cast<unsigned char>(ch);
+        if (ch == '"' || ch == '\\') {
+            out += '\\';
+            out += ch;
+        } else if (ch == '\n') {
+            out += "\\n";
+        } else if (ch == '\t') {
+            out += "\\t";
+        } else if (c < 0x20 || c == 0x7f) {
+            out += '\\';
+            out += kOct[(c >> 6) & 7];
+            out += kOct[(c >> 3) & 7];
+            out += kOct[c & 7];
+        } else {
+            out += ch;
+        }
+    }
+    return out + "\"";
 }
 
 struct Field {
@@ -288,6 +320,9 @@ struct SettingValue {
     std::string scalar;
     double value = 0.0;
     const EnumInfo* enm = nullptr;     // §5.2a — `value` is an enumerator's
+    bool is_text = false;              // §5.1b — a string setting; `text` is its value
+    long capacity = 0;
+    std::string text;
 };
 
 // One piece of an emitted §7 expression (§15.5). A setting reference cannot be
@@ -337,6 +372,9 @@ struct SettingSlot {
     std::string scalar;      // "double" / "int" / an enum's C++ name
     const EnumInfo* enm = nullptr;   // §5.2a — an enum setting
     double value = 0.0;      // what elaboration computed — the dump's starting point
+    bool is_text = false;    // §5.1b — a string setting: `text` is the value,
+    long capacity = 0;       // and `capacity` its size in bytes
+    std::string text;
     ExprCode expr;           // emitted right-hand side, references unresolved
     bool constant = true;    // `expr` is a literal; nothing upstream can move it
     bool structural = false; // fixed at elaboration (§6.2); refused on load
@@ -420,6 +458,8 @@ struct InputSource {
     // Kind::Const — already in the destination's unit, every hop's conversion
     // folded in, so `scale`/`offset` below are the identity for this kind.
     double value = 0.0;
+    bool is_text = false;              // §5.1b — a string literal, `text`
+    std::string text;
     double scale = 1.0;                // scalar: consumer_value = scale * x + offset
     double offset = 0.0;
     // Record ports only; empty for a scalar. Same flattening order the emitter
@@ -510,8 +550,10 @@ struct RecordedSignal {
     // where a unit would go; the manifest's `[types]` row decodes it.
     const EnumInfo* enm = nullptr;
     // §13.5 — a buffer column is its size, headed by `buffer(N)` where a unit
-    // would go. Empty for every other column.
+    // would go, and a string column its text, headed `string`. Empty for
+    // every other column.
     std::string label;
+    bool text = false;                 // §5.1b — `expr` is text, not a number
     // §6.4a — an element of an array state, whose index configuration checks.
     bool element = false;
     bool elem_continuous = false;

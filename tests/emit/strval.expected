@@ -1,0 +1,52 @@
+﻿error[SE0427]: 9 bytes for setting `label`, which holds 8
+  --> tests/emit/lib/strval/StrVal.se:21:29
+   |
+21 |         label: string(8)  = "nine byte";          // SE0427: 9 bytes into string(8)
+   |                             ^^^^^^^^^^^ does not fit `string(8)`
+   = note: a string's capacity counts bytes, and text is never cut on its way in (§5.1b)
+   = help: widen the setting, or shorten the text
+
+error[SE0427]: 16 bytes for setting `s`, which holds 8
+  --> tests/emit/lib/strval/StrVal.se:25:30
+   |
+25 |         node a : Leaf8 { s = param.wide; };        // SE0427: string(16) into string(8)
+   |                              ^^^^^^^^^^ does not fit `string(8)`
+   = note: a string's capacity counts bytes, and text is never cut on its way in (§5.1b)
+   = help: widen the setting, or shorten the text
+
+error[SE0428]: a number where text is expected
+  --> tests/emit/lib/strval/StrVal.se:26:30
+   |
+26 |         node b : Leaf8 { s = 12; };                // SE0428: a number where text belongs
+   |                              ^^ expected a string literal
+   = note: a string site takes a string literal, or a `param.` string setting, and nothing else: §7 has no string operations (§7.2b)
+
+error[SE0428]: text where a number is expected
+  --> tests/emit/lib/strval/StrVal.se:27:30
+   |
+27 |         node c : Num   { g = "1.0"; };             // SE0428: text where a number belongs
+   |                              ^^^^^ not a number
+   = note: text goes only where a string is declared, and §7 does nothing with it but copy it (§7.2b)
+
+error[SE0428]: text for setting `g`
+  --> tests/emit/lib/strval/StrVal.se:28:30
+   |
+28 |         node d : Num   { g = param.wide; };        // SE0428: a string setting as a number
+   |                              ^^^^^^^^^^ expected a number
+   = note: text and numbers don't convert into each other (§7.2b)
+
+error[SE0428]: an expression where text is expected
+  --> tests/emit/lib/strval/StrVal.se:29:34
+   |
+29 |         node e : Leaf8 { s = "a" + "b"; };         // SE0428: no string operations
+   |                                  ^ expected a string literal
+   = note: a string site takes a string literal, or a `param.` string setting, and nothing else: §7 has no string operations (§7.2b)
+
+error[SE0428]: a string setting used as an operand of `*`
+  --> tests/emit/lib/strval/StrVal.se:30:34
+   |
+30 |         node f : Num   { g = 2 * param.wide; };    // SE0428: nor arithmetic on one
+   |                                  ^^^^^^^^^^ not a number
+   = note: §7 copies text to a string site and does nothing else with it (§7.2b)
+
+7 errors emitted

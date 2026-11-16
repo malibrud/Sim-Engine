@@ -1,0 +1,9 @@
+﻿error[SE0326]: string input `cmd` on the root node `strroot.StrRoot` declares no capacity
+ --> tests/emit/lib/strroot/StrRoot.se:6:15
+  |
+6 |     inputs  { cmd: string; }
+  |               ^^^ the host's storage
+  = note: on the root an input is the host's storage, not a reader, so it says how many bytes it holds (§5.1b)
+  = help: write `cmd: string(64);` with the longest text the host will write
+
+1 error emitted

@@ -1,0 +1,5 @@
+sim StrVal {
+    root:     strval.StrVal;
+    step:     1 (ms);
+    duration: 1 (ms);
+}

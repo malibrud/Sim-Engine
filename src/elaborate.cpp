@@ -157,7 +157,8 @@ ExprCode ec_param(std::string owner, std::string name) {
 ExprCode ec_param_value(std::string owner, std::string name, const std::string& scalar,
                         const EnumInfo* enm = nullptr) {
     ExprCode c = ec_param(std::move(owner), std::move(name));
-    if (scalar == "double" || enm) return c;
+    // §7.2b — a string setting, like an enum, is only ever copied.
+    if (scalar == "double" || enm || scalar.rfind("se_rt::string<", 0) == 0) return c;
     ExprCode r = ec_lit("static_cast<double>(");
     r.insert(r.end(), c.begin(), c.end());
     r.push_back(ec_lit(")")[0]);
@@ -442,6 +443,13 @@ bool Elaborator::eval(const ast::Expr* e, const Source& src, const Env& env, Val
         // as an operand or call argument: `1.0 + { 2.0 }`, `sqrt({ 2.0 })`.
         // Falling out of the switch would leave `out` unset and emit `()` into
         // the generated code.
+        case K::String:
+            diag_.error("SE0428", src, e->loc, "text where a number is expected",
+                        "not a number",
+                        {note("text goes only where a string is declared, and \xc2\xa7""7 does "
+                              "nothing with it but copy it (\xc2\xa7""7.2b)")});
+            return false;
+
         case K::Aggregate:
             diag_.error("SE0426", src, e->loc, "a brace list inside an expression",
                         "an operand here is a scalar",
@@ -679,6 +687,13 @@ bool Elaborator::eval_call(const ast::Expr* e, const Source& src, const Env& env
 }
 
 bool Elaborator::require_number(const Value& v, const Source& src, Loc loc, const char* where) {
+    if (v.is_text) {
+        diag_.error("SE0428", src, loc, std::string("a string setting used as ") + where,
+                    "not a number",
+                    {note("\xc2\xa7""7 copies text to a string site and does nothing else with "
+                          "it (\xc2\xa7""7.2b)")});
+        return false;
+    }
     if (!v.enm) return true;
     diag_.error("SE0404", src, loc,
                 "an enumerator of `" + v.enm->fq + "` used as " + where, "not a number",
@@ -693,6 +708,33 @@ bool Elaborator::require_number(const Value& v, const Source& src, Loc loc, cons
 // `e` is still the enumerator here, and `e` the constant everywhere else.
 bool Elaborator::eval_at(const ast::Expr* e, const Type& target, const Source& src,
                          const Env& env, Value& out) {
+    // §7.2b — a string site takes a literal or a `param.` copy of a string
+    // setting, and nothing else.
+    if (e && target.text) {
+        if (e->kind == ast::Expr::Kind::String) {
+            out = Value{};
+            out.is_text = true;
+            out.text = e->text;
+            out.cap = static_cast<long>(e->text.size());
+            out.code = ec_lit("std::string_view(" + cpp_string(e->text) + ", " +
+                              std::to_string(e->text.size()) + ")");
+            out.constant = true;
+            return true;
+        }
+        if (e->kind == ast::Expr::Kind::Param) {
+            if (!eval(e, src, env, out)) return false;
+            if (out.is_text) return true;
+        }
+        diag_.error("SE0428", src, e->loc,
+                    e->kind == ast::Expr::Kind::Param || e->kind == ast::Expr::Kind::Number
+                        ? "a number where text is expected"
+                        : "an expression where text is expected",
+                    "expected a string literal",
+                    {note("a string site takes a string literal, or a `param.` string "
+                          "setting, and nothing else: \xc2\xa7""7 has no string operations "
+                          "(\xc2\xa7""7.2b)")});
+        return false;
+    }
     if (!e || !target.enm) return eval(e, src, env, out);
     const EnumInfo* enm = target.enm;
     if (e->kind == ast::Expr::Kind::Name) {
@@ -724,6 +766,30 @@ bool Elaborator::eval_at(const ast::Expr* e, const Type& target, const Source& s
 
 bool Elaborator::coerce(const Value& v, const Type& target, const Source& src, Loc loc,
                         const char* what, double& out, ExprCode* out_code) {
+    // §7.2b — text goes only to text, and must fit.
+    if (target.text || v.is_text) {
+        if (target.text != v.is_text) {
+            diag_.error("SE0428", src, loc,
+                        std::string(v.is_text ? "text" : "a number") + " for " + what,
+                        v.is_text ? "expected a number" : "expected a string literal",
+                        {note("text and numbers don't convert into each other "
+                              "(\xc2\xa7""7.2b)")});
+            return false;
+        }
+        if (target.capacity > 0 && v.cap > target.capacity) {
+            diag_.error("SE0427", src, loc,
+                        std::to_string(v.cap) + " bytes for " + what + ", which holds " +
+                            std::to_string(target.capacity),
+                        "does not fit `string(" + std::to_string(target.capacity) + ")`",
+                        {note("a string's capacity counts bytes, and text is never cut on "
+                              "its way in (\xc2\xa7""5.1b)"),
+                         help("widen the setting, or shorten the text")});
+            return false;
+        }
+        out = 0.0;
+        if (out_code) *out_code = v.code;
+        return true;
+    }
     // §7.2a — an enum has no unit to convert and no rounding to apply: the
     // value is right exactly when it is an enumerator of the same enum.
     if (target.enm || v.enm) {
@@ -997,7 +1063,8 @@ void Elaborator::apply_overrides(const NodeInfo* def, const std::string& path,
                 // setting is simply not run. Evaluated in an empty environment,
                 // so there is nothing it could depend on anyway. An enumerator's
                 // literal is its own spelling (§7.2a), not its number.
-                pinned[lf.key] = Pin{d, lf.type.enm ? v.code : ec_num(d), true};
+                pinned[lf.key] = Pin{d, (lf.type.enm || lf.type.text) ? v.code : ec_num(d),
+                                     true, v.text};
             } else {
                 // The override was the diagnostic. `emplace`, so a binding the
                 // parent pinned still stands; only a leaf that nothing else
@@ -1174,6 +1241,9 @@ bool Elaborator::settings_of(const NodeInfo* def,
         v.code = ec_param_value(settings_path_, lf.key, lf.type.scalar, lf.type.enm);
         v.constant = false;
         v.enm = lf.type.enm;
+        v.is_text = lf.type.text;
+        v.text = it->second.text;
+        v.cap = lf.type.capacity;
         env[lf.key] = std::move(v);
     }
 
@@ -1247,12 +1317,15 @@ bool Elaborator::settings_of(const NodeInfo* def,
                 ExprCode code;
                 if (coerce(v, s.type, def_src, s.loc,
                            ("setting `" + s.key + "`").c_str(), d, &code)) {
-                    resolved[s.key] = Pin{d, std::move(code), v.constant};
+                    resolved[s.key] = Pin{d, std::move(code), v.constant, v.text};
                     Value bound_v{d, s.type.unit, false};
                     bound_v.code =
                         ec_param_value(settings_path_, s.key, s.type.scalar, s.type.enm);
                     bound_v.constant = false;
                     bound_v.enm = s.type.enm;
+                    bound_v.is_text = s.type.text;
+                    bound_v.text = v.text;
+                    bound_v.cap = s.type.capacity;
                     env[s.key] = std::move(bound_v);
                 } else {
                     ok = false;
@@ -1284,6 +1357,9 @@ bool Elaborator::settings_of(const NodeInfo* def,
         sv.enm = lf.type.enm;
         auto it = env.find(lf.key);
         sv.value = it == env.end() ? 0.0 : it->second.v;
+        sv.is_text = lf.type.text;
+        sv.capacity = lf.type.capacity;
+        if (it != env.end()) sv.text = it->second.text;
 
         // §6.2b — the same leaf as one assignment in the configuration program.
         // `leaves` is already in the order the topological walk above settled,
@@ -1304,6 +1380,9 @@ bool Elaborator::settings_of(const NodeInfo* def,
         slot.scalar = sv.scalar;
         slot.enm = sv.enm;
         slot.value = sv.value;
+        slot.is_text = sv.is_text;
+        slot.capacity = sv.capacity;
+        slot.text = sv.text;
         auto r = resolved.find(lf.key);
         if (r != resolved.end()) {
             slot.expr = r->second.code;
@@ -1311,7 +1390,7 @@ bool Elaborator::settings_of(const NodeInfo* def,
         } else {
             // A required setting nobody bound: already reported as SE0420, and
             // the program still needs a well-formed entry to stay emittable.
-            slot.expr = ec_num(sv.value);
+            slot.expr = sv.is_text ? ec_lit("std::string_view()") : ec_num(sv.value);
         }
         slots_.push_back(std::move(slot));
 
@@ -1401,6 +1480,24 @@ void Elaborator::instantiate(const NodeInfo* def, const std::string& path,
     }
     instances_[path] = def;
 
+    // §5.1b — away from the root, a string input only reads, so it states no
+    // capacity. The root's own inputs are the host's storage and are checked
+    // in `resolve_boundary` (SE0326).
+    if (!path.empty() && string_input_reported_.insert(def).second)
+        for (const Field& f : def->inputs)
+            if (f.type.text && f.type.capacity > 0) {
+                diag_.error("SE0324", *def->file->src, f.loc,
+                            "a capacity on string input `" + f.name + "` of `" + def->fq +
+                                "`, which is not the root",
+                            "a reader holds no text",
+                            {note("an input reads the producer's storage, so away from the "
+                                  "root it has no size of its own and accepts any capacity; "
+                                  "only the root's inputs are the host's storage "
+                                  "(\xc2\xa7""5.1b)"),
+                             help("write `" + f.name + ": string;`")});
+                failed_ = true;
+            }
+
     // Swapped in for the duration of this node, and restored on the way out so
     // the recursion into children does not inherit the parent's binding.
     std::vector<Unit> saved_binding;
@@ -1435,6 +1532,9 @@ void Elaborator::instantiate(const NodeInfo* def, const std::string& path,
         v.code = ec_param_value(path, s.name, s.scalar, s.enm);
         v.constant = false;
         v.enm = s.enm;
+        v.is_text = s.is_text;
+        v.text = s.text;
+        v.cap = s.capacity;
         env[s.name] = std::move(v);
     }
 
@@ -1565,7 +1665,7 @@ void Elaborator::instantiate(const NodeInfo* def, const std::string& path,
                     if (eval_at(lf.expr, lf.type, def_src, env, v) &&
                         coerce(v, lf.type, def_src, lf.loc,
                                ("setting `" + lf.key + "`").c_str(), d, &code)) {
-                        child_pinned[lf.key] = Pin{d, std::move(code), v.constant};
+                        child_pinned[lf.key] = Pin{d, std::move(code), v.constant, v.text};
                     } else {
                         failed_ = true;
                         // Bound, just not to anything that evaluates: pinned
@@ -1704,6 +1804,21 @@ bool Elaborator::port_conversion(const Field& from, const Field& to, const Sourc
     // convert: it has no unit, and a reader accepts any capacity. Checked first
     // so a literal or a setting into a buffer input says "buffer", which is what
     // is wrong, rather than "scalar".
+    // §5.1b — text likewise goes only into text, of any capacity.
+    if (from.type.text || to.type.text) {
+        if (from.type.text && to.type.text) return true;
+        auto name = [](const Type& t) {
+            return (t.text || t.buffer) ? "`" + bounded_label(t) + "`"
+                   : t.is_record        ? std::string("a record")
+                   : t.enm              ? "`" + t.enm->fq + "`"
+                                        : "`" + t.scalar + "(" + t.unit.str() + ")`";
+        };
+        diag_.error("SE0410", src, loc, "a string can be wired only to a string",
+                    name(from.type) + " -> " + name(to.type),
+                    {note("a string is text, not a number, and nothing converts one into "
+                          "the other (\xc2\xa7""5.1b)")});
+        return false;
+    }
     if (from.type.buffer || to.type.buffer) {
         if (from.type.buffer && to.type.buffer) return true;
         auto name = [](const Type& t) {
@@ -1861,6 +1976,13 @@ void Elaborator::collect_wires(const NodeInfo* def, const std::string& path, Mod
             }
             key = sub(path, "#lit@" + std::to_string(e.loc.offset));
             literal_sources_[key] = e.value;
+            // §5.1b — text, with no unit and the capacity of its own length.
+            if (e.is_text) {
+                out_field.type.text = true;
+                out_field.type.scalar = "std::string_view";
+                out_field.type.capacity = static_cast<long>(e.str_value.size());
+                literal_texts_[key] = e.str_value;
+            }
             return true;
         }
 
@@ -2028,8 +2150,8 @@ void Elaborator::collect_wires(const NodeInfo* def, const std::string& path, Mod
             // never an enumerator, and the same check reports it. Nor a buffer
             // (§5.1a), for the same reason.
             Field eff = sf;
-            if (w.source.is_literal && !w.source.unit && !df.type.is_record && !df.type.enm &&
-                !df.type.buffer)
+            if (w.source.is_literal && !w.source.is_text && !w.source.unit &&
+                !df.type.is_record && !df.type.enm && !df.type.buffer && !df.type.text)
                 eff.type = df.type;
 
             Hop hop;
@@ -2091,6 +2213,11 @@ bool Elaborator::trace_source(const std::string& key, InputSource& in,
         // time the emitter sees it.
         in.kind = InputSource::Kind::Const;
         in.value = lit_it->second;
+        auto txt = literal_texts_.find(k);
+        if (txt != literal_texts_.end()) {
+            in.is_text = true;
+            in.text = txt->second;
+        }
     } else if (root_inputs_.count(k) != 0) {
         // The chain reached the root's own boundary. `k == key` when the chain
         // is empty, so the leaf that IS the root is the same case.
@@ -2171,6 +2298,21 @@ void Elaborator::resolve_boundary(const NodeInfo* root, Model& m) {
     // §5.1a — the root's ports are the host's typed boundary, which has no
     // settled shape for bytes yet (Appendix C 16c).
     bool root_buffer = false;
+    // §5.1b — on the root an input is the host's storage, so a string input
+    // there states its capacity.
+    for (const Field& f : root->inputs) {
+        if (!f.type.text || f.type.capacity > 0) continue;
+        root_buffer = true;
+        diag_.error("SE0326", *root->file->src, f.loc,
+                    "string input `" + f.name + "` on the root node `" + root->fq +
+                        "` declares no capacity",
+                    "the host's storage",
+                    {note("on the root an input is the host's storage, not a reader, so it "
+                          "says how many bytes it holds (\xc2\xa7""5.1b)"),
+                     help("write `" + f.name + ": string(64);` with the longest text the host "
+                          "will write")});
+        failed_ = true;
+    }
     for (const std::vector<Field>* ports : {&root->inputs, &root->outputs})
         for (const Field& f : *ports) {
             if (!f.type.buffer) continue;
@@ -2467,7 +2609,12 @@ bool Elaborator::resolve_signal(const ast::Path& p, const Source& src, Model& m,
             s.code = std::move(c);
         } else {
             std::string base;
-            if (in.kind == InputSource::Kind::Const) {
+            if (in.kind == InputSource::Kind::Const && in.is_text) {
+                base = "std::string_view(" + cpp_string(in.text) + ", " +
+                       std::to_string(in.text.size()) + ")";
+                sc = 1.0;
+                of = 0.0;
+            } else if (in.kind == InputSource::Kind::Const) {
                 // Already folded through the whole chain by `trace_source`.
                 base = cpp_number(in.value);
                 sc = 1.0;
@@ -2486,6 +2633,12 @@ bool Elaborator::resolve_signal(const ast::Path& p, const Source& src, Model& m,
             if (scalar.buffer) {
                 s.expr = base + ".size()";
                 s.label = buffer_label(scalar);
+            }
+            // §13.5 — a string's column is its text.
+            if (scalar.text) {
+                s.expr = base;
+                s.label = "string";
+                s.text = true;
             }
         }
         out = std::move(s);
@@ -2693,6 +2846,10 @@ bool Elaborator::resolve_signal(const ast::Path& p, const Source& src, Model& m,
         if (t.buffer) {   // §13.5 — its size, headed by its type
             s.expr += ".size()";
             s.label = buffer_label(t);
+        }
+        if (t.text) {     // §13.5 — its text, headed `string`
+            s.label = "string";
+            s.text = true;
         }
     }
     out = std::move(s);
@@ -3058,7 +3215,7 @@ bool Elaborator::run(const ast::SimFile& sim, const Source& sim_src,
                 // The root block is evaluated in an empty environment — there is
                 // no enclosing node whose settings it could read — so it always
                 // folds.
-                pinned[lf.key] = Pin{d, std::move(code), v.constant};
+                pinned[lf.key] = Pin{d, std::move(code), v.constant, v.text};
             else
                 // Bound but not evaluable: inert, as for a bad brace list above,
                 // so a required leaf is not reported again as SE0420.

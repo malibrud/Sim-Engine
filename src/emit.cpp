@@ -122,6 +122,11 @@ std::string shown(double v, const std::string& scalar, const EnumInfo* enm) {
     return literal(v, scalar);
 }
 
+// A setting's value as a person reads it, a string as its literal (§3.6).
+std::string shown(const SettingSlot& s) {
+    return s.is_text ? ast::string_literal(s.text) : shown(s.value, s.scalar, s.enm);
+}
+
 // A derived setting's expression, path-addressed rather than C++-addressed:
 // what the manifest and the topology page show as "<- 2 * fl.whl.radius".
 std::string derived_from(const ExprCode& expr) {
@@ -183,6 +188,7 @@ std::string unit_comment(const Unit& u) { return "// " + u.str(); }
 // unit, a record by its name and its BOUND units, `se.math.Vec3(m/s^2)`,
 // because a parametric record's own fields say only `U` (§5.2).
 std::string type_label(const Type& t) {
+    if (t.text || t.buffer) return bounded_label(t);   // §5.1a, §5.1b — no unit
     if (!t.is_record) return t.unit.str();
     std::string s = t.record->fq;
     for (std::size_t i = 0; i < t.unit_args.size(); ++i)
@@ -440,6 +446,18 @@ private:
         Type type;
     };
     std::vector<RootPort> root_ports(bool inputs) const;
+
+    // §5.1b — every string a node writes (a leaf's output or a var), which
+    // check_cuts() watches; and the longest text the model can hold.
+    struct TextDest {
+        std::string expr;     // "sig.tx.status", "tx.var.line"
+        std::string path;     // "tx.out.status", as the warning names it
+        std::string node;     // "tx", the log record's path
+        long capacity = 0;
+    };
+    std::vector<TextDest> text_dests() const;
+    long max_text_capacity() const;
+    bool public_text() const;   // a root setting, input or output is a string
 
     // The expression a consumer reads for one of its inputs (§15.3).
     std::string input_expr(const Leaf& leaf, const std::string& port) const;
@@ -704,7 +722,7 @@ void Emitter::leaf_class(const NodeInfo& node) {
         Row r;
         r.type = cpp_type(t);
         r.decl = name + init + ";";
-        if (t.buffer) r.comment = "// " + buffer_label(t);   // §5.1a — no unit
+        if (t.buffer || t.text) r.comment = "// " + bounded_label(t);   // §5.1a, §5.1b — no unit
         else if (!t.is_record) r.comment = unit_comment(t.unit);
         return r;
     };
@@ -977,6 +995,9 @@ std::string Emitter::source_expr(const InputSource& s, const Type* type) const {
     // override it, so it is folded at elaboration and arrives here as a number.
     std::string expr = s.kind == InputSource::Kind::Boundary ? s.boundary
                        : s.kind == InputSource::Kind::Param  ? render_expr(s.expr)
+                       : s.kind == InputSource::Kind::Const && s.is_text
+                           ? "std::string_view(" + cpp_string(s.text) + ", " +
+                                 std::to_string(s.text.size()) + ")"
                        : s.kind == InputSource::Kind::Const
                            ? dbl(s.value)
                            : "sig." + m_.leaves[s.producer].ident + "." + s.port;
@@ -1446,6 +1467,15 @@ void Emitter::sim_members() {
     o_ << "    std::string         se_stamp_;        // the run's `{time}`, taken at init() (§13.5)\n";
     o_ << "    std::vector<se_rt::Column> se_handles_;   // channel_handle()'s, by number (§14.1)\n";
     o_ << "    std::vector<double> se_handle_vals_;  // each as the last tick sampled it\n";
+    o_ << "    // §5.1b — a string handle's text, reserved to its capacity when it is\n";
+    o_ << "    // taken, so sampling never allocates during a run.\n";
+    o_ << "    std::vector<std::string> se_handle_texts_;\n";
+    o_ << "    std::vector<char>   se_row_is_text_;  // per column: a string, quoted (§13.5)\n";
+    o_ << "    std::vector<std::string_view> se_row_texts_;\n";
+    o_ << "    std::string         se_text_;         // what get_text() last returned\n";
+    if (!text_dests().empty())
+        o_ << "    bool                se_cut_warned_[" << text_dests().size()
+           << "] = {};   // §5.1b — each string's one warning\n";
     o_ << "    bool                se_ticked_ = false;\n";
     o_ << "    se_rt::InputTable   se_input_tab_;    // the inputs file, read at init() (§13.8)\n";
     o_ << "    bool                se_input_end_ = false;   // it ends the run before sim.duration\n";
@@ -1495,6 +1525,7 @@ void Emitter::sim_members() {
     o_ << "    std::string settle();\n";
     o_ << "    void        assign(const se_rt::Assignment& a);\n";
     o_ << "    double      value_of(std::size_t row) const;\n";
+    o_ << "    std::string text_of(std::size_t row) const;   // a string row's (§5.1b)\n";
     {
         bool any_element = false;
         for (const LoadRow& r : load_rows())
@@ -1516,6 +1547,8 @@ void Emitter::sim_members() {
     o_ << "    static se_rt::RunConfig default_config();\n";
     o_ << "    static se_rt::Tables    tables();\n";
     o_ << "    double      channel(std::size_t row, std::size_t i);\n";
+    o_ << "    std::string_view channel_str(std::size_t row);   // a string channel (§5.1b)\n";
+    o_ << "    static bool channel_is_text(std::size_t row);\n";
     o_ << "    std::size_t channel_extent(std::size_t row);\n";
     o_ << "    void        check_columns();\n";
     o_ << "    void        record_open();\n";
@@ -1538,10 +1571,13 @@ void Emitter::sim_members() {
     o_ << "    void        drive_inputs();\n";
     o_ << "    int         channel_handle(const char* path);\n";
     o_ << "    double      read(int handle);\n";
+    o_ << "    const char* read_text(int handle);\n";
     o_ << "    double      handle_value(const se_rt::Column& c);\n";
     o_ << "    void        sample_handles();\n";
+    o_ << "    void        check_cuts();   // §5.1b\n";
     o_ << "    std::vector<Sim::SettingInfo> settings_list();\n";
     o_ << "    double      get(const char* path);\n";
+    o_ << "    const char* get_text(const char* path);\n";
     o_ << "    bool        set(const char* path, double value);\n";
     o_ << "    bool        set(const char* path, const char* value);\n";
     o_ << "    bool        set_text(const std::string& path, const std::string& value);\n";
@@ -1602,8 +1638,9 @@ void Emitter::sim_resolve_settings() {
         //
         // An enum needs neither (§7.2a): its expression is an enumerator or a
         // copy of a setting of the same enum, already of the member's type.
+        // §7.2b — text is a string literal or a copy of a string setting.
         const std::string rhs =
-            s.scalar == "double" || s.enm
+            s.scalar == "double" || s.enm || s.is_text
                 ? render_expr(s.expr)
                 : "static_cast<" + s.scalar + ">(" + render_expr(s.expr) + ")";
         o_ << "    if (!se_pin_[" << i << "]) " << pad(lhs, w) << " = "
@@ -2220,12 +2257,48 @@ void Emitter::sim_record() {
         // elaboration, because a setting reference needs an identifier this
         // stage assigns. Everything else arrives already written.
         const RecordedSignal& s = m_.channels[r].sig;
+        if (s.text) {   // §5.1b — read with channel_str()
+            o_ << "        case " << r << ": return std::nan(\"\");   // " << m_.channels[r].path
+               << ", a string\n";
+            continue;
+        }
         o_ << "        case " << r << ": return static_cast<double>("
            << (s.code.empty() ? s.expr : render_expr(s.code)) << ");   // "
            << m_.channels[r].path << "\n";
     }
     o_ << "        default: return 0.0;\n";
     o_ << "    }\n}\n";
+
+    // §5.1b — a string channel's text, and which channels are strings.
+    bool any_text_channel = false;
+    for (const Channel& c : m_.channels) any_text_channel = any_text_channel || c.sig.text;
+    o_ << "\n// §5.1b — a string channel's text now; empty for any other channel.\n";
+    o_ << "std::string_view Sim::Impl::channel_str(std::size_t row) {\n";
+    if (!any_text_channel) {
+        o_ << "    (void)row;   // no string channels\n    return std::string_view();\n}\n";
+    } else {
+        o_ << "    switch (row) {\n";
+        for (std::size_t r = 0; r < m_.channels.size(); ++r) {
+            const RecordedSignal& s = m_.channels[r].sig;
+            if (!s.text) continue;
+            o_ << "        case " << r << ": return std::string_view("
+               << (s.code.empty() ? s.expr : render_expr(s.code)) << ");   // "
+               << m_.channels[r].path << "\n";
+        }
+        o_ << "        default: return std::string_view();\n";
+        o_ << "    }\n}\n";
+    }
+    o_ << "\nbool Sim::Impl::channel_is_text(std::size_t row) {\n";
+    if (!any_text_channel) {
+        o_ << "    (void)row;\n    return false;\n}\n";
+    } else {
+        o_ << "    switch (row) {\n";
+        for (std::size_t r = 0; r < m_.channels.size(); ++r)
+            if (m_.channels[r].sig.text) o_ << "        case " << r << ":\n";
+        o_ << "            return true;\n";
+        o_ << "        default: return false;\n";
+        o_ << "    }\n}\n";
+    }
 
     o_ << "\n// An array channel's element count, at the extent configuration settles.\n";
     o_ << "std::size_t Sim::Impl::channel_extent(std::size_t row) {\n";
@@ -2300,12 +2373,33 @@ void Emitter::sim_record() {
     o_ << "        head.push_back(c.written + \" [\" + t.channels[c.row].label + \"]\");\n";
     o_ << "    se_rec_.header(head);\n";
     o_ << "    se_row_.assign(se_config_.columns.size(), 0.0);\n";
+    if (any_text_channel) {
+        o_ << "    se_row_is_text_.assign(se_config_.columns.size(), 0);\n";
+        o_ << "    se_row_texts_.assign(se_config_.columns.size(), std::string_view());\n";
+        o_ << "    for (std::size_t k = 0; k < se_row_.size(); ++k)\n";
+        o_ << "        se_row_is_text_[k] = channel_is_text(se_config_.columns[k].row) ? 1 : 0;\n";
+    }
     o_ << "}\n";
 
     o_ << "\nvoid Sim::Impl::record_row() {\n";
-    o_ << "    for (std::size_t k = 0; k < se_row_.size(); ++k)\n";
-    o_ << "        se_row_[k] = channel(se_config_.columns[k].row, se_config_.columns[k].index);\n";
-    o_ << "    se_rec_.row(se_time_, se_row_);\n";
+    if (!any_text_channel) {
+        o_ << "    for (std::size_t k = 0; k < se_row_.size(); ++k)\n";
+        o_ << "        se_row_[k] = channel(se_config_.columns[k].row, se_config_.columns[k].index);\n";
+        o_ << "    se_rec_.row(se_time_, se_row_);\n";
+    } else {
+        o_ << "    bool text = false;\n";
+        o_ << "    for (std::size_t k = 0; k < se_row_.size(); ++k) {\n";
+        o_ << "        const se_rt::Column& c = se_config_.columns[k];\n";
+        o_ << "        if (se_row_is_text_[k]) {   // §13.5 — quoted, RFC 4180\n";
+        o_ << "            se_row_texts_[k] = channel_str(c.row);\n";
+        o_ << "            text = true;\n";
+        o_ << "        } else {\n";
+        o_ << "            se_row_[k] = channel(c.row, c.index);\n";
+        o_ << "        }\n";
+        o_ << "    }\n";
+        o_ << "    if (text) se_rec_.row(se_time_, se_row_, se_row_is_text_, se_row_texts_);\n";
+        o_ << "    else      se_rec_.row(se_time_, se_row_);\n";
+    }
     o_ << "}\n";
 
     // ── the menu, and the list ───────────────────────────────────────────────
@@ -2432,7 +2526,23 @@ void Emitter::sim_record() {
     o_ << "    }\n";
     o_ << "    se_handles_.push_back(c);\n";
     o_ << "    se_handle_vals_.push_back(std::nan(\"\"));\n";
+    o_ << "    se_handle_texts_.emplace_back();\n";
+    if (any_text_channel) {
+        o_ << "    // §5.1b — room for the longest text the model can hold, so sampling\n";
+        o_ << "    // never allocates during a run.\n";
+        o_ << "    if (channel_is_text(c.row)) se_handle_texts_.back().reserve("
+           << max_text_capacity() << ");\n";
+    }
     o_ << "    return static_cast<int>(se_handles_.size() - 1);\n";
+    o_ << "}\n";
+    o_ << "\n// §5.1b — a string channel's text, as the last tick sampled it.\n";
+    o_ << "const char* Sim::Impl::read_text(int handle) {\n";
+    o_ << "    if (handle < 0 || static_cast<std::size_t>(handle) >= se_handles_.size())\n";
+    o_ << "        return nullptr;\n";
+    o_ << "    const std::size_t k = static_cast<std::size_t>(handle);\n";
+    o_ << "    if (!channel_is_text(se_handles_[k].row)) return nullptr;\n";
+    o_ << "    if (!se_ticked_) se_handle_texts_[k].assign(channel_str(se_handles_[k].row));\n";
+    o_ << "    return se_handle_texts_[k].c_str();\n";
     o_ << "}\n";
     o_ << "\ndouble Sim::Impl::read(int handle) {\n";
     o_ << "    if (handle < 0 || static_cast<std::size_t>(handle) >= se_handles_.size())\n";
@@ -2449,10 +2559,39 @@ void Emitter::sim_record() {
     o_ << "    return channel(c.row, c.index);\n";
     o_ << "}\n";
     o_ << "\nvoid Sim::Impl::sample_handles() {\n";
-    o_ << "    for (std::size_t k = 0; k < se_handles_.size(); ++k)\n";
+    o_ << "    for (std::size_t k = 0; k < se_handles_.size(); ++k) {\n";
     o_ << "        se_handle_vals_[k] = handle_value(se_handles_[k]);\n";
+    if (any_text_channel)
+        o_ << "        if (channel_is_text(se_handles_[k].row))\n"
+              "            se_handle_texts_[k].assign(channel_str(se_handles_[k].row));\n";
+    o_ << "    }\n";
     o_ << "    se_ticked_ = true;\n";
     o_ << "}\n";
+
+    // ── §5.1b — a string written past its capacity ───────────────────────────
+    const std::vector<TextDest> dests = text_dests();
+    o_ << "\n// §5.1b — text written past a string's capacity was cut at a whole\n";
+    o_ << "// character; the first cut of each destination is logged once.\n";
+    o_ << "void Sim::Impl::check_cuts() {\n";
+    if (dests.empty()) {
+        o_ << "    // no string outputs or vars\n}\n";
+    } else {
+        for (std::size_t k = 0; k < dests.size(); ++k) {
+            const TextDest& d = dests[k];
+            o_ << "    if (" << d.expr << ".wanted_ > " << d.capacity << ") {\n";
+            o_ << "        if (!se_cut_warned_[" << k << "]) {\n";
+            o_ << "            se_cut_warned_[" << k << "] = true;\n";
+            o_ << "            se_run_.log.write(se_rt::Level::Warn, " << quote(d.node) << ", se_time_,\n";
+            o_ << "                              " << quote(d.path + ": ") << " + std::to_string("
+               << d.expr << ".wanted_) +\n";
+            o_ << "                                  \" bytes into string(" << d.capacity
+               << "), truncated\");\n";
+            o_ << "        }\n";
+            o_ << "        " << d.expr << ".wanted_ = 0;\n";
+            o_ << "    }\n";
+        }
+        o_ << "}\n";
+    }
 
     o_ << "\n// `path` null: the global threshold; otherwise one node path's.\n";
     o_ << "bool Sim::Impl::log_level(const char* path, const char* level) {\n";
@@ -2511,6 +2650,7 @@ void Emitter::sim_run() {
                << " has no init(): its ICs are declarative.\n";
         o_ << "    se_inited_ = " << (i + 1) << ";\n";
     }
+    if (!text_dests().empty()) o_ << "    check_cuts();   // §5.1b\n";
     o_ << "}\n";
 
     // ── tick ─────────────────────────────────────────────────────────────────
@@ -2532,6 +2672,8 @@ void Emitter::sim_run() {
     o_ << "    output_pass();\n";
     o_ << "    publish_outputs();\n";
     if (any_next()) o_ << "    if (!se_run_.control.halted()) next_tick();\n";
+    if (!text_dests().empty())
+        o_ << "    check_cuts();   // §5.1b — a string written past its capacity\n";
     o_ << "    if (se_rec_.active() && se_tick_ % se_config_.every == 0) record_row();\n";
     o_ << "    sample_handles();   // §14.1 — what read() returns until the next tick\n";
     o_ << "    if (se_run_.control.halted() || se_tick_ >= se_end_tick_) {\n";
@@ -2805,7 +2947,7 @@ void Emitter::sim_inputs_file() {
             std::vector<std::string> c;
             c.push_back("{" + quote(p.name) + ",");
             c.push_back("K::Setting,");
-            c.push_back(quote(e ? e->fq : p.type.scalar) + ",");
+            c.push_back(quote(e ? e->fq : p.type.text ? std::string("string") : p.type.scalar) + ",");
             c.push_back(quote(e ? std::string("-") : u.str()) + ",");
             std::string dim = "{";
             for (int k = 0; k < kBaseDims; ++k) {
@@ -2819,7 +2961,8 @@ void Emitter::sim_inputs_file() {
             c.push_back(dbl(e ? 0.0 : u.offset) + ",");
             c.push_back(e ? table(e) + ", " + std::to_string(e->values.size()) + ","
                           : std::string("nullptr, 0,"));
-            c.push_back("false},");
+            c.push_back("false,");
+            c.push_back(std::to_string(p.type.text ? p.type.capacity : 0) + "},");
             cells.push_back(c);
         }
         std::vector<std::size_t> w(cells.front().size(), 0);
@@ -2828,7 +2971,7 @@ void Emitter::sim_inputs_file() {
         o_ << "    using K = se_rt::RowKind;\n";
         o_ << "    static const se_rt::SettingRow rows[] = {\n";
         o_ << "        // path, kind (unused), type, unit, {m kg s A K mol cd rad}, scale,\n";
-        o_ << "        // offset, enumerators, structural (unused)\n";
+        o_ << "        // offset, enumerators, structural (unused), capacity\n";
         for (const auto& c : cells) {
             o_ << "        ";
             for (std::size_t k = 0; k < c.size(); ++k)
@@ -2890,7 +3033,8 @@ void Emitter::sim_inputs_file() {
         for (std::size_t i = 0; i < ports.size(); ++i) {
             const RootPort& p = ports[i];
             const std::string sc = p.type.scalar;
-            const std::string rhs = p.type.enm ? "static_cast<" + p.type.enm->cpp_name +
+            const std::string rhs = p.type.text ? std::string("std::string_view(se_input_tab_.text(c))")
+                                    : p.type.enm ? "static_cast<" + p.type.enm->cpp_name +
                                                      ">(static_cast<int>(v[c]))"
                                     : sc == "double" ? std::string("v[c]")
                                     : sc == "bool"   ? std::string("v[c] != 0.0")
@@ -2951,6 +3095,13 @@ void Emitter::sim_settings_source() {
         if (r.kind == LoadRow::Kind::Run) return seconds;
         return r.kind == LoadRow::Kind::Setting ? m_.settings[r.setting].unit : r.state->unit;
     };
+    // §5.1b — a string setting. Only a setting can be one.
+    auto text_of = [&](const LoadRow& r) -> const SettingSlot* {
+        if (r.kind != LoadRow::Kind::Setting || !m_.settings[r.setting].is_text) return nullptr;
+        return &m_.settings[r.setting];
+    };
+    bool any_text = false;
+    for (const LoadRow& r : rows) any_text = any_text || text_of(r);
 
     // ── the table ────────────────────────────────────────────────────────────
     o_ << "\n// §14.1 — every path a settings source may bind, with what the loader\n";
@@ -2993,7 +3144,7 @@ void Emitter::sim_settings_source() {
                         : r.kind == LoadRow::Kind::Initial ? "K::Initial,"
                         : r.kind == LoadRow::Kind::Run     ? "K::Run,"
                                                            : "K::Element,");
-            c.push_back(quote(e ? e->fq : scalar_of(r)) + ",");
+            c.push_back(quote(e ? e->fq : text_of(r) ? std::string("string") : scalar_of(r)) + ",");
             c.push_back(quote(u.str()) + ",");
             std::string dim = "{";
             for (int k = 0; k < kBaseDims; ++k) {
@@ -3009,7 +3160,8 @@ void Emitter::sim_settings_source() {
                           : std::string("nullptr, 0,"));
             const bool structural =
                 r.kind == LoadRow::Kind::Setting && m_.settings[r.setting].structural;
-            c.push_back(std::string(structural ? "true" : "false") + "},");
+            c.push_back(std::string(structural ? "true" : "false") + ",");
+            c.push_back(std::to_string(text_of(r) ? text_of(r)->capacity : 0) + "},");
             cells.push_back(c);
         }
         std::vector<std::size_t> w(cells.front().size(), 0);
@@ -3018,7 +3170,7 @@ void Emitter::sim_settings_source() {
         o_ << "    using K = se_rt::RowKind;\n";
         o_ << "    static const se_rt::SettingRow rows[] = {\n";
         o_ << "        // path, kind, type, unit, {m kg s A K mol cd rad}, scale, offset,\n";
-        o_ << "        // enumerators, structural\n";
+        o_ << "        // enumerators, structural, capacity (a string's, in bytes)\n";
         for (const auto& c : cells) {
             o_ << "        ";
             for (std::size_t k = 0; k < c.size(); ++k)
@@ -3058,7 +3210,8 @@ void Emitter::sim_settings_source() {
             if (r.kind == LoadRow::Kind::Element) continue;
             const std::string sc = scalar_of(r);
             const EnumInfo* e = enum_of(r);
-            const std::string rhs = e                 ? "static_cast<" + e->cpp_name +
+            const std::string rhs = text_of(r)       ? std::string("std::string_view(a.text)")
+                                    : e              ? "static_cast<" + e->cpp_name +
                                                             ">(static_cast<int>(v))"
                                     : sc == "double" ? std::string("v")
                                     : sc == "bool"   ? std::string("v != 0.0")
@@ -3092,12 +3245,29 @@ void Emitter::sim_settings_source() {
             }
             const std::string sc = scalar_of(r);
             const std::string m = member(r);
-            const std::string v = enum_of(r)        ? "static_cast<double>(static_cast<int>(" + m + "))"
+            const std::string v = text_of(r)        ? std::string("std::nan(\"\")")   // text
+                                  : enum_of(r)     ? "static_cast<double>(static_cast<int>(" + m + "))"
                                   : sc == "double" ? m
                                                    : "static_cast<double>(" + m + ")";
             o_ << "        case " << i << ": return " << v << ";\n";
         }
         o_ << "        default: return 0.0;\n";
+        o_ << "    }\n}\n";
+    }
+
+    // ── a string row's value, out (§5.1b) ────────────────────────────────────
+    o_ << "\n// A string setting's text: what dump_settings() writes and get_text()\n";
+    o_ << "// returns. Empty for any other row.\n";
+    o_ << "std::string Sim::Impl::text_of(std::size_t row) const {\n";
+    if (!any_text) {
+        o_ << "    (void)row;   // no string settings\n    return std::string();\n}\n";
+    } else {
+        o_ << "    switch (row) {\n";
+        for (std::size_t i = 0; i < rows.size(); ++i)
+            if (text_of(rows[i]))
+                o_ << "        case " << i << ": return std::string(std::string_view("
+                   << member(rows[i]) << "));\n";
+        o_ << "        default: return std::string();\n";
         o_ << "    }\n}\n";
     }
 
@@ -3201,9 +3371,13 @@ void Emitter::sim_settings_source() {
     o_ << "    std::size_t n = 0;\n";
     o_ << "    const se_rt::SettingRow* rows = setting_rows(n);\n";
     o_ << "    std::vector<double> values(n, 0.0);\n";
-    o_ << "    for (std::size_t r = 0; r < n; ++r) values[r] = value_of(r);\n";
+    o_ << "    std::vector<std::string> texts(n);\n";
+    o_ << "    for (std::size_t r = 0; r < n; ++r) {\n";
+    o_ << "        values[r] = value_of(r);\n";
+    o_ << "        texts[r] = text_of(r);\n";
+    o_ << "    }\n";
     o_ << "    se_dump_ = se_rt::dump_source(" << quote(m_.name)
-       << ", rows, n, values.data(), se_ic_elements_) +\n"
+       << ", rows, n, values.data(), se_ic_elements_, texts.data()) +\n"
           "               se_rt::dump_run(se_config_);\n";
     o_ << "    return se_dump_.c_str();\n";
     o_ << "}\n";
@@ -3243,6 +3417,7 @@ void Emitter::sim_settings_source() {
     }
     o_ << "        s.path = rows[r].path;\n";
     o_ << "        s.value = value_of(r);\n";
+    o_ << "        s.text = text_of(r);\n";
     o_ << "        out.push_back(s);\n";
     o_ << "    }\n";
     o_ << "    return out;\n";
@@ -3283,10 +3458,38 @@ void Emitter::sim_settings_source() {
         o_ << "                if (a.row == r && a.index == index) return a.value;\n";
         o_ << "        }\n";
     }
+    o_ << "        if (se_rt::is_text_row(rows[r])) {\n";
+    o_ << "            se_call_error_ = p + \": a string setting, which get_text() reads (§5.1b)\";\n";
+    o_ << "            return std::nan(\"\");\n";
+    o_ << "        }\n";
     o_ << "        return value_of(r);\n";
     o_ << "    }\n";
     o_ << "    se_call_error_ = p + \": not a setting, a state or sim.duration of this model\";\n";
     o_ << "    return std::nan(\"\");\n";
+    o_ << "}\n";
+
+    o_ << "\n// §5.1b — a string setting's text, or nullptr, with error() saying why.\n";
+    o_ << "const char* Sim::Impl::get_text(const char* path) {\n";
+    o_ << "    se_call_error_.clear();\n";
+    o_ << "    if (!se_started_) {\n";
+    o_ << "        const std::string refused = accept_settings();\n";
+    o_ << "        settle();\n";
+    o_ << "        if (!refused.empty() && se_load_error_.empty()) se_load_error_ = refused;\n";
+    o_ << "    }\n";
+    o_ << "    const std::string p = path ? path : \"\";\n";
+    o_ << "    std::size_t n = 0;\n";
+    o_ << "    const se_rt::SettingRow* rows = setting_rows(n);\n";
+    o_ << "    for (std::size_t r = 0; r < n; ++r) {\n";
+    o_ << "        if (p != rows[r].path) continue;\n";
+    o_ << "        if (!se_rt::is_text_row(rows[r])) {\n";
+    o_ << "            se_call_error_ = p + \": not a string setting, so get() reads it\";\n";
+    o_ << "            return nullptr;\n";
+    o_ << "        }\n";
+    o_ << "        se_text_ = text_of(r);\n";
+    o_ << "        return se_text_.c_str();\n";
+    o_ << "    }\n";
+    o_ << "    se_call_error_ = p + \": not a setting of this model\";\n";
+    o_ << "    return nullptr;\n";
     o_ << "}\n";
 
     o_ << "\n// In the canonical unit. A finite type's value is written as the name of\n";
@@ -3298,6 +3501,11 @@ void Emitter::sim_settings_source() {
     o_ << "    std::size_t n = 0;\n";
     o_ << "    const se_rt::SettingRow* rows = setting_rows(n);\n";
     o_ << "    for (std::size_t r = 0; r < n; ++r) {\n";
+    o_ << "        if (stem == rows[r].path && se_rt::is_text_row(rows[r])) {\n";
+    o_ << "            se_call_error_ = p + \": a string setting takes text, through set(path, text) \"\n";
+    o_ << "                                 \"(§5.1b)\";\n";
+    o_ << "            return false;\n";
+    o_ << "        }\n";
     o_ << "        if (stem != rows[r].path || !rows[r].enumerators) continue;\n";
     o_ << "        for (std::size_t k = 0; k < rows[r].n_enumerators; ++k)\n";
     o_ << "            if (static_cast<double>(rows[r].enumerators[k].value) == value)\n";
@@ -3313,6 +3521,15 @@ void Emitter::sim_settings_source() {
     o_ << "bool Sim::Impl::set(const char* path, const char* value) {\n";
     o_ << "    if (!configuring(\"set\")) return false;\n";
     o_ << "    const std::string v = value ? value : \"\";\n";
+    o_ << "    // §5.1b — at a string setting the value is the text itself, quotes,\n";
+    o_ << "    // semicolons and line breaks included, so it is escaped as a source\n";
+    o_ << "    // would write it.\n";
+    o_ << "    const std::string p = path ? path : \"\";\n";
+    o_ << "    std::size_t n = 0;\n";
+    o_ << "    const se_rt::SettingRow* rows = setting_rows(n);\n";
+    o_ << "    for (std::size_t r = 0; r < n; ++r)\n";
+    o_ << "        if (p == rows[r].path && se_rt::is_text_row(rows[r]))\n";
+    o_ << "            return set_text(p, se_rt::source_string(v));\n";
     o_ << "    if (v.find(';') != std::string::npos || v.find('\\n') != std::string::npos) {\n";
     o_ << "        se_call_error_ = std::string(path ? path : \"\") + \": one value, as `340 (kg)`\";\n";
     o_ << "        return false;\n";
@@ -3385,6 +3602,7 @@ void Emitter::sim_facade() {
     o_ << "std::uint64_t       Sim::tick_count() const { return impl_->se_end_tick_; }\n";
     o_ << "std::vector<Sim::SettingInfo> Sim::settings_list() { return impl_->settings_list(); }\n";
     o_ << "double        Sim::get(const char* path) const { return impl_->get(path); }\n";
+    o_ << "const char*   Sim::get_text(const char* path) const { return impl_->get_text(path); }\n";
     o_ << "bool          Sim::set(const char* path, double v) { return impl_->set(path, v); }\n";
     o_ << "bool          Sim::set(const char* path, const char* v) { return impl_->set(path, v); }\n";
     o_ << "double              Sim::time() const       "
@@ -3395,6 +3613,7 @@ void Emitter::sim_facade() {
     o_ << "}\n";
     o_ << "int           Sim::channel_handle(const char* p) { return impl_->channel_handle(p); }\n";
     o_ << "double        Sim::read(int handle) const      { return impl_->read(handle); }\n";
+    o_ << "const char*   Sim::read_text(int handle) const { return impl_->read_text(handle); }\n";
     o_ << "void          Sim::log_capture(bool on)        { impl_->se_run_.log.capture(on); }\n";
     o_ << "bool          Sim::log_next(LogLine& line) {\n";
     o_ << "    se_rt::LogLine l;\n";
@@ -3555,8 +3774,13 @@ std::vector<std::size_t> Emitter::root_settings() const {
 std::string Emitter::root_setting_default(const std::string& decl, const Type& t) const {
     if (!t.is_record) {
         for (std::size_t i : root_settings())
-            if (m_.settings[i].name == decl)
-                return literal(m_.settings[i].value, m_.settings[i].scalar, m_.settings[i].enm);
+            if (m_.settings[i].name == decl) {
+                const SettingSlot& s = m_.settings[i];
+                if (s.is_text)   // §5.1b — every byte, a NUL included
+                    return "std::string_view(" + cpp_string(s.text) + ", " +
+                           std::to_string(s.text.size()) + ")";
+                return literal(s.value, s.scalar, s.enm);
+            }
         return "{}";
     }
     std::string r = "{";
@@ -3593,7 +3817,9 @@ void Emitter::public_class() {
                << pad(r.init + ";", wi + 1) << "   " << r.comment << "\n";
         o_ << "    };\n";
     };
-    auto zero = [](const Type& t) { return t.is_record ? std::string("{}") : literal(0.0, t.scalar, t.enm); };
+    auto zero = [](const Type& t) {
+        return t.is_record || t.text ? std::string("{}") : literal(0.0, t.scalar, t.enm);
+    };
 
     std::vector<Member> settings;
     {
@@ -3602,7 +3828,8 @@ void Emitter::public_class() {
             const SettingSlot& s = m_.settings[i];
             if (!seen.insert(s.decl).second) continue;
             Member r{cpp_type(s.decl_type), s.decl, root_setting_default(s.decl, s.decl_type),
-                     "// " + (s.decl_type.is_record ? type_label(s.decl_type) : s.unit.str())};
+                     "// " + (s.decl_type.is_record || s.is_text ? type_label(s.decl_type)
+                                                                  : s.unit.str())};
             if (s.structural) r.comment += "   structural: fixed when generated";
             settings.push_back(r);
         }
@@ -3641,8 +3868,9 @@ void Emitter::public_class() {
     o_ << "        std::string path;               // \"whl.radius\", \"bw.w1[3]\", \"sim.duration\"\n";
     o_ << "        SettingKind kind = SettingKind::Setting;\n";
     o_ << "        std::string unit;               // canonical; \"-\" for none\n";
-    o_ << "        std::string type;               // double, int, bool, or a finite type\n";
-    o_ << "        double      value = 0.0;        // in `unit`; an enumerator's value\n";
+    o_ << "        std::string type;               // double, int, bool, string, or a finite type\n";
+    o_ << "        double      value = 0.0;        // in `unit`; an enumerator's value; NaN for text\n";
+    o_ << "        std::string text;               // a string setting's value (§5.1b)\n";
     o_ << "        bool        structural = false; // listed, never settable (§6.2)\n";
     o_ << "    };\n";
     o_ << "    //  One channel the run can record (§13.5), and whether it is selected.\n";
@@ -3698,8 +3926,9 @@ void Emitter::public_class() {
     o_ << "    //  get() of a path the model does not have is NaN.\n";
     o_ << "    std::vector<SettingInfo> settings_list();\n";
     o_ << "    double        get(const char* path) const;\n";
+    o_ << "    const char*   get_text(const char* path) const;   // a string setting (§5.1b)\n";
     o_ << "    bool          set(const char* path, double value);\n";
-    o_ << "    bool          set(const char* path, const char* value);\n\n";
+    o_ << "    bool          set(const char* path, const char* value);   // a string: as it is\n\n";
     o_ << "    //  The recording one line of a `record` section at a time (§13.5):\n";
     o_ << "    //  record() is `path;`, unrecord() is `-path;`, record_clear() is\n";
     o_ << "    //  `clear;`. A refused call returns false, changes nothing, and does\n";
@@ -3761,6 +3990,7 @@ void Emitter::public_class() {
     o_ << "    //  log_next() instead of printing them; the log file is unaffected.\n";
     o_ << "    int            channel_handle(const char* path);\n";
     o_ << "    double         read(int handle) const;\n";
+    o_ << "    const char*    read_text(int handle) const;   // a string channel (§5.1b)\n";
     o_ << "    void           log_capture(bool on);\n";
     o_ << "    bool           log_next(LogLine& line);   // false when none is waiting\n\n";
 
@@ -3827,6 +4057,7 @@ std::string Emitter::public_hpp() {
     o_ << "// " << std::string(76, '-') << "\n";
     o_ << "#pragma once\n\n";
     o_ << "#include <cstdint>\n#include <memory>\n#include <string>\n#include <vector>\n\n";
+    if (public_text()) o_ << se_string_type() << "\n";
 
     const std::set<const EnumInfo*> pub_e = public_enums();
     if (!pub_e.empty()) {
@@ -3939,8 +4170,8 @@ std::string Emitter::main_cpp() {
         std::string eg = "PATH = VALUE";
         for (const SettingSlot& s : m_.settings) {
             if (s.structural) continue;
-            eg = s.path + " = " + shown(s.value, s.scalar, s.enm);
-            if (!s.enm && s.unit.str() != "-") eg += " (" + s.unit.str() + ")";
+            eg = s.path + " = " + shown(s);
+            if (!s.enm && !s.is_text && s.unit.str() != "-") eg += " (" + s.unit.str() + ")";
             break;
         }
         // One C string literal per line, each ending in an escaped newline.
@@ -4123,7 +4354,9 @@ std::string Emitter::main_cpp() {
     t << "        for (std::uint64_t k = 0; k < frame && !sim.done(); ++k) {\n";
     if (!m_.boundary_in.empty()) {
         auto zero = [](const Type& ty) {
-            return (ty.is_record ? std::string("{}") : literal(0.0, ty.scalar, ty.enm)) + ";";
+            return (ty.is_record ? std::string("{}")
+                    : ty.text    ? std::string("\"\"")
+                                 : literal(0.0, ty.scalar, ty.enm)) + ";";
         };
         std::size_t w = 0, wz = 0;
         for (const BoundaryIn& b : m_.boundary_in) {
@@ -4172,7 +4405,7 @@ namespace {
 // What a wire carries, as a reader wants it: a unit for a scalar, the
 // record's own name for a record (§5.3 — the whole record travels).
 std::string topo_type(const Type& ty) {
-    if (ty.buffer) return buffer_label(ty);   // §5.1a — bytes, no unit
+    if (ty.buffer || ty.text) return bounded_label(ty);   // §5.1a, §5.1b — no unit
     if (!ty.is_record) return ty.unit.str();
     const std::size_t dot = ty.record->fq.rfind('.');
     std::string r = dot == std::string::npos ? ty.record->fq : ty.record->fq.substr(dot + 1);
@@ -4752,7 +4985,7 @@ std::string Emitter::topology_json(const Topo& topo) const {
         const SettingSlot& s = m_.settings[k];
         t << (k ? ",\n " : "\n ") << "{\"path\": " << jstr(s.path) << ", \"owner\": " << jstr(s.owner)
           << ", \"name\": " << jstr(s.name) << ", \"unit\": " << jstr(s.unit.str())
-          << ", \"value\": " << jstr(shown(s.value, s.scalar, s.enm))
+          << ", \"value\": " << jstr(shown(s))
           << ", \"from\": " << (s.constant ? std::string("null") : jstr(derived_from(s.expr)))
           << ", \"structural\": " << jbool(s.structural) << "}";
     }
@@ -4818,6 +5051,10 @@ std::string Emitter::manifest() {
         static const std::string kBuf = "se_rt::buffer<";
         if (cpp.compare(0, kBuf.size(), kBuf) == 0 && cpp.back() == '>')
             return "buffer(" + cpp.substr(kBuf.size(), cpp.size() - kBuf.size() - 1) + ")";
+        static const std::string kStr = "se_rt::string<";
+        if (cpp.compare(0, kStr.size(), kStr) == 0 && cpp.back() == '>')
+            return "string(" + cpp.substr(kStr.size(), cpp.size() - kStr.size() - 1) + ")";
+        if (cpp == "std::string_view") return std::string("string");
         return cpp;
     };
     t << "\n[state.discrete]          # Sim::Impl::dis; offsets from Sim::Impl::discrete_map()\n";
@@ -4871,8 +5108,8 @@ std::string Emitter::manifest() {
     // open the model.
     t << "\n[settings]                # configurable; value is the elaborated default\n";
     for (const SettingSlot& s : m_.settings) {
-        t << col("", 10) << col(s.path, 24) << col(s.unit.str(), 12) << "= "
-          << shown(s.value, s.scalar, s.enm);
+        t << col("", 10) << col(s.path, 24) << col(s.is_text ? "string" : s.unit.str(), 12) << "= "
+          << shown(s);
         if (!s.constant) t << "   <- " << derived_from(s.expr);
         t << "\n";
     }
@@ -5353,6 +5590,7 @@ const char* se_sim_h() {
 #  define se_setting_type         SE_NAME(se_setting_type)
 #  define se_setting_structural   SE_NAME(se_setting_structural)
 #  define se_get                  SE_NAME(se_get)
+#  define se_get_text             SE_NAME(se_get_text)
 #  define se_set                  SE_NAME(se_set)
 #  define se_set_text             SE_NAME(se_set_text)
 #  define se_channel_count        SE_NAME(se_channel_count)
@@ -5376,9 +5614,11 @@ const char* se_sim_h() {
 #  define se_error                SE_NAME(se_error)
 #  define se_set_input            SE_NAME(se_set_input)
 #  define se_set_inputs           SE_NAME(se_set_inputs)
+#  define se_set_input_text       SE_NAME(se_set_input_text)
 #  define se_tick                 SE_NAME(se_tick)
 #  define se_get_output           SE_NAME(se_get_output)
 #  define se_get_outputs          SE_NAME(se_get_outputs)
+#  define se_get_output_text      SE_NAME(se_get_output_text)
 #  define se_done                 SE_NAME(se_done)
 #  define se_time                 SE_NAME(se_time)
 #  define se_tick_index           SE_NAME(se_tick_index)
@@ -5386,6 +5626,7 @@ const char* se_sim_h() {
 #  define se_channel_handle       SE_NAME(se_channel_handle)
 #  define se_read                 SE_NAME(se_read)
 #  define se_read_many            SE_NAME(se_read_many)
+#  define se_read_text            SE_NAME(se_read_text)
 #  define se_sync_realtime        SE_NAME(se_sync_realtime)
 #  define se_realtime_utilization SE_NAME(se_realtime_utilization)
 #  define se_realtime_overrun_pct SE_NAME(se_realtime_overrun_pct)
@@ -5438,11 +5679,13 @@ SE_API int         se_setting_count(se_sim* s);
 SE_API const char* se_setting_path(se_sim* s, int i);
 SE_API int         se_setting_kind(se_sim* s, int i);   /* 0 setting, 1 initial, 2 run */
 SE_API const char* se_setting_unit(se_sim* s, int i);   /* canonical; "-" for none */
-SE_API const char* se_setting_type(se_sim* s, int i);   /* double, int, bool, a finite type */
+SE_API const char* se_setting_type(se_sim* s, int i);   /* double, int, bool, string, a finite type */
 SE_API int         se_setting_structural(se_sim* s, int i);
-SE_API double      se_get(se_sim* s, const char* path);              /* NaN if unknown */
+SE_API double      se_get(se_sim* s, const char* path);              /* NaN if unknown, or text */
+SE_API const char* se_get_text(se_sim* s, const char* path);         /* a string; NULL if not one */
 SE_API int         se_set(se_sim* s, const char* path, double value);  /* canonical unit */
-SE_API int         se_set_text(se_sim* s, const char* path, const char* value); /* "340 (kg)" */
+SE_API int         se_set_text(se_sim* s, const char* path, const char* value); /* "340 (kg)";
+                                                     a string setting takes its text as it is */
 
 /* Every channel the run can record, and whether it is selected. */
 SE_API int         se_channel_count(se_sim* s);
@@ -5469,14 +5712,18 @@ SE_API int         se_init(se_sim* s);
 SE_API const char* se_error(se_sim* s);           /* "" when there is none */
 
 /* ---- 3. step ----------------------------------------------------------- */
-/* Every value crosses as a double: an int as its value, a bool as 0 or 1, a
+/* Every number crosses as a double: an int as its value, a bool as 0 or 1, a
    finite type as its enumerator's value. The plural forms move every port,
-   in index order; n must be the count. */
+   in index order; n must be the count. A string port, whose unit is
+   "string", is text: the _text calls move it, se_set_inputs ignores its
+   slot and se_get_outputs fills it with NaN (section 14.2). */
 SE_API int         se_set_input(se_sim* s, int i, double value);
 SE_API int         se_set_inputs(se_sim* s, const double* values, int n);
+SE_API int         se_set_input_text(se_sim* s, int i, const char* value);
 SE_API void        se_tick(se_sim* s);
 SE_API double      se_get_output(se_sim* s, int i);    /* NaN for a bad index */
 SE_API int         se_get_outputs(se_sim* s, double* values, int n);
+SE_API const char* se_get_output_text(se_sim* s, int i);   /* NULL if not text */
 SE_API int         se_done(se_sim* s);
 SE_API double      se_time(se_sim* s);            /* s, the instant the next tick samples */
 SE_API uint64_t    se_tick_index(se_sim* s);
@@ -5486,6 +5733,7 @@ SE_API uint64_t    se_tick_count(se_sim* s);      /* the run's length in ticks *
 SE_API int         se_channel_handle(se_sim* s, const char* path);   /* -1 if refused */
 SE_API double      se_read(se_sim* s, int handle);                   /* NaN for a bad handle */
 SE_API int         se_read_many(se_sim* s, const int* handles, int n, double* out);
+SE_API const char* se_read_text(se_sim* s, int handle);   /* a string channel; NULL if not */
 
 /* Keeping pace with wall time: tick, then wait for the wall. */
 SE_API void        se_sync_realtime(se_sim* s);
@@ -5519,12 +5767,62 @@ SE_API int         se_finish(se_sim* s);          /* 0 for a clean run */
 //  doubles, lists read a row at a time, a refusal of its own, and no exception
 //  crossing the boundary. It uses <stem>.hpp alone, as any host would.
 
+// §5.1b — every string storage a node writes: a leaf's string outputs, in
+// the signal block, and its string vars, in the leaf itself.
+std::vector<Emitter::TextDest> Emitter::text_dests() const {
+    std::vector<TextDest> out;
+    for (const Leaf& leaf : m_.leaves) {
+        const std::string node = leaf.path;
+        for (const Field& f : leaf.ports_out)
+            if (f.type.text && f.type.capacity > 0)
+                out.push_back({"sig." + leaf.ident + "." + f.name,
+                               (node.empty() ? "" : node + ".") + "out." + f.name,
+                               node.empty() ? "sim" : node, f.type.capacity});
+        for (const Field& f : leaf.node->vars)
+            if (f.type.text && f.type.capacity > 0)
+                out.push_back({leaf.ident + ".var." + f.name,
+                               (node.empty() ? "" : node + ".") + "var." + f.name,
+                               node.empty() ? "sim" : node, f.type.capacity});
+    }
+    return out;
+}
+
+// §5.1b — the longest text anything in the model can hold: a reader views
+// one of these, so it is room enough for any string channel.
+long Emitter::max_text_capacity() const {
+    long cap = 1;
+    for (const Leaf& leaf : m_.leaves) {
+        for (const Field& f : leaf.ports_out)
+            if (f.type.text) cap = std::max(cap, f.type.capacity);
+        for (const Field& f : leaf.node->vars)
+            if (f.type.text) cap = std::max(cap, f.type.capacity);
+        for (const auto& kv : leaf.inputs)
+            if (kv.second.is_text) cap = std::max(cap, static_cast<long>(kv.second.text.size()));
+    }
+    for (const SettingSlot& s : m_.settings)
+        if (s.is_text) cap = std::max(cap, s.capacity);
+    for (const BoundaryIn& b : m_.boundary_in)
+        if (b.type.text) cap = std::max(cap, b.type.capacity);
+    return cap;
+}
+
+bool Emitter::public_text() const {
+    for (std::size_t i : root_settings())
+        if (m_.settings[i].is_text) return true;
+    for (const BoundaryIn& b : m_.boundary_in)
+        if (b.type.text) return true;
+    for (const RootOutput& r : m_.root_outputs)
+        if (r.type.text) return true;
+    return false;
+}
+
 std::vector<Emitter::RootPort> Emitter::root_ports(bool inputs) const {
     std::vector<RootPort> out;
     std::function<void(const std::string&, const std::string&, const Type&)> flatten =
         [&](const std::string& name, const std::string& member, const Type& t) {
             if (!t.is_record) {
-                out.push_back({name, t.enm ? t.enm->fq : t.unit.str(), member, t});
+                out.push_back({name, t.enm ? t.enm->fq : t.text ? std::string("string") : t.unit.str(),
+                               member, t});
                 return;
             }
             for (const Field& f : t.record->fields)
@@ -5611,19 +5909,93 @@ std::string Emitter::c_layer() {
     o << "}\n\n";
 
     // ── an input's value: checked, then written ──────────────────────────────
-    auto is_float = [](const Type& t) { return !t.enm && (t.scalar == "double" || t.scalar == "float"); };
+    auto is_float = [](const Type& t) {
+        return !t.enm && !t.text && (t.scalar == "double" || t.scalar == "float");
+    };
     bool any_checked = false;
     for (const CPort& p : ins) any_checked = any_checked || !is_float(p.type);
+    // §14.2 — which ports are text, and the text calls' halves.
+    auto texty = [&](const char* fn, const std::vector<CPort>& ps) {
+        o << "bool " << fn << "(int i) {\n";
+        std::string cases;
+        for (std::size_t i = 0; i < ps.size(); ++i)
+            if (ps[i].type.text) cases += "        case " + std::to_string(i) + ":\n";
+        if (cases.empty()) {
+            o << "    (void)i;\n    return false;   // no string ports\n}\n\n";
+            return;
+        }
+        o << "    switch (i) {\n" << cases << "            return true;\n";
+        o << "        default:\n            return false;\n    }\n}\n\n";
+    };
+    o << "// §5.1b — the string ports, which the _text calls move.\n";
+    texty("input_is_text", ins);
+    texty("output_is_text", outs);
+    o << "// Why `v` cannot be text input `i`, or null when it was written: host text\n";
+    o << "// is never cut (§5.1b).\n";
+    o << "const char* put_input_text(Sim& s, int i, const char* v, std::string& why) {\n";
+    {
+        bool any = false;
+        for (const CPort& p : ins) any = any || p.type.text;
+        if (!any) {
+            o << "    (void)s;\n    (void)i;\n    (void)v;\n    (void)why;\n";
+            o << "    return \"not a string input\";\n}\n\n";
+        } else {
+            o << "    const std::string_view t = v ? std::string_view(v) : std::string_view();\n";
+            o << "    switch (i) {\n";
+            for (std::size_t i = 0; i < ins.size(); ++i) {
+                if (!ins[i].type.text) continue;
+                const long cap = ins[i].type.capacity;
+                o << "        case " << i << ":\n";
+                o << "            if (t.size() > " << cap << ") {\n";
+                o << "                why = std::to_string(t.size()) + \" bytes, and it holds " << cap
+                  << "\";\n";
+                o << "                return why.c_str();\n";
+                o << "            }\n";
+                o << "            s." << ins[i].member << " = t;\n";
+                o << "            return nullptr;\n";
+            }
+            o << "        default:\n            return \"not a string input\";\n";
+            o << "    }\n}\n\n";
+        }
+    }
+    o << "const char* output_text(const Sim& s, int i) {\n";
+    {
+        bool any = false;
+        for (const CPort& p : outs) any = any || p.type.text;
+        if (!any) {
+            o << "    (void)s;\n    (void)i;\n    return nullptr;   // no string outputs\n}\n\n";
+        } else {
+            o << "    switch (i) {\n";
+            for (std::size_t i = 0; i < outs.size(); ++i)
+                if (outs[i].type.text)
+                    // A composite root's output is a view onto a leaf's
+                    // storage or a literal, and both end in a NUL.
+                    o << "        case " << i << ": {\n"
+                      << "            const std::string_view v(s." << outs[i].member << ");\n"
+                      << "            return v.data() ? v.data() : \"\";   // empty before a tick\n"
+                      << "        }\n";
+            o << "        default: return nullptr;\n";
+            o << "    }\n}\n\n";
+        }
+    }
+
     o << "// Why `v` cannot be input `i`, or null when it can. A double takes any value.\n";
     o << "const char* input_fault(int i, double v) {\n";
     if (!any_checked) {
         o << "    (void)i;\n    (void)v;\n    return nullptr;   // every input is a double\n";
     } else {
+        bool any_number_checked = false;
+        for (const CPort& p : ins) any_number_checked = any_number_checked || (!is_float(p.type) && !p.type.text);
+        if (!any_number_checked) o << "    (void)v;   // only text is refused here\n";
         o << "    switch (i) {\n";
         for (std::size_t i = 0; i < ins.size(); ++i) {
             const Type& t = ins[i].type;
             if (is_float(t)) continue;
             o << "        case " << i << ":   // " << ins[i].name << "\n";
+            if (t.text) {
+                o << "            return \"a string, which se_set_input_text writes\";\n";
+                continue;
+            }
             if (t.enm) {
                 std::string cond, names;
                 for (const EnumInfo::Value& v : t.enm->values) {
@@ -5646,12 +6018,15 @@ std::string Emitter::c_layer() {
     o << "}\n\n";
 
     o << "void put_input(Sim& s, int i, double v) {\n";
-    if (ins.empty()) {
-        o << "    (void)s;\n    (void)i;\n    (void)v;   // the root has no inputs\n";
+    bool any_number_in = false;
+    for (const CPort& p : ins) any_number_in = any_number_in || !p.type.text;
+    if (!any_number_in) {
+        o << "    (void)s;\n    (void)i;\n    (void)v;   // the root has no numeric inputs\n";
     } else {
         o << "    switch (i) {\n";
         for (std::size_t i = 0; i < ins.size(); ++i) {
             const Type& t = ins[i].type;
+            if (t.text) continue;   // §5.1b — put_input_text writes it
             std::string rhs = "v";
             if (t.enm) rhs = "static_cast<" + t.enm->cpp_name + ">(static_cast<int>(v))";
             else if (t.scalar == "bool") rhs = "v != 0.0";
@@ -5667,12 +6042,16 @@ std::string Emitter::c_layer() {
     if (outs.empty()) {
         o << "    (void)s;\n    (void)i;\n    return std::nan(\"\");   // the root has no outputs\n";
     } else {
+        bool any_number_out = false;
+        for (const CPort& p : outs) any_number_out = any_number_out || !p.type.text;
+        if (!any_number_out) o << "    (void)s;   // every output is text\n";
         o << "    switch (i) {\n";
         for (std::size_t i = 0; i < outs.size(); ++i) {
             const Type& t = outs[i].type;
             const std::string v = "s." + outs[i].member;
             std::string e = v;
-            if (t.enm) e = "static_cast<double>(static_cast<int>(" + v + "))";
+            if (t.text) e = "std::nan(\"\")";   // §5.1b — output_text reads it
+            else if (t.enm) e = "static_cast<double>(static_cast<int>(" + v + "))";
             else if (t.scalar != "double") e = "static_cast<double>(" + v + ")";
             o << "        case " << i << ": return " << e << ";\n";
         }
@@ -5764,6 +6143,10 @@ std::string Emitter::c_layer() {
     o << "double se_get(se_sim* s, const char* path) {\n";
     o << "    return guard(s, std::nan(\"\"), [&] { return self(s).sim.get(path ? path : \"\"); });\n";
     o << "}\n";
+    o << "const char* se_get_text(se_sim* s, const char* path) {\n";
+    o << "    return guard(s, static_cast<const char*>(nullptr),\n";
+    o << "                 [&] { return self(s).sim.get_text(path ? path : \"\"); });\n";
+    o << "}\n";
     o << "int se_set(se_sim* s, const char* path, double value) {\n";
     o << "    self(s).error.clear();\n";
     o << "    return guard(s, 0, [&] { return self(s).sim.set(path ? path : \"\", value) ? 1 : 0; });\n";
@@ -5842,11 +6225,30 @@ std::string Emitter::c_layer() {
     o << "            return 0;\n";
     o << "        }\n";
     o << "        for (int i = 0; i < n; ++i)\n";
-    o << "            if (const char* why = " << q << "input_fault(i, values[i])) {\n";
+    o << "            if (" << q << "input_is_text(i)) continue;   // §14.2 — its slot is ignored\n";
+    o << "            else if (const char* why = " << q << "input_fault(i, values[i])) {\n";
     o << "                c.error = std::string(\"se_set_inputs: \") + " << q << "inputs[i].name + \": \" + why;\n";
     o << "                return 0;\n";
     o << "            }\n";
     o << "        for (int i = 0; i < n; ++i) " << q << "put_input(c.sim, i, values[i]);\n";
+    o << "        return 1;\n";
+    o << "    });\n";
+    o << "}\n";
+    o << "int se_set_input_text(se_sim* s, int i, const char* value) {\n";
+    o << "    " << q << "CSim& c = self(s);\n";
+    o << "    c.error.clear();\n";
+    o << "    return guard(s, 0, [&] {\n";
+    o << "        if (i < 0 || i >= " << q << "n_inputs || !" << q << "input_is_text(i)) {\n";
+    o << "            c.error = \"se_set_input_text: \" + std::to_string(i) +\n";
+    o << "                      \" is not a string input; se_set_input writes a number\";\n";
+    o << "            return 0;\n";
+    o << "        }\n";
+    o << "        std::string why;\n";
+    o << "        if (const char* bad = " << q << "put_input_text(c.sim, i, value, why)) {\n";
+    o << "            c.error = std::string(\"se_set_input_text: \") + " << q
+      << "inputs[i].name + \": \" + bad;\n";
+    o << "            return 0;\n";
+    o << "        }\n";
     o << "        return 1;\n";
     o << "    });\n";
     o << "}\n";
@@ -5856,7 +6258,17 @@ std::string Emitter::c_layer() {
     o << "        return 0;\n";
     o << "    });\n";
     o << "}\n";
-    o << "double se_get_output(se_sim* s, int i) { return " << q << "output_value(self(s).sim, i); }\n";
+    o << "double se_get_output(se_sim* s, int i) {\n";
+    o << "    if (" << q << "output_is_text(i)) {\n";
+    o << "        self(s).error = std::string(\"se_get_output: \") + " << q
+      << "outputs[i].name + \": a string, which se_get_output_text reads\";\n";
+    o << "        return std::nan(\"\");\n";
+    o << "    }\n";
+    o << "    return " << q << "output_value(self(s).sim, i);\n";
+    o << "}\n";
+    o << "const char* se_get_output_text(se_sim* s, int i) {\n";
+    o << "    return " << q << "output_text(self(s).sim, i);\n";
+    o << "}\n";
     o << "int se_get_outputs(se_sim* s, double* values, int n) {\n";
     o << "    " << q << "CSim& c = self(s);\n";
     o << "    c.error.clear();\n";
@@ -5878,6 +6290,7 @@ std::string Emitter::c_layer() {
     o << "    return guard(s, -1, [&] { return self(s).sim.channel_handle(path ? path : \"\"); });\n";
     o << "}\n";
     o << "double se_read(se_sim* s, int handle) { return self(s).sim.read(handle); }\n";
+    o << "const char* se_read_text(se_sim* s, int handle) { return self(s).sim.read_text(handle); }\n";
     o << "int se_read_many(se_sim* s, const int* handles, int n, double* out) {\n";
     o << "    if (n < 0 || (n > 0 && (!handles || !out))) return 0;\n";
     o << "    for (int i = 0; i < n; ++i) out[i] = self(s).sim.read(handles[i]);\n";

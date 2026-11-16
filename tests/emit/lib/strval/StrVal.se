@@ -1,0 +1,32 @@
+package strval;
+
+// §7.2b — a string setting's value: a literal or a string setting, that
+// fits, and nothing else.
+
+node Leaf8 {
+    settings { s: string(8) = "ok"; }
+    outputs  { n: int(-); }
+    output() { out.n = 0; }
+}
+
+node Num {
+    settings { g: double(-) = 1.0; }
+    outputs  { n: int(-); }
+    output() { out.n = 0; }
+}
+
+node StrVal {
+    settings {
+        wide:  string(16) = "fits in sixteen";
+        label: string(8)  = "nine byte";          // SE0427: 9 bytes into string(8)
+    }
+
+    structure {
+        node a : Leaf8 { s = param.wide; };        // SE0427: string(16) into string(8)
+        node b : Leaf8 { s = 12; };                // SE0428: a number where text belongs
+        node c : Num   { g = "1.0"; };             // SE0428: text where a number belongs
+        node d : Num   { g = param.wide; };        // SE0428: a string setting as a number
+        node e : Leaf8 { s = "a" + "b"; };         // SE0428: no string operations
+        node f : Num   { g = 2 * param.wide; };    // SE0428: nor arithmetic on one
+    }
+}

@@ -2673,6 +2673,77 @@ if (-not $cl) {
         }
     }
 
+    # SPEC 5.1b -- strings. tests/emit/text_host.cpp runs Text, which has a
+    # string in every place one can go: a setting that flows down two levels
+    # and round-trips through the dump, a literal on a wire, a var, the root's
+    # input and outputs, a cut logged once, RFC 4180 cells in the recording, a
+    # live read, and an inputs file with quoted string cells that replays.
+    if ($emitDirs.ContainsKey('Text')) {
+        $txDir = $emitDirs['Text']
+        Copy-Item (Join-Path $root 'tests\emit\text_host.cpp') $txDir -Force
+        Push-Location $txDir
+        $out = (& cl /nologo /std:c++20 /EHsc /W4 /permissive- /utf-8 /O2 /MD `
+                    /D_CRT_SECURE_NO_WARNINGS /Fe:text_host.exe text_host.cpp 2>&1 | Out-String)
+        $built = ($LASTEXITCODE -eq 0 -and $out -notmatch 'warning')
+        $said = ''
+        $ran = $false
+        if ($built) {
+            $said = (& '.\text_host.exe' 2>&1 | Out-String)
+            $ran = ($LASTEXITCODE -eq 0)
+        }
+        Pop-Location
+        if ($built -and $ran) {
+            Write-Host "ok   tests/emit/text_host.cpp : strings in settings, on wires, in vars and on the root" -ForegroundColor Green
+            $script:pass++
+        } else {
+            Write-Host "FAIL tests/emit/text_host.cpp" -ForegroundColor Red
+            if (-not $built) { Write-Host $out } else { Write-Host $said }
+            $script:fail++
+        }
+
+        # SPEC 14.2 -- the same strings through the C interface: Text built as
+        # a DLL, found by name from C (tests/emit/c_text.c) and from Python
+        # (tests/emit/c_text.py).
+        Push-Location $txDir
+        $out = (& powershell -NoProfile -File '.\build.ps1' dynamic 2>&1 | Out-String)
+        $dll = Join-Path $txDir 'build\release\bin\Text.dll'
+        $made = ($LASTEXITCODE -eq 0 -and (Test-Path $dll) -and $out -notmatch 'warning')
+        Copy-Item (Join-Path $root 'tests\emit\c_text.c') $txDir -Force
+        $cout = (& cl /nologo /TC /W4 /O2 /MD /D_CRT_SECURE_NO_WARNINGS /Fe:c_text.exe c_text.c 2>&1 |
+                 Out-String)
+        $built = ($LASTEXITCODE -eq 0 -and $cout -notmatch 'warning')
+        $said = ''
+        $ran = $false
+        if ($made -and $built) {
+            $said = (& '.\c_text.exe' $dll 2>&1 | Out-String)
+            $ran = ($LASTEXITCODE -eq 0)
+        }
+        Pop-Location
+        if ($made -and $built -and $ran) {
+            Write-Host "ok   tests/emit/c_text.c : string settings, ports and channels from C" -ForegroundColor Green
+            $script:pass++
+        } else {
+            Write-Host "FAIL tests/emit/c_text.c (made=$made built=$built ran=$ran)" -ForegroundColor Red
+            if (-not $made) { Write-Host $out }
+            if (-not $built) { Write-Host $cout } else { Write-Host $said }
+            $script:fail++
+        }
+        $python = Get-Command python -ErrorAction SilentlyContinue
+        if (-not $python) {
+            Write-Host "skip tests/emit/c_text.py : no python on PATH" -ForegroundColor DarkGray
+        } elseif ($made) {
+            $said = (& $python.Source -I (Join-Path $root 'tests\emit\c_text.py') $dll 2>&1 | Out-String)
+            if ($LASTEXITCODE -eq 0) {
+                Write-Host "ok   tests/emit/c_text.py : strings from Python, through ctypes" -ForegroundColor Green
+                $script:pass++
+            } else {
+                Write-Host "FAIL tests/emit/c_text.py" -ForegroundColor Red
+                Write-Host $said
+                $script:fail++
+            }
+        }
+    }
+
     # SPEC 13.8 -- a recorded run replays. The drivetrain exe is driven by a
     # hand-written table (a ramp, a step, a km/h column), recording its own
     # inputs at every tick; then that recording drives a second run. The

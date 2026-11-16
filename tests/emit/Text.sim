@@ -1,0 +1,18 @@
+// §5.1b — strings in settings, on wires, in vars and on the root. See
+// lib/text/Text.se; tests/emit/text_host.cpp, c_text.c and c_text.py drive it.
+sim Text {
+    root: text.Text { label = "from the sim"; };
+
+    step:     10 (ms);
+    duration: 50 (ms);
+
+    record: {
+        file  = "text.csv";
+        every = 1;
+        echo;
+        mid.tag.out.name;
+        mid.tag.var.seen;
+        lit.out.name;
+        cut.out.msg;
+    }
+}

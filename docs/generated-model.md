@@ -250,6 +250,11 @@ Two calls watch a run without changing it, and work before or after `init()`:
   no console, such as a DLL inside another program. The log file is not
   affected.
 
+A string channel ([§5.1b](../SPECIFICATION.md#51b-strings)) is recorded as its
+text, under a `[string]` bracket, and every one of its cells is quoted the way
+CSV readers expect: a quote inside is doubled, and a comma or a line break is
+kept. It is read live with `read_text(handle)`, since `read()` is for numbers.
+
 ### Inputs from a file
 
 The root inputs can come from a CSV table instead of from the host
@@ -511,6 +516,11 @@ is the `Sim` member of the same name, and runs at the same point in a run.
   caller.
 - **One error for both sides.** `se_error` reports a refusal made by the C
   layer, such as a bad port index, as well as the model's own.
+- **Strings are text.** A string port's unit is `string`.
+  `se_set_input_text` and `se_get_output_text` move one, `se_get_text` reads a
+  string setting, and `se_read_text` a string channel. The number calls refuse
+  a text port, and the array calls skip its slot, so the numbers still move in
+  one call.
 - **Files by name.** `se_load_settings_file` reads a settings file and finds
   the inputs file it names beside it. `se_inputs_file` names the table that
   drives the root inputs, so a host can replay a recorded run without writing

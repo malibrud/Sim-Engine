@@ -385,11 +385,19 @@ the table that drives the root inputs. `load_settings_file()` reads a file, and
 finds the inputs table it names beside it. `dump_settings()` writes the whole
 configuration back out in that form, and `list_signals()` writes every channel
 as a `record` section to edit. The same is available one key at a time, with
-structured answers: `settings_list()`, `get()` and `set()`; `channels_list()`,
-`record()`, `unrecord()` and `record_clear()`; `record_file()`,
-`record_every()`, `log_file()`, `log_level()` and `inputs_file()`. The
-generated executable takes `--settings FILE...`, `--set PATH=VALUE`,
-`--inputs FILE`, `--duration TIME`, `--dump-settings` and `--list-signals`.
+structured answers: `settings_list()`, `get()`, `get_text()` and `set()`;
+`channels_list()`, `record()`, `unrecord()` and `record_clear()`;
+`record_file()`, `record_every()`, `log_file()`, `log_level()` and
+`inputs_file()`. The generated executable takes `--settings FILE...`,
+`--set PATH=VALUE`, `--inputs FILE`, `--duration TIME`, `--dump-settings` and
+`--list-signals`.
+
+A setting, a port or a var can be text: `host: string(64) = "127.0.0.1";`
+(§5.1b). Storage states its capacity in bytes and a reader is bare `string`,
+as with buffers, so nothing allocates during a run. A settings file writes the
+value as a quoted literal, the recording quotes every string cell as CSV
+readers expect, and `get_text()`, `read_text()` and the C interface's `_text`
+calls move it in and out.
 
 A host that watches a run can read any channel live through
 `channel_handle()` and `read()`. With `log_capture()` and `log_next()`, the
@@ -575,8 +583,9 @@ In rough order. Each step is decided on its own, so this list changes.
 6. ~~**Inputs from a file.** A run's root inputs driven from a CSV table, an
    `inputs` section in the settings format, and `--inputs` (§13.8), so a
    recorded run replays.~~ Done.
-7. **Strings on wires and in settings.** Text as a type a port, a wire and a
-   setting can carry, beside the numbers, booleans and finite types.
+7. ~~**Strings on wires and in settings.** Bounded text as a setting, a port,
+   a var and a root port (§5.1b).~~ Done. UDP sender, client and server nodes
+   that use it come next.
 8. **Later:** clean-ups to the generated code's readability, and the open items
    in the spec's Appendix C, such as display units for recording and
    field-level wires.

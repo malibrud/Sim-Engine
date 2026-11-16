@@ -74,6 +74,7 @@ const char kRuntime[] =
 #include <utility>
 #include <vector>
 
+@STRING_TYPE@
 namespace se_rt {
 inline namespace @VER@ {
 
@@ -799,6 +800,28 @@ public:
         ++rows_;
     }
 
+    // Section 13.5: a row with string columns. `texts[c]` is column c's text
+    // where `is_text[c]`, and every such cell is quoted the RFC 4180 way.
+    void row(double t, const std::vector<double>& values, const std::vector<char>& is_text,
+             const std::vector<std::string_view>& texts) {
+        if (!file_) return;
+        std::fprintf(file_, "%.9g", t);
+        for (std::size_t c = 0; c < values.size(); ++c) {
+            if (!is_text[c]) {
+                std::fprintf(file_, ",%.9g", values[c]);
+                continue;
+            }
+            std::fputs(",\"", file_);
+            for (char ch : texts[c]) {
+                if (ch == '"') std::fputc('"', file_);
+                std::fputc(ch, file_);
+            }
+            std::fputc('"', file_);
+        }
+        std::fputc('\n', file_);
+        ++rows_;
+    }
+
     void close() {
         if (!file_) return;
         std::fclose(file_);
@@ -1344,14 +1367,19 @@ struct SettingRow {
     const Enumerator* enumerators;   // a finite type's, in declaration order
     std::size_t n_enumerators;
     bool structural;         // fixed at generation (section 6.2); refused on load
+    std::size_t capacity;    // a string's, in bytes (section 5.1b); 0 for anything else
 };
 
+// Section 5.1b: whether a row holds text.
+inline bool is_text_row(const SettingRow& r) { return std::strcmp(r.type, "string") == 0; }
+
 // One checked binding, in the target's canonical unit. An enumerator is its
-// value; a bool is 0 or 1.
+// value; a bool is 0 or 1; a string is `text`.
 struct Assignment {
     std::size_t row;
     std::size_t index;       // an Element row's element; 0 otherwise
     double value;
+    std::string text;        // a string row's value (section 5.1b)
 };
 
 // ─── The run's own configuration (section 13.3) ─────────────────────────────
@@ -1665,8 +1693,8 @@ private:
         return true;
     }
 
-    // A string, section 3.5: `"` ... `"`, with `\"` and `\\` and nothing across
-    // a line.
+    // A string, section 3.6: `"` ... `"`, nothing across a line, and exactly
+    // the escapes `sec` reads: \" \\ \n \r \t \0.
     bool string_lit(std::string& out) {
         if (i_ >= s_.size() || s_[i_] != '"') return false;
         out.clear();
@@ -1677,8 +1705,20 @@ private:
                 ++i_;
                 return true;
             }
-            if (c == '\\' && i_ + 1 < s_.size()) out += s_[++i_];
-            else out += c;
+            if (c != '\\') {
+                out += c;
+                continue;
+            }
+            if (++i_ >= s_.size()) return false;
+            switch (s_[i_]) {
+                case '"':  out += '"'; break;
+                case '\\': out += '\\'; break;
+                case 'n':  out += '\n'; break;
+                case 'r':  out += '\r'; break;
+                case 't':  out += '\t'; break;
+                case '0':  out += '\0'; break;
+                default:   return false;
+            }
         }
         return false;
     }
@@ -1928,11 +1968,16 @@ private:
         ++i_;
         if (!blank()) return false;
 
-        // value := [ '-' | '+' ] number [ '(' unit ')' ] | enumerator
-        bool is_name = false, has_unit = false;
-        std::string name, unit;
+        // value := [ '-' | '+' ] number [ '(' unit ')' ] | enumerator | string
+        bool is_name = false, has_unit = false, is_text = false;
+        std::string name, unit, text;
         double v = 0.0;
-        if (i_ < s_.size() && ident_char(s_[i_], true)) {
+        if (i_ < s_.size() && s_[i_] == '"') {
+            if (!string_lit(text))
+                return fail(shown, "a string is closed on its own line, and its escapes are "
+                                   "\\\" \\\\ \\n \\r \\t \\0 (section 3.6)");
+            is_text = true;
+        } else if (i_ < s_.size() && ident_char(s_[i_], true)) {
             ident(name);
             is_name = true;
         } else {
@@ -1948,6 +1993,7 @@ private:
         if (!blank()) return false;
         if (i_ < s_.size() && s_[i_] == '(') {
             if (is_name) return fail(shown, "an enumerator takes no unit");
+            if (is_text) return fail(shown, "a string takes no unit");
             int depth = 0;
             const std::size_t at = i_;
             for (; i_ < s_.size(); ++i_) {
@@ -1964,7 +2010,8 @@ private:
         if (i_ >= s_.size() || s_[i_] != ';') {
             if (i_ < s_.size() && line_ == at_line_)
                 return fail(shown, "a compiled model accepts a number with an optional unit, "
-                                   "or an enumerator, and not an expression (section 14.1)");
+                                   "an enumerator or a string, and not an expression "
+                                   "(section 14.1)");
             return fail(shown, "expected `;` after the value");
         }
         ++i_;
@@ -1996,7 +2043,20 @@ private:
             return fail(shown, "structural: it was fixed when the model was generated (section 6.2)");
         a.index = index;
 
-        // The value.
+        // The value. Section 5.1b: text goes only to text, and must fit.
+        if (is_text_row(*row)) {
+            if (!is_text)
+                return fail(shown, "expected a string in double quotes, as `\"text\"` "
+                                   "(section 5.1b)");
+            if (text.size() > row->capacity)
+                return fail(shown, std::to_string(text.size()) + " bytes, and it holds " +
+                                       std::to_string(row->capacity) + " (section 5.1b)");
+            a.value = 0.0;
+            a.text = std::move(text);
+            return true;
+        }
+        if (is_text)
+            return fail(shown, "a string where a number is expected (section 5.1b)");
         if (row->enumerators) {
             if (!is_name)
                 return fail(shown, std::string("expected an enumerator of ") + row->type +
@@ -2079,12 +2139,20 @@ inline std::string source_number(double v) {
     return buf;
 }
 
-// A string as a source writes it, so that SourceReader reads it back.
+// A string as a source writes it, with section 3.6's escapes, so that
+// SourceReader reads back the same characters.
 inline std::string source_string(const std::string& s) {
     std::string out = "\"";
     for (char c : s) {
-        if (c == '"' || c == '\\') out += '\\';
-        out += c;
+        switch (c) {
+            case '"':  out += "\\\""; break;
+            case '\\': out += "\\\\"; break;
+            case '\n': out += "\\n"; break;
+            case '\r': out += "\\r"; break;
+            case '\t': out += "\\t"; break;
+            case '\0': out += "\\0"; break;
+            default:   out += c;
+        }
     }
     return out + "\"";
 }
@@ -2093,12 +2161,14 @@ inline std::string source_string(const std::string& s) {
 // Initial row and is unused for an Element row, whose bound elements arrive
 // in `elements` instead: an array's uniform default has no path to write.
 inline std::string dump_source(const char* title, const SettingRow* rows, std::size_t n,
-                               const double* values, const std::vector<Assignment>& elements) {
+                               const double* values, const std::vector<Assignment>& elements,
+                               const std::string* texts = nullptr) {
     struct Line {
         std::string path, value;
         bool structural;
     };
     auto text = [&](const SettingRow& r, double v) {
+        if (is_text_row(r)) return source_string(texts ? texts[&r - rows] : std::string());
         if (r.enumerators) {
             for (std::size_t k = 0; k < r.n_enumerators; ++k)
                 if (static_cast<double>(r.enumerators[k].value) == v) return std::string(r.enumerators[k].name);
@@ -2222,27 +2292,24 @@ public:
         std::string text;
         if (!read_all(path, text)) return fail(why, 0, "", "cannot read it");
         std::size_t at = text.compare(0, 3, "\xEF\xBB\xBF") == 0 ? 3 : 0;
-        int line = 0;
+        int next_line = 1;
         std::vector<std::string> head, cells;
+        std::vector<char> quoted;
         std::vector<int> drives;   // per field: the input column it fills, or -1
         bool have_head = false;
         Unit second, time_unit;
         UnitParser("s").parse(second);
         while (at < text.size()) {
-            std::size_t end = text.find('\n', at);
-            if (end == std::string::npos) end = text.size();
-            std::string l = text.substr(at, end - at);
-            at = end + 1;
-            ++line;
-            if (!l.empty() && l.back() == '\r') l.pop_back();
-            if (l.find_first_not_of(" \t") == std::string::npos) continue;
+            const int line = next_line;
+            std::string bad;
+            if (!record(text, at, next_line, cells, quoted, bad)) return fail(why, line, "", bad);
+            if (cells.size() == 1 && cells[0].empty() && !quoted[0]) continue;   // a blank line
             if (!have_head) {
                 have_head = true;
-                split(l, head);
+                head = cells;
                 if (!header(head, rows, n, second, time_unit, drives, why, line)) return false;
                 continue;
             }
-            split(l, cells);
             if (cells.size() != head.size())
                 return fail(why, line, "", std::to_string(cells.size()) + " fields where the header has " +
                                                std::to_string(head.size()));
@@ -2257,9 +2324,22 @@ public:
             times_.push_back(t);
             for (std::size_t f = 1; f < cells.size(); ++f) {
                 if (drives[f] < 0) continue;
+                const Col& c = cols_[static_cast<std::size_t>(drives[f])];
                 double v = 0.0;
-                const std::string bad = value(cells[f], cols_[static_cast<std::size_t>(drives[f])], rows, v);
-                if (!bad.empty()) return fail(why, line, head[f], bad);
+                if (c.text) {
+                    // Section 13.8: the cell's text, as long as it fits. A
+                    // quoted empty cell is the empty string; a bare one is
+                    // nothing at all.
+                    if (cells[f].empty() && !quoted[f]) return fail(why, line, head[f], "the cell is empty");
+                    if (cells[f].size() > rows[c.row].capacity)
+                        return fail(why, line, head[f],
+                                    std::to_string(cells[f].size()) + " bytes, and `" + rows[c.row].path +
+                                        "` holds " + std::to_string(rows[c.row].capacity) + " (section 5.1b)");
+                    texts_.push_back(cells[f]);
+                } else {
+                    const std::string why_not = value(cells[f], c, rows, v);
+                    if (!why_not.empty()) return fail(why, line, head[f], why_not);
+                }
                 values_.push_back(v);
             }
         }
@@ -2281,6 +2361,12 @@ public:
     std::size_t column_row(std::size_t c) const { return cols_[c].row; }
     const std::vector<std::string>& ignored() const { return ignored_; }
     std::uint64_t last_tick() const { return last_tick_; }   // at or before the last row
+
+    // Section 5.1b: a string column's text at the tick `at` last sampled. A
+    // string holds the last row at or before it, as a finite input does.
+    const std::string& text(std::size_t c) const {
+        return texts_[row_ * n_text_ + cols_[c].tcol];
+    }
 
     // Each column's value at tick k, canonical unit. Ticks only go forward,
     // so the search starts where the last one ended. At a step, two rows at
@@ -2305,9 +2391,11 @@ public:
 private:
     struct Col {
         std::size_t row;     // the input it drives
-        bool hold;           // int, bool, finite: no interpolation
+        bool hold;           // int, bool, finite, string: no interpolation
         Unit from, to;       // the header's unit and the input's
         bool convert;
+        bool text = false;   // a string input (section 5.1b)
+        std::size_t tcol = 0;   // its place among the string columns
     };
 
     bool fail(std::string& why, int line, const std::string& column, const std::string& m) {
@@ -2333,14 +2421,63 @@ private:
         return t;
     }
 
-    static void split(const std::string& l, std::vector<std::string>& out) {
+    // One record, RFC 4180, from `at`: comma-separated fields, each either
+    // bare, with the spaces around it dropped, or in double quotes, where a
+    // comma or a line break is just a character and `""` is one quote. The
+    // record ends at a line break outside quotes. `quoted[f]` says whether
+    // field f was quoted, which is what tells "" from nothing.
+    static bool record(const std::string& s, std::size_t& at, int& line,
+                       std::vector<std::string>& out, std::vector<char>& quoted, std::string& bad) {
         out.clear();
-        std::size_t at = 0;
+        quoted.clear();
         for (;;) {
-            const std::size_t comma = l.find(',', at);
-            out.push_back(trim(l.substr(at, comma == std::string::npos ? std::string::npos : comma - at)));
-            if (comma == std::string::npos) return;
-            at = comma + 1;
+            while (at < s.size() && (s[at] == ' ' || s[at] == '\t')) ++at;
+            std::string f;
+            bool q = false;
+            if (at < s.size() && s[at] == '"') {
+                q = true;
+                for (++at;; ++at) {
+                    if (at >= s.size()) {
+                        bad = "a quoted field is never closed";
+                        return false;
+                    }
+                    if (s[at] == '"') {
+                        if (at + 1 < s.size() && s[at + 1] == '"') {
+                            f += '"';
+                            ++at;
+                            continue;
+                        }
+                        ++at;
+                        break;
+                    }
+                    // A line break inside quotes is one character, LF: the
+                    // recorder writes in text mode, so on Windows it arrives
+                    // as CRLF, and a replay must give back what was recorded.
+                    if (s[at] == '\r' && at + 1 < s.size() && s[at + 1] == '\n') continue;
+                    if (s[at] == '\n') ++line;
+                    f += s[at];
+                }
+                while (at < s.size() && (s[at] == ' ' || s[at] == '\t')) ++at;
+                if (at < s.size() && s[at] != ',' && s[at] != '\n' && s[at] != '\r') {
+                    bad = "text after a quoted field's closing quote";
+                    return false;
+                }
+            } else {
+                while (at < s.size() && s[at] != ',' && s[at] != '\n') f += s[at++];
+                if (!f.empty() && f.back() == '\r') f.pop_back();
+                const std::size_t e = f.find_last_not_of(" \t");
+                f.erase(e == std::string::npos ? 0 : e + 1);
+            }
+            out.push_back(f);
+            quoted.push_back(q ? 1 : 0);
+            if (at < s.size() && s[at] == '\r') ++at;
+            if (at >= s.size()) return true;
+            if (s[at] == '\n') {
+                ++at;
+                ++line;
+                return true;
+            }
+            ++at;   // the comma
         }
     }
 
@@ -2395,8 +2532,17 @@ private:
                 if (c.row == r) return fail(why, line, head[f], "a second column for `" + name + "`");
             const SettingRow& row = rows[r];
             Col c{r, row.enumerators || std::strcmp(row.type, "int") == 0 ||
-                         std::strcmp(row.type, "bool") == 0,
+                         std::strcmp(row.type, "bool") == 0 || is_text_row(row),
                   Unit{}, Unit{}, false};
+            if (is_text_row(row)) {
+                if (has && !unit.empty() && unit != "string")
+                    return fail(why, line, head[f], "a string input's bracket is [string], or nothing");
+                c.text = true;
+                c.tcol = n_text_++;
+                drives[f] = static_cast<int>(cols_.size());
+                cols_.push_back(c);
+                continue;
+            }
             for (int k = 0; k < 8; ++k) c.to.dim[k] = row.dim[k];
             c.to.scale = row.scale;
             c.to.offset = row.offset;
@@ -2456,6 +2602,8 @@ private:
     std::vector<std::string> ignored_;
     std::vector<double> times_;    // s
     std::vector<double> values_;   // row-major, one per column, canonical units
+    std::vector<std::string> texts_;   // row-major, one per string column (section 5.1b)
+    std::size_t n_text_ = 0;
     std::size_t row_ = 0;          // the last row at or before the last tick sampled
     std::uint64_t last_tick_ = 0;
     bool active_ = false;
@@ -2467,7 +2615,115 @@ private:
 #endif  // SE_RUNTIME_@VER@
 )SERT";
 
+const char kStringType[] = R"SESTR(// ─── Strings (section 5.1b) ───────────────────────────────────────────────────
+//
+// Bounded text: up to N bytes plus a size, never allocating. A setting, a
+// leaf's string OUTPUT and a string VAR are storage, `string<N>`; every
+// string INPUT reads through a `std::string_view` onto some producer's
+// storage, which is why a reader accepts any capacity.
+//
+// The public header carries this too, because a root setting, input or
+// output can be a string, so it is guarded and lives outside the runtime's
+// versioned namespace: two models in one program share one definition.
+#ifndef SE_RT_STRING_DEFINED
+#define SE_RT_STRING_DEFINED
+
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
+#include <iosfwd>
+#include <string_view>
+
+namespace se_rt {
+
+// The length of the longest prefix of `s` that is at most `n` bytes and ends
+// on a whole UTF-8 character, so a cut never leaves half of one behind.
+inline std::size_t utf8_cut(std::string_view s, std::size_t n) {
+    if (s.size() <= n) return s.size();
+    while (n > 0 && (static_cast<unsigned char>(s[n]) & 0xC0u) == 0x80u) --n;
+    return n;
+}
+
+template <std::size_t N>
+struct string {
+    static_assert(N > 0 && N < 0x7fffffff, "a string capacity is a positive byte count");
+    std::int32_t size_;      // first, as in buffer<N>
+    char data_[N + 1];       // always NUL-terminated, for C APIs
+    std::int32_t wanted_;    // the length last asked for; over N after a cut (section 5.1b)
+
+    string() = default;      // `string<N> s{};` zeroes it: the empty string
+    string(std::string_view s) : size_(0), data_{}, wanted_(0) { assign(s); }
+    string(const char* s) : string(std::string_view(s ? s : "")) {}
+    string(const string& o) : size_(0), data_{}, wanted_(0) { *this = o; }
+
+    const char* c_str() const { return data_; }
+    const char* data() const { return data_; }
+    std::size_t size() const { return static_cast<std::size_t>(size_); }
+    static constexpr std::size_t capacity() { return N; }
+    bool empty() const { return size_ == 0; }
+    operator std::string_view() const { return std::string_view(data_, size()); }
+
+    // Keeps the longest prefix that fits and ends on a whole character, and
+    // says whether that was all of it. A cut is remembered in `wanted_` for
+    // the engine's one warning per destination.
+    bool assign(std::string_view s) {
+        const std::size_t k = utf8_cut(s, N);
+        if (k) std::memmove(data_, s.data(), k);   // `s` may view this very storage
+        data_[k] = '\0';
+        size_ = static_cast<std::int32_t>(k);
+        if (k != s.size())
+            wanted_ = s.size() > 0x7fffffffu ? 0x7fffffff : static_cast<std::int32_t>(s.size());
+        return k == s.size();
+    }
+    void clear() { size_ = 0; data_[0] = '\0'; }
+
+    string& operator=(std::string_view s) { assign(s); return *this; }
+    string& operator=(const char* s) { assign(std::string_view(s ? s : "")); return *this; }
+    template <std::size_t M>
+    string& operator=(const string<M>& o) { assign(std::string_view(o)); return *this; }
+    // Copies the bytes that are THERE, not the capacity.
+    string& operator=(const string& o) {
+        if (this != &o) {
+            size_ = o.size_;
+            std::memcpy(data_, o.data_, static_cast<std::size_t>(size_) + 1);
+        }
+        return *this;
+    }
+};
+
+template <std::size_t N>
+bool operator==(const string<N>& a, std::string_view b) { return std::string_view(a) == b; }
+template <std::size_t N>
+bool operator==(std::string_view a, const string<N>& b) { return a == std::string_view(b); }
+template <std::size_t N, std::size_t M>
+bool operator==(const string<N>& a, const string<M>& b) {
+    return std::string_view(a) == std::string_view(b);
+}
+template <std::size_t N>
+bool operator!=(const string<N>& a, std::string_view b) { return !(a == b); }
+template <std::size_t N>
+bool operator!=(std::string_view a, const string<N>& b) { return !(a == b); }
+template <std::size_t N, std::size_t M>
+bool operator!=(const string<N>& a, const string<M>& b) { return !(a == b); }
+
+// So `log.info("sending to {}", param.host)` formats it as text. A template,
+// so the stream need only be complete where it is used.
+template <class C, class T, std::size_t N>
+std::basic_ostream<C, T>& operator<<(std::basic_ostream<C, T>& o, const string<N>& s) {
+    o.write(s.data(), static_cast<std::streamsize>(s.size()));
+    return o;
+}
+
+}  // namespace se_rt
+
+#endif  // SE_RT_STRING_DEFINED
+)SESTR";
+
 }  // namespace
+
+// §5.1b — the bounded string type, for the public header as well as the
+// runtime. Guarded, so whichever comes first defines it.
+const char* se_string_type() { return kStringType; }
 
 // The runtime text with its version tag filled in: FNV-1a over the text as
 // written, so any edit to it — a comment included — moves the tag. Computed
@@ -2480,6 +2736,9 @@ const std::string& se_runtime_hpp() {
         const std::string units = "@UNIT_TABLE@";
         const std::size_t u = t.find(units);
         if (u != std::string::npos) t.replace(u, units.size(), unit_table_cpp());
+        const std::string strings = "@STRING_TYPE@";
+        const std::size_t st = t.find(strings);
+        if (st != std::string::npos) t.replace(st, strings.size(), kStringType);
         std::uint32_t h = 2166136261u;
         for (const unsigned char c : t) {
             h ^= c;

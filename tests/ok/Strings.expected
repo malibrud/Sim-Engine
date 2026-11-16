@@ -1,0 +1,34 @@
+﻿=== tests/ok/Strings.se ===
+model-file
+  package tests
+  node Sender  [line 6]  kind=leaf
+    settings
+      host: string(64) = "127.0.0.1"
+      motd: string(80) = "line one\nline \"two\"\t\\ end"
+      empty: string(4) = ""
+    inputs
+      cmd: string
+      n: double(-)
+    outputs
+      status: string(32)
+    vars
+      line: string(128)
+    output(cmd)   [feedthrough]
+      body @line 16 (22 bytes): "out.status = in.cmd;"
+  node Relay  [line 19]  kind=composite
+    settings
+      host: string(64) = "rig-pc"
+    inputs
+      cmd: string
+    outputs
+      status: string
+    structure
+      node tx : Sender
+        host = param.host
+        motd = "relayed"
+      node lit : Sender
+        host = "10.0.0.2"
+      self.cmd --> tx.cmd
+      "stop" --> lit.cmd
+      1.0 --> tx.n, lit.n
+      tx.status --> self.status

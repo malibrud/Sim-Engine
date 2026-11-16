@@ -460,13 +460,17 @@ bool Parser::parse_type_ref(ast::TypeRef& out, const char* what) {
     if (!parse_qualified_name(out.record)) return false;
     out.loc = out.record.loc;
 
-    // §5.1a — `buffer`, contextual as the scalar names are. Its argument is a
-    // capacity, not a unit, so it has to be told apart BEFORE the unit
-    // argument list below is parsed: `(1500)` is not a unit expression.
-    if (out.record.segs.size() == 1 && out.record.segs[0] == "buffer") {
+    // §5.1a / §5.1b — `buffer` and `string`, contextual as the scalar names
+    // are. The argument is a capacity, not a unit, so it has to be told apart
+    // BEFORE the unit argument list below is parsed: `(1500)` is not a unit
+    // expression.
+    if (out.record.segs.size() == 1 &&
+        (out.record.segs[0] == "buffer" || out.record.segs[0] == "string")) {
+        const bool text = out.record.segs[0] == "string";
         out.is_scalar = true;
-        out.is_buffer = true;
-        out.scalar = "buffer";
+        out.is_buffer = !text;
+        out.is_string = text;
+        out.scalar = out.record.segs[0];
         out.unit = std::make_unique<ast::UnitExpr>();
         out.unit->loc = out.loc;
         if (!at(Tok::LParen)) return true;
@@ -481,18 +485,21 @@ bool Parser::parse_type_ref(ast::TypeRef& out, const char* what) {
         const long long n = digits && tok_.text.size() <= 10 ? std::atoll(tok_.text.c_str()) : 0;
         if (!digits || n < 1 || n > 2147483647LL) {
             err("SE0236", tok_.loc,
-                "a buffer capacity must be a positive integer literal, found " +
+                std::string("a ") + out.scalar +
+                    " capacity must be a positive integer literal, found " +
                     (at(Tok::Number) ? "`" + tok_.text + "`" : std::string(describe(tok_.kind))),
                 "expected a byte count",
-                {note("a capacity is part of the signal block's layout, fixed when the "
-                      "code is generated, so it is a literal and never a setting "
-                      "(\xc2\xa7""5.1a)"),
-                 note("a buffer has no unit: its argument is how many bytes it holds")});
+                {note(std::string("a capacity is part of the signal block's layout, fixed "
+                                  "when the code is generated, so it is a literal and never "
+                                  "a setting (\xc2\xa7") + (text ? "5.1b)" : "5.1a)")),
+                 note(std::string("a ") + out.scalar +
+                      " has no unit: its argument is how many bytes it holds")});
             return false;
         }
         out.capacity = static_cast<long>(n);
         advance();
-        return expect(Tok::RParen, "SE0201", "to close the buffer capacity");
+        return expect(Tok::RParen, "SE0201",
+                      text ? "to close the string capacity" : "to close the buffer capacity");
     }
 
     // The path is complete, so a `(` here can be nothing but the argument list;
@@ -658,6 +665,16 @@ ast::ExprPtr Parser::parse_primary() {
 
     auto e = std::make_unique<ast::Expr>();
     e->loc = tok_.loc;
+
+    // §7.2b — text, legal only where a string is expected. Whether it is
+    // is the target's business, so the parser accepts it anywhere a primary
+    // may stand and elaboration says SE0428 where it may not.
+    if (at(Tok::String)) {
+        e->kind = ast::Expr::Kind::String;
+        e->text = tok_.text;
+        advance();
+        return e;
+    }
 
     if (at(Tok::Number)) {
         e->kind = ast::Expr::Kind::Number;
@@ -2107,9 +2124,10 @@ bool Parser::parse_structure_body(ast::Structure& out, std::size_t group) {
             // never a wire, so `group` stays usable as an instance name.
             if (!parse_group(out, group, std::move(annots))) return false;
         } else if (at(Tok::KwSelf) || at(Tok::Ident) || at(Tok::Number) || at(Tok::Plus) ||
-                   at(Tok::Minus)) {
-            // A number, `+` or `-` starts a literal source (§6.9.2). Nothing
-            // else in a `structure` block can, so no lookahead is needed.
+                   at(Tok::Minus) || at(Tok::String)) {
+            // A number, `+`, `-` or a string starts a literal source (§6.9.2,
+            // §5.1b). Nothing else in a `structure` block can, so no lookahead
+            // is needed.
             // One statement may be a chain, and so may yield several wires.
             std::vector<ast::Wire> ws;
             if (parse_wire_stmt(ws))
@@ -2267,6 +2285,16 @@ bool Parser::parse_endpoint(ast::Endpoint& out) {
         return true;
     }
 
+    // §5.1b — a string literal, a SOURCE only, for the same reason.
+    if (at(Tok::String)) {
+        out.is_literal = true;
+        out.is_text = true;
+        out.str_value = tok_.text;
+        out.text = ast::string_literal(tok_.text);
+        advance();
+        return true;
+    }
+
     if (at(Tok::KwSelf)) {
         out.is_self = true;
         advance();
@@ -2278,7 +2306,7 @@ bool Parser::parse_endpoint(ast::Endpoint& out) {
             std::string("expected a wire endpoint, found ") + describe(tok_.kind),
             "expected `self`, an instance name, or a literal",
             {note("an endpoint is `self` or an instance name, optionally followed by "
-                  "`.<port>`, or a literal source (\xc2\xa7""6.9.2)")});
+                  "`.<port>`, or a literal source, a number or a string (\xc2\xa7""6.9.2)")});
         return false;
     }
 

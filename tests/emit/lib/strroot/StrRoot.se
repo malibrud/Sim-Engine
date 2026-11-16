@@ -1,0 +1,10 @@
+package strroot;
+
+// §5.1b — on the root an input is the host's storage, so a string input
+// there states its capacity (SE0326). A root string output is fine.
+node StrRoot {
+    inputs  { cmd: string; }
+    outputs { echo: string(16); }
+
+    output(cmd) { out.echo = in.cmd; }
+}
