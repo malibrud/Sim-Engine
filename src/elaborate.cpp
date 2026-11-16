@@ -1069,7 +1069,7 @@ void Elaborator::apply_overrides(const NodeInfo* def, const std::string& path,
                 // The override was the diagnostic. `emplace`, so a binding the
                 // parent pinned still stands; only a leaf that nothing else
                 // binds is filled, and then it is not also reported as SE0420.
-                pinned.emplace(lf.key, Pin{0.0, ec_num(0.0), true});
+                pinned.emplace(lf.key, Pin{0.0, ec_num(0.0), true, {}});
             }
         }
     }
@@ -1652,7 +1652,7 @@ void Elaborator::instantiate(const NodeInfo* def, const std::string& path,
                     destructure(child_target, nullptr, b.name, b.loc, def_src,
                                 "setting `" + b.name + "`", all);
                     for (const Leafling& lf : all)
-                        child_pinned.emplace(lf.key, Pin{0.0, ec_num(0.0), true});
+                        child_pinned.emplace(lf.key, Pin{0.0, ec_num(0.0), true, {}});
                     continue;
                 }
                 for (const Leafling& lf : bl) {
@@ -1671,7 +1671,7 @@ void Elaborator::instantiate(const NodeInfo* def, const std::string& path,
                         // Bound, just not to anything that evaluates: pinned
                         // inert for the same reason as a bad brace list above,
                         // or a required leaf is reported a second time as SE0420.
-                        child_pinned.emplace(lf.key, Pin{0.0, ec_num(0.0), true});
+                        child_pinned.emplace(lf.key, Pin{0.0, ec_num(0.0), true, {}});
                     }
                 }
             }
@@ -3201,7 +3201,7 @@ bool Elaborator::run(const ast::SimFile& sim, const Source& sim_src,
             destructure(ttype, nullptr, b.name, b.loc, sim_src,
                         "setting `" + b.name + "`", all);
             for (const Leafling& lf : all)
-                pinned.emplace(lf.key, Pin{0.0, ec_num(0.0), true});
+                pinned.emplace(lf.key, Pin{0.0, ec_num(0.0), true, {}});
             continue;
         }
         for (const Leafling& lf : bl) {
@@ -3219,7 +3219,7 @@ bool Elaborator::run(const ast::SimFile& sim, const Source& sim_src,
             else
                 // Bound but not evaluable: inert, as for a bad brace list above,
                 // so a required leaf is not reported again as SE0420.
-                pinned.emplace(lf.key, Pin{0.0, ec_num(0.0), true});
+                pinned.emplace(lf.key, Pin{0.0, ec_num(0.0), true, {}});
         }
     }
 

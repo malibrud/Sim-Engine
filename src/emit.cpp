@@ -992,14 +992,17 @@ std::string Emitter::source_expr(const InputSource& s, const Type* type) const {
     // a live member (§6.2b), so an override at configuration reaches the wire
     // without anything being folded, and no `Out` storage is invented. A
     // literal source is the opposite half of that sentence: nothing can
-    // override it, so it is folded at elaboration and arrives here as a number.
+    // override it, so it is folded at elaboration and arrives here as a number,
+    // written in the reader's own type: the `In` view is a brace initialiser,
+    // where `1.0` into a bool or an int is a narrowing error.
+    const bool typed = type && !type->is_record && !s.converts();
     std::string expr = s.kind == InputSource::Kind::Boundary ? s.boundary
                        : s.kind == InputSource::Kind::Param  ? render_expr(s.expr)
                        : s.kind == InputSource::Kind::Const && s.is_text
                            ? "std::string_view(" + cpp_string(s.text) + ", " +
                                  std::to_string(s.text.size()) + ")"
                        : s.kind == InputSource::Kind::Const
-                           ? dbl(s.value)
+                           ? (typed ? literal(s.value, type->scalar, type->enm) : dbl(s.value))
                            : "sig." + m_.leaves[s.producer].ident + "." + s.port;
     if (!s.converts()) return expr;
 
@@ -1431,14 +1434,14 @@ void Emitter::sim_members() {
         for (const LoadRow& r : rows) any_element = any_element || r.kind == LoadRow::Kind::Element;
         if (any_element) {
             o_ << "    // An array state's initial conditions beyond its uniform default, one\n";
-            o_ << "    // element each: {row in setting_rows(), index, value}.\n";
+            o_ << "    // element each: {row in setting_rows(), index, value, no text}.\n";
             o_ << "    std::vector<se_rt::Assignment> se_ic_elements_{";
             bool first = true;
             for (std::size_t i = 0; i < rows.size(); ++i) {
                 if (rows[i].kind != LoadRow::Kind::Element) continue;
                 for (const StateSlot::ElementIC& ic : rows[i].state->element_ic) {
                     o_ << (first ? "\n" : ",\n") << "        {" << i << ", " << ic.index << ", "
-                       << dbl(ic.value) << "}";
+                       << dbl(ic.value) << ", {}}";
                     first = false;
                 }
             }
