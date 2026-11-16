@@ -65,7 +65,7 @@ and the node code written directly in C++.
   [Appendix C](SPECIFICATION.md#appendix-c--known-gaps-and-open-issues) lists
   the gaps and open questions deliberately left in it.
 - **The generated interface is still being built out**, in the phases listed
-  under [Roadmap](#roadmap). The next one packages a model as an FMU.
+  under [Roadmap](#roadmap).
 - **Windows and MSVC are the only toolchain actually exercised.** `build.sh` is
   generated for GCC/Clang but has not been run on Linux or macOS.
 - **`examples/drivetrain/` holds stale files.** `Sim.generated.cpp`,
@@ -575,10 +575,15 @@ In rough order. Each step is decided on its own, so this list changes.
 6. ~~**Inputs from a file.** A run's root inputs driven from a CSV table, an
    `inputs` section in the settings format, and `--inputs` (§13.8), so a
    recorded run replays.~~ Done.
-7. **An FMU.** Packaging a model as an FMI co-simulation FMU.
+7. **Strings on wires and in settings.** Text as a type a port, a wire and a
+   setting can carry, beside the numbers, booleans and finite types.
 8. **Later:** clean-ups to the generated code's readability, and the open items
    in the spec's Appendix C, such as display units for recording and
    field-level wires.
+9. **Parked: an FMU.** Packaging a model as an FMI 2.0 co-simulation FMU, with
+   every setting as a parameter and every recordable channel as a local. It
+   waits until someone needs a model inside another tool. It is a thin layer
+   over the C interface, so nothing built before then is in its way.
 
 ---
 

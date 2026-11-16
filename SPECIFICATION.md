@@ -430,6 +430,11 @@ A string literal may not span a line break; an unterminated literal is an error
 (`SE0103`). An unrecognised escape is an error (`SE0104`) rather than being
 passed through, so that adding escapes later is not a silent behaviour change.
 
+The same literal, with exactly these escapes, is how a string value (§5.1b) is
+written in a settings source (§14) and in a dump (§14.1). A compiled model
+reads and writes the same set, so text with a quote, a backslash or a line
+break round-trips through a dump.
+
 ### 3.7 Punctuation and operators
 
 ```
@@ -701,9 +706,10 @@ it an array of that scalar type (§6.4, §6.5). The scalar type set is unchanged
 an extent is a property of the declaration, not a new type. Ports, settings,
 record fields and natives may not carry one (`SE0234`).
 
-One builtin type is not on this list because it is not a scalar: `buffer`, a
-run of raw bytes with a length (§5.1a). It is not an array either, and that is
-the point of making it its own type.
+Two builtin types are not on this list because neither is a scalar: `buffer`,
+a run of raw bytes with a length (§5.1a), and `string`, bounded text (§5.1b).
+A buffer is not an array either, and that is the point of making it its own
+type.
 
 ### 5.1a Buffers
 
@@ -743,9 +749,10 @@ rather than a unit.
   `buffer(1500)` and from a `buffer(64)` is the same input. Nothing is ever
   truncated by a wire: a reader sees exactly the bytes the producer holds, and
   checks `size()` itself if it needs a minimum.
-- **Where it may appear:** inputs, outputs and vars. Not a setting — §7 is a
-  language of numbers with dimensions, and a buffer is neither — not a state,
-  and not a record field (`SE0325`). A var buffer may not carry an extent
+- **Where it may appear:** inputs, outputs and vars. Not a setting — a
+  setting's value is a number with a dimension, an enumerator, or text
+  (§5.1b), and a buffer is none of them — not a state, and not a record field
+  (`SE0325`). A var buffer may not carry an extent
   (`SE0433`).
 - **A wire carries a buffer only into a buffer.** A buffer into a scalar or a
   record port, or either into a buffer, is the port-type mismatch `SE0410`. A
@@ -782,6 +789,93 @@ Copying one `buffer<N>` to another copies `size()` bytes, not `N`. A
 `buffer<N>` converts to a `buffer_view` implicitly, which is the whole of how a
 wire reaches a reader (§15.3). `assign` is the only way to put a view's bytes
 into storage, and it says when it truncates rather than doing so quietly.
+
+### 5.1b Strings
+
+A **string** is bounded text: up to a fixed number of bytes, plus a size. It
+exists for the text a model carries or is configured with — a host to send to,
+a label, a status line, a command name — where a number would be a code a
+person has to look up.
+
+```
+settings { host:   string(64) = "127.0.0.1"; }   // storage: up to 64 bytes
+inputs   { cmd:    string; }                    // a reader: any capacity
+outputs  { status: string(32); }
+vars     { line:   string(80); }
+```
+
+**It follows the buffer (§5.1a) wherever the two can agree.**
+- **Only storage states a capacity.** A string that *holds* text — a setting,
+  a leaf's output, a var — declares how many bytes it can hold:
+  `string(64)`. A string that only *reads* or *passes through* — an input,
+  either port of a composite — is written bare, `string`, and accepts any
+  capacity. A missing capacity on storage is `SE0323`, a capacity on a reader
+  `SE0324`, and a capacity that is not a positive integer literal `SE0236`.
+  The capacity is part of the signal block's layout, fixed when the code is
+  generated (§15.5), so no setting can change it.
+- **The capacity counts bytes.** Text is UTF-8, so a character outside ASCII
+  takes more than one. The value carries its size, `0 <= size <= capacity`,
+  and an empty string is a value like any other.
+- **Nothing allocates.** Storage is a fixed array, so writing a string during
+  a run never touches the heap.
+- **A wire carries a string only into a string**, of any capacity. A string
+  into a number, a record or a buffer, or any of those into a string, is
+  `SE0410`.
+- **`string` is contextual**, recognised as a one-segment type name as
+  `buffer` is, and usable as an ordinary identifier everywhere else.
+
+**Where it differs from a buffer.**
+- **It may be a setting.** A string setting's value is a literal or a
+  `param.` reference to a parent's string setting, and nothing else (§7.2b).
+  `sec` checks that it fits: a literal longer than the capacity, or a
+  `string(M)` setting flowing into a `string(N)` one with M > N, is `SE0427`.
+  At configuration an over-long value is refused as the source is loaded
+  (§14.1).
+- **A literal or a string setting may drive a string input**, as a number
+  drives a numeric input: `"stop" --> ctl.cmd;` or `param.host --> tx.host;`.
+- **It may be on the root.** On the root an input is the host's storage, not
+  a reader, so a root string input states its capacity, `cmd: string(16)`. A
+  bare one is `SE0326`, and a capacity on any input that is not the root's is
+  still `SE0324`. The host reaches root strings through the root structs
+  (§15.5) and the C interface's text calls (§14.2).
+- **It is recorded as its text** (§13.5), not as its size.
+
+**Not a state and not a record field** (`SE0325`). A string is configuration
+or a message, not the evolving condition of a system; text a node keeps from
+one step to the next lives in a var. Keeping it out of records keeps a record
+a bundle of numbers that converts field by field (§4.1).
+
+**Text too long for its destination is cut, and the run is told once.** `sec`
+checks every capacity it can see, but C++ in a body may write anything. A
+write longer than the capacity keeps the longest prefix that ends on a whole
+UTF-8 character, so a cut never leaves half a character behind. After each
+method of a leaf, the engine looks at that leaf's string outputs and vars,
+and the first time one has been cut it logs one `warn` line naming it:
+`tx.out.status: 61 bytes into string(32), truncated`. Later cuts of the same
+destination are silent, the run carries on, and logging never halts a run (§10.1).
+Text from the host is never cut: a host value that doesn't fit is refused
+(§13.8, §14.1, §14.2).
+
+**In C++** a storage string is `se_rt::string<N>` and a reader is
+`std::string_view`:
+
+```cpp
+template <std::size_t N> struct string {
+    std::int32_t size_;          // first, as in buffer<N>
+    char         data_[N + 1];   // always NUL-terminated, for C APIs
+    std::int32_t wanted_;        // the length last asked for; over N after a cut
+    const char* c_str() const;   std::size_t size() const;   bool empty() const;
+    static constexpr std::size_t capacity();
+    operator std::string_view() const;
+    bool assign(std::string_view s);   // false if it had to cut
+    string& operator=(std::string_view s);
+};   // == and != compare text
+```
+
+A body therefore writes `sock.open(param.host.c_str())`, `out.status = "no
+data";` and `if (in.cmd == "stop")` with the standard library alone. A
+`string<N>` converts to a `std::string_view` implicitly, which is how a wire
+reaches a reader, and a view is valid for the method call that receives it.
 
 ### 5.2 Record types
 
@@ -981,6 +1075,8 @@ settings {
 
 - A setting with **no default is required**: every instantiation must bind it,
   checked statically at stage 4 (`SE0420`).
+- A **string setting** (§5.1b) takes a string literal or a `param.` reference
+  to another string setting, in its default and wherever it is bound (§7.2b).
 - A default is an expression in the elaboration language (§7). It may reference
   **other settings of the same node** via `param.*`, which makes settings a
   dependency graph requiring a topological sort; a cycle is an error (`SE0421`).
@@ -1913,6 +2009,7 @@ source (§6.9.2), which is the cheapest **live** constant the language offers.
 wire     := endpoint '-->' endpoint { '-->' endpoint } { ',' endpoint } ';'
 endpoint := ( 'self' | identifier ) { '.' identifier }
           | [ '+' | '-' ] number [ unit ]      // a literal: a SOURCE only
+          | string                             // text: a SOURCE only (§5.1b)
 ```
 
 - `-->` is the connection token; `;` terminates.
@@ -2421,7 +2518,7 @@ both in one step — a script, a build system, a future driver — sits above
 | `SE0360` | 3 | A column names no member of the node |
 | `SE0361` | 3 | A column is on the wrong side of the operator |
 | `SE0362` | 3 | An expected column names a method the node does not define |
-| `SE0363` | 3 | A node with a buffer port has a `tests` section |
+| `SE0363` | 3 | A node with a buffer or string port has a `tests` section, or a column names a string setting |
 | `SE0470` | 4 | A set reaches a rate-derived setting with no `step` |
 
 A dimension error in a cell or a tolerance is the ordinary `SE0410`.
@@ -2430,6 +2527,12 @@ A dimension error in a cell or a tolerance is the ordinary `SE0410`.
 program runs the node as the root of a model (below), and a buffer may not be on
 the root (§5.1a, Appendix C 16c); nor could a cell supply one, a cell being a §7
 expression with no way to spell bytes. Both lift together with 16c.
+
+**Nor can a node with a string port, or a column that names a string
+setting** (`SE0363`). A string input on the root must state a capacity, which
+a reader port does not (§5.1b), and a test row's cells are compared as
+numbers. A string setting the rows don't name keeps its default and is no
+obstacle.
 
 ### 6.14 Documentation
 
@@ -2592,6 +2695,7 @@ primary        := number [ unit ]
                 | aggregate                                   // §6.2c
                 | identifier '(' [ expression { ',' expression } ] ')'
                 | identifier                          // named constant
+                | string                              // §7.2b
                 | '(' expression ')'
 
 aggregate      := '{' [ positional | named ] '}'
@@ -2608,7 +2712,8 @@ Precedence, loosest to tightest: `+ -` · `* /` · unary `+ -` · `^`. So `-2^2`
 ### 7.2 Values and units
 
 Every value is a real number with a dimension — or an enumerator, which has
-neither and appears only where a finite type is expected (§7.2a).
+neither and appears only where a finite type is expected (§7.2a), or text,
+which appears only where a string is expected (§7.2b).
 
 **An `aggregate` is not a value, which is why that sentence needs no
 qualification.** A brace list never reaches the evaluator: it is destructured
@@ -2656,6 +2761,28 @@ enumerator or such a setting anywhere else — an operand of `+`, an argument to
 `max`, the value of an `int` site — is `SE0404`. §7.4's absence of comparisons
 and conditionals is why there is nothing more: `param.mode == FAST ? HI : LO`
 is not §7, for finite types or for anything else (Appendix C).
+
+### 7.2b Text
+
+A site of string type (§5.1b) — a setting's default, a binding, an override —
+takes a **string literal** (§3.6) or a `param.` reference to a string setting,
+which copies it:
+
+```
+host: string(64) = "127.0.0.1";          // a setting's default
+node tx : Sender { host = param.host; };  // a binding that flows down
+tx.host = "rig-pc";                       // a sim-file or .settings override
+```
+
+That is the whole of text in §7, as it is for an enumerator: no operation
+joins, cuts or formats it, because §7.4's promise of one straight-line C++
+expression per setting holds only for numbers. A file name built from parts
+is put together by the node's C++ in `init()`.
+- **It must fit.** A literal longer than the site's capacity, or a
+  `string(M)` setting copied into a `string(N)` site with M > N, is `SE0427`.
+  The capacity counts bytes.
+- **Text and numbers don't mix.** A literal or a string setting at a numeric
+  or finite site, or anything but those two at a string site, is `SE0428`.
 
 ### 7.3 Builtin functions and constants
 
@@ -3935,6 +4062,13 @@ instant per run, so a run's table and its log (§13.7) carry the same one.
   table of numbers has nowhere honest to put them, so the column is the one
   thing about a buffer that *is* a number, headed by the type where a unit
   would go: `rx.data [buffer(1500)]`, or `[buffer]` for a reader's port.
+- **A string is recorded as its text** (§5.1b), headed `[string]` where a
+  unit would go, whatever its capacity. Every cell of a string column is
+  quoted the RFC 4180 way: the text between double quotes, a quote inside it
+  doubled, and a comma or a line break kept as it is. Excel, pandas and every
+  other CSV reader read that as it stands. Quoting every cell keeps the empty
+  string, `""`, apart from an empty cell, and keeps a text column that happens
+  to hold digits a text column.
 - **An element of an array state is recorded by index** — `bw.state.w1[3]` — and
   the column is named that way. As with an override (§13.4), an index past the
   configured extent is a configuration failure, not a compile error; and since
@@ -4065,19 +4199,21 @@ converted, as a unit suffix in a settings source is (§14.1), so a
 refused. So is a missing one where the input has a dimension, because a bare
 number there could mean anything. A dimensionless input takes `[-]`, `[]` or
 no bracket. A finite input's bracket may be its type's name, as the recorder
-writes it, or absent.
+writes it, or absent, and a string input's may be `string` or absent.
 
 **The values are checked as the C interface checks them** (§14.2).
 - An `int` input takes a whole number, and a `bool` input 0 or 1.
 - A finite input takes an enumerator's value, as the recorder writes it, or
   its name.
+- A string input takes the cell's text, which must fit the input's capacity.
+  A quoted empty cell, `""`, is the empty string.
 - An empty cell is refused.
 
 **Between rows, a value is interpolated or held, by its type.**
 - A `double` input is interpolated linearly between the last row at or before
   *t*[k] and the next row.
-- An `int`, `bool` or finite input holds the last row at or before *t*[k],
-  because halfway between two gears is not a gear.
+- An `int`, `bool`, finite or string input holds the last row at or before
+  *t*[k], because halfway between two gears is not a gear.
 - **Two rows with the same time make a step**: up to that time the value comes
   from the earlier row, and from that time on from the later one.
 - Times may repeat but never go backwards.
@@ -4117,10 +4253,11 @@ written over whatever the host wrote to those inputs. One `info` line at
 - The dump writes the name as joined, so it reproduces the run from the same
   working directory. `inputs_file()` returns it the same way.
 
-**The table's dialect.** Fields are separated by commas. An optional UTF-8 BOM
-is skipped, lines may end in LF or CRLF, blank lines are skipped, and a field
-wrapped in double quotes has them removed. A row with the wrong number of
-fields is refused.
+**The table's dialect** is RFC 4180's, as the recorder writes it (§13.5).
+Fields are separated by commas. A field wrapped in double quotes may hold
+commas and line breaks, and a doubled quote inside it is one quote. An
+optional UTF-8 BOM is skipped, lines may end in LF or CRLF, and blank lines
+are skipped. A row with the wrong number of fields is refused.
 
 **A recorded run replays to the recorder's precision.** The recorder writes 9
 significant digits, so a replay drives the model with each input as recorded.
@@ -4139,6 +4276,7 @@ total_mass          = 1800 (kg);
 front.left.mass     =  340 (kg);
 front.left.velocity =    2 (m/s);   // a state's initial value
 rear.tc.slip_limit  = 0.08;
+tx.host             = "rig-pc";     // a string setting (§5.1b)
 ```
 
 ```
@@ -4152,7 +4290,8 @@ inputs_section   := 'inputs' inputs_body          // §13.8
 
 **File and string are one grammar, two carriers.** The same text may be passed
 inline — as a command-line flag or through an API call — with no separate syntax.
-Every value is unit-checked against its target (§4.3).
+Every value is unit-checked against its target (§4.3), and a string is written
+as a literal with §3.6's escapes.
 
 A source holds model values, run configuration, or both, in any mix and any
 order: settings and initial conditions as bindings, the run's length as the
@@ -4204,8 +4343,9 @@ a number, which is what this section already describes, so nothing below changed
 when records became settable.
 
 **The runtime accepts a restricted right-hand side.** `sec` evaluates all of §7;
-a compiled model accepts a **number with an optional unit suffix**, or at an
-path of finite type a **bare enumerator** (§7.2a), and nothing else — no arithmetic, no builtins, no `param.*`. Two reasons: the full evaluator
+a compiled model accepts a **number with an optional unit suffix**, at a
+path of finite type a **bare enumerator** (§7.2a), and at a path of string
+type a **string literal** (§3.6, §7.2b), and nothing else — no arithmetic, no builtins, no `param.*`. Two reasons: the full evaluator
 would have to ship inside every generated artifact, and `param.*` at this layer
 would name a value that a later line in the same source may itself rebind,
 requiring an evaluation order that the elaboration-time version gets for free
@@ -4228,7 +4368,8 @@ a hole here.
 
 **`dump_settings` and `load_settings` round-trip.** Dumping a model, loading the
 result into a freshly constructed one, and dumping again produces identical text.
-The dump emits canonical units, enumerators by name, and every settable path,
+The dump emits canonical units, enumerators by name, strings as literals,
+and every settable path,
 so it doubles as a
 golden record of what a binary was configured with — and as the readable
 inventory of what a model exposes, which no external document has to be kept in
@@ -4271,19 +4412,21 @@ struct SettingInfo {
     std::string path;          // "front.left.mass", "bw.w1[3]", "sim.duration"
     SettingKind kind;
     std::string unit;          // canonical (§15.6); "-" for none
-    std::string type;          // "double", "int", "bool", or a finite type
-    double      value;         // current, in `unit`; an enumerator's value
+    std::string type;          // "double", "int", "bool", "string", or a finite type
+    double      value;         // current, in `unit`; an enumerator's value; NaN for text
+    std::string text;          // a string setting's value; "" otherwise
     bool        structural;    // listed, never settable (§6.2)
 };
 std::vector<SettingInfo> settings_list() const;
-double get(const char* path) const;               // canonical unit; NaN if unknown
-bool   set(const char* path, double value);       // canonical unit
-bool   set(const char* path, const char* value);  // "340 (kg)", "CONNECTED"
+double      get(const char* path) const;          // canonical unit; NaN if unknown
+const char* get_text(const char* path) const;     // a string setting; nullptr if not one
+bool        set(const char* path, double value);  // canonical unit
+bool        set(const char* path, const char* value);  // "340 (kg)", "CONNECTED", rig-pc
 
 // Channels: every recordable path (§13.5), and whether it is selected.
 struct ChannelInfo {
     std::string path;          // "plant.out.velocity", "bw.state.w1[3]"
-    std::string unit;          // the header's bracket: a unit, a finite type, buffer(N)
+    std::string unit;          // the header's bracket: a unit, a finite type, buffer(N), string
     bool        selected;
 };
 std::vector<ChannelInfo> channels_list() const;
@@ -4317,8 +4460,9 @@ after `init()`, and nothing they do appears in a dump.
 
 ```cpp
 // A channel read live (§13.5): resolve it once, then read it each tick.
-int    channel_handle(const char* path);          // -1 if refused; error() says why
-double read(int handle) const;                    // NaN for a bad handle
+int         channel_handle(const char* path);     // -1 if refused; error() says why
+double      read(int handle) const;               // NaN for a bad handle, or for text
+const char* read_text(int handle) const;          // a string channel; nullptr if not one
 
 // The console's lines, kept for a host that has none (§13.7).
 enum class LogLevel { Trace, Debug, Info, Warn, Error };
@@ -4349,6 +4493,9 @@ bool log_next(LogLine& line);                     // false when none is waiting
     the value is not meaningful.
   - An array element is checked against the extent when it is read. An
     element past the extent, like a handle the model never issued, reads NaN.
+  - A string channel is read with `read_text`, which returns the text as the
+    last tick sampled it. Its storage is set aside when the handle is taken,
+    so reading never allocates during a run.
 - **Captured lines are the console's.**
   - While capture is on, every line the console would have received goes to
     the queue instead. That means `warn` and above always, and, when there is
@@ -4391,6 +4538,15 @@ bool log_next(LogLine& line);                     // false when none is waiting
   value that is not an integer is rejected at an `int` target, as `SE0402`
   rejects it (§3.5), and §7 has no boolean literal, so a `bool` setting is
   written `0` or `1` here as it is everywhere else.
+- **A string target takes a quoted literal that fits.** Text longer than the
+  setting's capacity is refused, naming both lengths, and never cut: only
+  node code cuts (§5.1b). A number at a string path, or a literal at any
+  other path, is refused.
+  - `set(path, text)` at a string path takes the characters **as they are**,
+    without quotes, since the call already carries exactly one value. A
+    quote, a semicolon or a line break in it is just a character.
+  - `get_text` reads a string setting. `get`, `set(path, double)` and `read`
+    on text return NaN or refuse, and the error names the call to use.
 
 `dump_settings` returns text owned by the model, valid until the next call. It
 is **the recipe for the run**: the settings, in configuration order; the initial
@@ -4398,7 +4554,8 @@ conditions — every scalar state's, and each array-state element that a source
 bound; `sim.duration`; a `record` section that starts with `clear;` and then
 names the file, the rate and the selected channels in column order; a `log`
 section; and an `inputs` section, `file = "";` when there is none. Numbers are written to round-trip exactly; units are the canonical ones
-(§15.6); enumerators are written by name. Because the record section clears
+(§15.6); enumerators are written by name; strings are written as literals,
+escaped as §3.6 says. Because the record section clears
 first, loading a dump on top of any configuration reproduces the selection
 exactly, column order included.
 
@@ -4477,6 +4634,7 @@ SE_API const char* se_setting_unit(se_sim* s, int i);
 SE_API const char* se_setting_type(se_sim* s, int i);
 SE_API int         se_setting_structural(se_sim* s, int i);
 SE_API double      se_get(se_sim* s, const char* path);
+SE_API const char* se_get_text(se_sim* s, const char* path);   /* NULL if not a string */
 SE_API int         se_set(se_sim* s, const char* path, double value);
 SE_API int         se_set_text(se_sim* s, const char* path, const char* value);
 
@@ -4505,9 +4663,11 @@ SE_API const char* se_error(se_sim* s);           /* "" when there is none */
 /* ---- 3. step -------------------------------------------------------- */
 SE_API int         se_set_input(se_sim* s, int i, double value);
 SE_API int         se_set_inputs(se_sim* s, const double* values, int n);
+SE_API int         se_set_input_text(se_sim* s, int i, const char* value);
 SE_API void        se_tick(se_sim* s);
 SE_API double      se_get_output(se_sim* s, int i);    /* NaN for a bad index */
 SE_API int         se_get_outputs(se_sim* s, double* values, int n);
+SE_API const char* se_get_output_text(se_sim* s, int i);   /* NULL if not text */
 SE_API int         se_done(se_sim* s);
 SE_API double      se_time(se_sim* s);
 SE_API uint64_t    se_tick_index(se_sim* s);
@@ -4516,6 +4676,7 @@ SE_API uint64_t    se_tick_count(se_sim* s);
 SE_API int         se_channel_handle(se_sim* s, const char* path);   /* -1 if refused */
 SE_API double      se_read(se_sim* s, int handle);
 SE_API int         se_read_many(se_sim* s, const int* handles, int n, double* out);
+SE_API const char* se_read_text(se_sim* s, int handle);    /* NULL if not text */
 
 SE_API void        se_sync_realtime(se_sim* s);
 SE_API double      se_realtime_utilization(se_sim* s);
@@ -4569,6 +4730,18 @@ does. The rules below are what C adds.
     order. `n` must equal the count.
   - The root's settings have no struct here. They are paths like any other,
     reached through `se_get` and `se_set`.
+- **A string port is text, in the same numbering.**
+  - A text port's unit is `string`, which is how a host tells it from a
+    number.
+  - `se_set_input_text` writes one, and `se_get_output_text` reads one. Text
+    longer than the input's capacity is refused, never cut.
+  - `se_set_input` and `se_get_output` refuse a text port, and the error names
+    the call to use. `se_set_inputs` ignores a text port's slot, and
+    `se_get_outputs` fills it with NaN, so a model with one text port can
+    still move all its numbers in one call.
+  - `se_get_text` and `se_read_text` are `get_text` and `read_text`. A string
+    setting is written with `se_set_text`, which takes the characters as they
+    are.
 - **`se_error` reports the last refusal.**
   - That is either the C layer's own (a bad index, a value the input cannot
     hold, a count that doesn't match), or the model's `error()`.
@@ -5184,7 +5357,7 @@ of thing wearing the same name.
 | `SE0233` | 2 | A `native` member may not carry a unit |
 | `SE0234` | 2 | An extent is not permitted on this declaration (port, setting, record field, `native`) |
 | `SE0235` | 2 | Malformed array extent |
-| `SE0236` | 2 | A buffer capacity that is not a positive integer literal |
+| `SE0236` | 2 | A buffer or string capacity that is not a positive integer literal |
 | `SE0240` | 2 | Helper function has no body |
 | `SE0241` | 2 | `init` takes no parameters |
 | `SE0242` | 2 | `final` takes at most one parameter |
@@ -5231,9 +5404,10 @@ of thing wearing the same name.
 | `SE0320` | 3 | Node has both code and a `structure` block |
 | `SE0321` | 3 | `collapsed` or `expanded` on a leaf, or on an instance of one |
 | `SE0322` | 3 | A file-level `declarations` block outside `package.se` |
-| `SE0323` | 3 | A buffer with no capacity where it is storage (a leaf's output, a var) |
-| `SE0324` | 3 | A buffer capacity on a reader (an input, a composite's port) |
-| `SE0325` | 3 | A buffer setting, state or record field |
+| `SE0323` | 3 | A buffer or string with no capacity where it is storage (a setting, a leaf's output, a var) |
+| `SE0324` | 3 | A buffer or string capacity on a reader (an input that is not the root's, a composite's port) |
+| `SE0325` | 3 | A buffer setting, or a buffer or string state or record field |
+| `SE0326` | 4 | A string input on the root with no capacity |
 | `SE0330` | 3 | Duplicate member name in a node |
 | `SE0331` | 3 | Member name shadows a generated accessor |
 | `SE0332` | 3 | A name the generated C++ spells verbatim is a C++ keyword |
@@ -5273,6 +5447,8 @@ of thing wearing the same name.
 | `SE0424` | 4 | Unknown field name in a brace list |
 | `SE0425` | 4 | A field is given twice in a brace list |
 | `SE0426` | 4 | A brace list where a scalar is declared, or a value where a record is |
+| `SE0427` | 4 | Text longer than the string it is copied into |
+| `SE0428` | 4 | Text where a number or an enumerator is expected, or anything else where text is |
 | `SE0430` | 4 | Unconnected input |
 | `SE0431` | 4 | A `continuous` state must be `double` |
 | `SE0432` | 4 | An array extent must be a dimensionless, non-negative integer |
@@ -5341,10 +5517,12 @@ enumerator      = IDENT [ "=" [ "-" ] INT ] ;
 
 (* One production for every declaration, scalar or record. A one-segment path
    naming a closed scalar type (5.1) takes its unit as the argument: one for
-   `double`/`float`/`int`, none for `bool`. The one-segment path `buffer`
-   takes no unit; its optional argument is a capacity (5.1a). *)
+   `double`/`float`/`int`, none for `bool`. The one-segment paths `buffer`
+   and `string` take no unit; their optional argument is a capacity (5.1a,
+   5.1b). *)
 type_ref        = qualified_name [ "(" unit_expr { "," unit_expr } ")" ]
-                | "buffer" [ "(" INT ")" ] ;
+                | "buffer" [ "(" INT ")" ]
+                | "string" [ "(" INT ")" ] ;
 
 (* ─── nodes ──────────────────────────────────────────────────────────── *)
 
@@ -5432,7 +5610,8 @@ endpoint_head   = "self" | IDENT ;
    parser tells the two apart with no lookahead and rejects a literal
    destination outright (SE0215). It is a constant, not an expression — there is
    no arithmetic on a wire (§6.9.2). *)
-literal_endpoint= [ "+" | "-" ] NUMBER [ unit ] ;
+literal_endpoint= [ "+" | "-" ] NUMBER [ unit ]
+                | STRING ;                             (* §5.1b *)
 
 (* ─── methods ────────────────────────────────────────────────────────── *)
 
@@ -5473,6 +5652,7 @@ primary         = NUMBER [ unit ]
                 | aggregate                            (* §6.2c *)
                 | IDENT "(" [ expression { "," expression } ] ")"
                 | IDENT
+                | STRING                               (* §7.2b *)
                 | "(" expression ")" ;
 
 (* §6.2c — a record brace list. Wholly positional or wholly named, never
