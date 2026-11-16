@@ -1,0 +1,8 @@
+// se.net over loopback: UdpSender to UdpReceiver, and UdpClient to an echoing
+// UdpServer. See lib/udploop/Loop.se; tests/emit/udp_host.cpp drives it.
+sim UdpLoop {
+    root: udploop.Loop;
+
+    step:     1 (ms);
+    duration: 200 (ms);
+}

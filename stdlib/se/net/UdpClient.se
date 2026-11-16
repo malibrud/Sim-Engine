@@ -1,0 +1,129 @@
+// A non-blocking UDP client: full duplex with one fixed peer. It sends its
+// `payload` input to `host`:`port` on every step `send` is true, and receives
+// that peer's datagrams, and only that peer's.
+//
+// ONE PEER. The socket is connected to the peer, so the operating system
+// drops a datagram from anyone else, and a send needs no address. `host` is
+// an IPv4 address or a name, looked up once in `init()`, and a name that does
+// not resolve ends the run. The local port is `local_port`, or any free one
+// for 0, the default; a peer that answers to the port it heard from needs
+// nothing more.
+//
+// RECEIVES AS UdpReceiver DOES. Each step, `next()` drains what has queued
+// up, up to `max_drain` datagrams, keeps the latest, and `output()` publishes
+// it at the next tick: `data` latches, `status` is RECEIVED on the step a
+// datagram arrived and NO_DATA otherwise, `count` says how many were taken
+// and `age` how long since the last one. That is one step of latency, and it
+// is what makes this node a sort root; `seq` holds it there.
+//
+// SENDS ON A FLAG, after the drain, in the same `next()`: a step's reply goes
+// out with that step's `payload`. A send reports nothing; its first failure is a
+// warning and its recovery one info line, and neither stops the run.
+//
+// A CLOSED PEER IS AN ERROR, NOT SILENCE. When the peer's port is closed, its
+// host answers a datagram with "port unreachable", and on a connected socket
+// that surfaces on a later receive. `status` becomes ERROR and the log names
+// the reason once; a peer that is merely quiet is NO_DATA and a growing
+// `age`, as for any receiver.
+package se.net;
+
+node UdpClient {
+    settings {
+        host:       string(64) = "127.0.0.1";   // the peer: an IPv4 address or a name
+        port:       int(-);                     // the peer's port, 1..65535
+        local_port: int(-) = 0;                 // this end's; 0 for any free port
+        max_drain:  int(-) = 64;                // datagrams taken per step, at most
+    }
+
+    inputs {
+        payload: buffer;                        // the datagram to send
+        send:    bool;                          // send `payload` on this step
+    }
+
+    outputs {
+        data:   buffer(1500);                   // the peer's latest datagram
+        status: RxStatus;
+        count:  int(-);                         // datagrams taken this step
+        age:    double(s);                      // since the latest was taken
+    }
+
+    states { discrete seq: int(-) = 0; }        // datagrams taken since the run began
+
+    vars {
+        rx:      buffer(1500);
+        st:      RxStatus;
+        n:       int(-);
+        t_last:  double(s);
+        failing: bool;                          // the last send failed
+    }
+
+    native {
+        sock: se_net_detail::UdpSocket;
+        peer: sockaddr_in;
+    }
+
+    init() {
+        if (!sim.require(param.port >= 1 && param.port <= 65535, "1 <= port <= 65535",
+                         static_cast<double>(param.port)) ||
+            !sim.require(param.local_port >= 0 && param.local_port <= 65535,
+                         "0 <= local_port <= 65535", static_cast<double>(param.local_port)))
+            return;
+        if (param.host.empty()) {
+            sim.abort("UdpClient has no host to talk to");
+            return;
+        }
+        if (!sock.open(param.local_port, true) ||
+            !sock.resolve(param.host.c_str(), param.port, peer) || !sock.connect(peer)) {
+            log.error("cannot talk to {}:{}: {}", param.host, param.port, sock.error_text());
+            sim.abort(se_rt::format("cannot talk to {}:{}: {}", param.host, param.port,
+                                    sock.error_text()));
+            return;
+        }
+        var.st = RxStatus::NO_DATA;
+        var.t_last = sim.time();
+        var.failing = false;
+        log.info("talking to {} ({}):{} from UDP port {}", param.host,
+                 se_net_detail::UdpSocket::address(peer), param.port, sock.local_port());
+    }
+
+    next(payload, send) {
+        const RxStatus was = var.st;
+        RxStatus st = RxStatus::NO_DATA;
+        int taken = 0;
+        for (int i = 0; i < param.max_drain; ++i) {
+            std::size_t got = 0;
+            const se_net_detail::Recv r = sock.receive(var.rx.data(), var.rx.capacity(), got);
+            if (r == se_net_detail::Recv::WouldBlock) break;
+            if (r == se_net_detail::Recv::Error) {
+                st = RxStatus::ERROR;
+                break;
+            }
+            var.rx.resize(got);
+            ++taken;
+            st = r == se_net_detail::Recv::Truncated ? RxStatus::TRUNCATED : RxStatus::RECEIVED;
+        }
+        if (taken > 0) var.t_last = sim.time();
+        if (st == RxStatus::ERROR && was != RxStatus::ERROR)
+            log.warn("receive from {}:{} failed: {}", param.host, param.port, sock.error_text());
+        var.st = st;
+        var.n = taken;
+        next.seq = state.seq + taken;
+
+        if (!in.send) return;
+        if (!sock.send(in.payload.data(), in.payload.size())) {
+            if (!var.failing)
+                log.warn("send to {}:{} failed: {}", param.host, param.port, sock.error_text());
+            var.failing = true;
+        } else if (var.failing) {
+            log.info("sending to {}:{} again", param.host, param.port);
+            var.failing = false;
+        }
+    }
+
+    output() {
+        if (var.n > 0) out.data = var.rx;
+        out.status = var.st;
+        out.count  = var.n;
+        out.age    = sim.time() - var.t_last;
+    }
+}

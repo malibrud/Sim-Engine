@@ -26,6 +26,7 @@ declarations {
     #  include <ws2tcpip.h>
     #else
     #  include <arpa/inet.h>
+    #  include <netdb.h>
     #  include <netinet/in.h>
     #  include <sys/socket.h>
     #  include <sys/uio.h>
@@ -62,7 +63,8 @@ declarations {
     // What one non-blocking receive came back with.
     enum class Recv { Datagram, Truncated, WouldBlock, Error };
 
-    // A non-blocking IPv4 UDP socket bound to one port on every interface.
+    // A non-blocking IPv4 UDP socket bound to one port on every interface,
+    // which can also send: to any address, or, once connected, to one peer.
     //
     // RAII on purpose: `final()` does not run for a node whose `init()` did
     // not complete (§8.1), so a node that aborts in `init()` after opening
@@ -81,10 +83,14 @@ declarations {
         bool is_open() const { return s_ != kNoSocket; }
         const std::string& error_text() const { return err_; }
 
-        // Binds `port` on every interface and makes the socket non-blocking.
-        // No SO_REUSEADDR: a second receiver on the same port is a mistake,
-        // and failing to bind is how it is found.
-        bool open(int port) {
+        // Binds `port` on every interface, or any free port for 0, and makes
+        // the socket non-blocking. No SO_REUSEADDR: a second receiver on the
+        // same port is a mistake, and failing to bind is how it is found.
+        //
+        // `report_reset` keeps Windows' report of an ICMP port-unreachable,
+        // which a connected socket wants: it is how a client learns that its
+        // peer's port is closed.
+        bool open(int port, bool report_reset = false) {
             close();
     #if defined(_WIN32)
             WSADATA wsa;
@@ -97,8 +103,8 @@ declarations {
     #if defined(_WIN32)
             // Without this, an ICMP port-unreachable caused by some earlier
             // send on this socket surfaces as WSAECONNRESET on a later
-            // receive. A receive-only socket has nothing to learn from it.
-            BOOL report = FALSE;
+            // receive. Only a connected socket has anything to learn from it.
+            BOOL report = report_reset ? TRUE : FALSE;
             DWORD returned = 0;
             WSAIoctl(s_, _WSAIOW(IOC_VENDOR, 12) /* SIO_UDP_CONNRESET */, &report,
                      sizeof report, nullptr, 0, &returned, nullptr, nullptr);
@@ -121,14 +127,81 @@ declarations {
             return true;
         }
 
+        // `host`, an IPv4 address or a name, looked up once through the
+        // system's resolver, IPv4 only; the first answer wins. Blocks while
+        // the resolver works, so it belongs in init(). Needs the socket open,
+        // which is what has started Winsock.
+        bool resolve(const char* host, int port, sockaddr_in& out) {
+            std::memset(&out, 0, sizeof out);
+            addrinfo hints;
+            std::memset(&hints, 0, sizeof hints);
+            hints.ai_family = AF_INET;
+            hints.ai_socktype = SOCK_DGRAM;
+            addrinfo* found = nullptr;
+            const int r = ::getaddrinfo(host, nullptr, &hints, &found);
+            if (r != 0 || !found) {
+    #if defined(_WIN32)
+                describe("getaddrinfo", r);
+    #else
+                err_ = std::string("getaddrinfo: ") + ::gai_strerror(r);
+    #endif
+                return false;
+            }
+            std::memcpy(&out, found->ai_addr, sizeof out);
+            ::freeaddrinfo(found);
+            out.sin_port = htons(static_cast<std::uint16_t>(port));
+            err_.clear();
+            return true;
+        }
+
+        // A connected UDP socket sends to one peer and receives only from it.
+        bool connect(const sockaddr_in& to) {
+            if (::connect(s_, reinterpret_cast<const sockaddr*>(&to), sizeof to) != 0) {
+                describe("connect", last_error());
+                return false;
+            }
+            return true;
+        }
+
+        // One datagram, all of it or nothing. Never blocks: a full send
+        // buffer is a failure like any other, and the caller reports it.
+        bool send_to(const sockaddr_in& to, const void* p, std::size_t n) {
+            return sent(::sendto(s_, static_cast<const char*>(p), static_cast<int>(n), 0,
+                                 reinterpret_cast<const sockaddr*>(&to), sizeof to), n, "sendto");
+        }
+        bool send(const void* p, std::size_t n) {
+            return sent(::send(s_, static_cast<const char*>(p), static_cast<int>(n), 0), n, "send");
+        }
+
+        // The port this socket is bound to, which the system chose for 0.
+        int local_port() const {
+            sockaddr_in a;
+            std::memset(&a, 0, sizeof a);
+    #if defined(_WIN32)
+            int len = sizeof a;
+    #else
+            socklen_t len = sizeof a;
+    #endif
+            if (::getsockname(s_, reinterpret_cast<sockaddr*>(&a), &len) != 0) return 0;
+            return ntohs(a.sin_port);
+        }
+
+        // An address as people write it: `192.168.1.20`.
+        static std::string address(const sockaddr_in& a) {
+            char text[INET_ADDRSTRLEN] = "";
+            ::inet_ntop(AF_INET, &a.sin_addr, text, sizeof text);
+            return text;
+        }
+
         // One datagram into `buf`, at most `cap` bytes of it. `n` is how many
-        // landed. Never blocks.
-        Recv receive(void* buf, std::size_t cap, std::size_t& n) {
+        // landed, and `from`, when given, who sent it. Never blocks.
+        Recv receive(void* buf, std::size_t cap, std::size_t& n, sockaddr_in* from = nullptr) {
             n = 0;
             if (!is_open()) return Recv::Error;
     #if defined(_WIN32)
+            int from_len = sizeof(sockaddr_in);
             const int r = ::recvfrom(s_, static_cast<char*>(buf), static_cast<int>(cap), 0,
-                                     nullptr, nullptr);
+                                     reinterpret_cast<sockaddr*>(from), from ? &from_len : nullptr);
             if (r >= 0) {
                 n = static_cast<std::size_t>(r);
                 return Recv::Datagram;
@@ -150,6 +223,8 @@ declarations {
                 std::memset(&msg, 0, sizeof msg);
                 msg.msg_iov = &iov;
                 msg.msg_iovlen = 1;
+                msg.msg_name = from;
+                msg.msg_namelen = from ? sizeof(sockaddr_in) : 0;
                 const ssize_t r = ::recvmsg(s_, &msg, 0);
                 if (r >= 0) {
                     n = static_cast<std::size_t>(r);
@@ -218,6 +293,17 @@ declarations {
         bool fail(const char* what, int code) {
             describe(what, code);
             close();
+            return false;
+        }
+
+        bool sent(long long r, std::size_t n, const char* what) {
+            if (r == static_cast<long long>(n)) return true;
+            if (r >= 0) {
+                err_ = std::string(what) + ": " + std::to_string(r) + " of " + std::to_string(n) +
+                       " bytes went";
+                return false;
+            }
+            describe(what, last_error());
             return false;
         }
     };

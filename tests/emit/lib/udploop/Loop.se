@@ -1,0 +1,67 @@
+// se.net over loopback: a sender streams a counter to a receiver, and a
+// client talks to a server that echoes whatever arrives back to whoever sent
+// it. Decoders turn each received datagram back into the counter, so
+// tests/emit/udp_host.cpp can read through handles what crossed the wire.
+package udploop;
+
+// The counter, as four little-endian bytes. Registered: next() counts, and
+// output() publishes the count the tick started with.
+node Counter {
+    outputs { payload: buffer(4); k: int(-); }
+    states  { discrete n: int(-) = 0; }
+
+    next() { next.n = state.n + 1; }
+
+    output() {
+        const std::uint32_t v = static_cast<std::uint32_t>(state.n);
+        const std::uint8_t b[4] = {static_cast<std::uint8_t>(v), static_cast<std::uint8_t>(v >> 8),
+                                   static_cast<std::uint8_t>(v >> 16), static_cast<std::uint8_t>(v >> 24)};
+        out.payload.assign(b, 4);
+        out.k = state.n;
+    }
+}
+
+// A datagram back into the counter; -1 until one of four bytes has arrived.
+node Decode {
+    inputs  { b: buffer; }
+    outputs { v: int(-); }
+
+    output(b) {
+        if (in.b.size() != 4) {
+            out.v = -1;
+            return;
+        }
+        const std::uint8_t* p = in.b.data();
+        out.v = static_cast<int>(p[0] | (p[1] << 8) | (p[2] << 16) | (static_cast<std::uint32_t>(p[3]) << 24));
+    }
+}
+
+// True on the step a datagram arrived.
+node Fresh {
+    inputs  { status: se.net.RxStatus; }
+    outputs { fresh: bool; }
+
+    output(status) { out.fresh = in.status == se::net::RxStatus::RECEIVED; }
+}
+
+node Loop {
+    structure {
+        node src     : Counter;
+        node tx      : se.net.UdpSender   { port = 47002; };
+        node rx      : se.net.UdpReceiver { port = 47002; };
+        node cli     : se.net.UdpClient   { host = "localhost"; port = 47003; local_port = 47004; };
+        node srv     : se.net.UdpServer   { port = 47003; };
+        node fresh   : Fresh;
+        node dec_rx  : Decode;
+        node dec_cli : Decode;
+        node dec_srv : Decode;
+
+        src.payload --> tx.payload, cli.payload;
+        1 --> tx.send, cli.send;
+        rx.data  --> dec_rx.b;
+        cli.data --> dec_cli.b;
+        srv.data --> srv.payload, dec_srv.b;
+        srv.status --> fresh.status;
+        fresh.fresh --> srv.send;
+    }
+}

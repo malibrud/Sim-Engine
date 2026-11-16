@@ -1,0 +1,133 @@
+// A non-blocking UDP server: full duplex with whoever wrote to it last. It
+// receives on `port` from anyone, and sends its `payload` input back to the
+// sender of the latest datagram on every step `send` is true.
+//
+// RECEIVES AS UdpReceiver DOES. Each step, `next()` drains what has queued
+// up, up to `max_drain` datagrams, keeps the latest, and `output()` publishes
+// it at the next tick: `data` latches, `status` is RECEIVED on the step a
+// datagram arrived and NO_DATA otherwise, `count` says how many were taken
+// and `age` how long since the last one. One step of latency, a sort root,
+// held by `seq`.
+//
+// THE PEER IS WHOEVER WROTE LAST. `peer` and `peer_port` say who that is, as
+// an address and a port, and they latch as `data` does, so the model always
+// knows who its replies go to. Several clients take turns: each reply goes to
+// the one heard from most recently. A server that must keep several
+// conversations apart is a different node.
+//
+// SENDS ON A FLAG, after the drain, in the same `next()`, so a reply goes to
+// the peer the same step heard from. Until anyone has written, there is no one
+// to reply to, and the server stays quiet whatever `send` says. A send reports
+// nothing; its first failure is a warning and its recovery one info line.
+//
+// A FAILED BIND ENDS THE RUN, as for a receiver: the port is in use or not
+// permitted. Binding every interface makes the operating system treat the
+// program as a server; on Windows that shows the firewall's prompt the first
+// time each executable runs, and loopback traffic is delivered whatever is
+// chosen there.
+package se.net;
+
+node UdpServer {
+    settings {
+        port:      int(-);                    // 1..65535
+        max_drain: int(-) = 64;               // datagrams taken per step, at most
+    }
+
+    inputs {
+        payload: buffer;                      // the reply to send
+        send:    bool;                        // send `payload` on this step
+    }
+
+    outputs {
+        data:      buffer(1500);              // the latest datagram
+        status:    RxStatus;
+        count:     int(-);                    // datagrams taken this step
+        age:       double(s);                 // since the latest was taken
+        peer:      string(64);                // who sent it: an IPv4 address
+        peer_port: int(-);                    // and its port; 0 before anyone has
+    }
+
+    states { discrete seq: int(-) = 0; }      // datagrams taken since the run began
+
+    vars {
+        rx:      buffer(1500);
+        st:      RxStatus;
+        n:       int(-);
+        t_last:  double(s);
+        who:     string(64);
+        who_port: int(-);
+        failing: bool;                        // the last send failed
+    }
+
+    native {
+        sock: se_net_detail::UdpSocket;
+        from: sockaddr_in;                    // the latest sender: the replies' address
+    }
+
+    init() {
+        if (!sim.require(param.port >= 1 && param.port <= 65535, "1 <= port <= 65535",
+                         static_cast<double>(param.port)))
+            return;
+        if (!sock.open(param.port)) {
+            log.error("cannot serve on UDP port {}: {}", param.port, sock.error_text());
+            sim.abort(se_rt::format("UDP port {} is not available: {}", param.port,
+                                    sock.error_text()));
+            return;
+        }
+        var.st = RxStatus::NO_DATA;
+        var.t_last = sim.time();
+        var.who_port = 0;
+        var.failing = false;
+        log.info("serving on UDP port {}", param.port);
+    }
+
+    next(payload, send) {
+        const RxStatus was = var.st;
+        RxStatus st = RxStatus::NO_DATA;
+        int taken = 0;
+        for (int i = 0; i < param.max_drain; ++i) {
+            std::size_t got = 0;
+            sockaddr_in a;
+            const se_net_detail::Recv r =
+                sock.receive(var.rx.data(), var.rx.capacity(), got, &a);
+            if (r == se_net_detail::Recv::WouldBlock) break;
+            if (r == se_net_detail::Recv::Error) {
+                st = RxStatus::ERROR;
+                break;
+            }
+            var.rx.resize(got);
+            from = a;
+            ++taken;
+            st = r == se_net_detail::Recv::Truncated ? RxStatus::TRUNCATED : RxStatus::RECEIVED;
+        }
+        if (taken > 0) {
+            var.t_last = sim.time();
+            var.who = se_net_detail::UdpSocket::address(from);
+            var.who_port = ntohs(from.sin_port);
+        }
+        if (st == RxStatus::ERROR && was != RxStatus::ERROR)
+            log.warn("receive failed on UDP port {}: {}", param.port, sock.error_text());
+        var.st = st;
+        var.n = taken;
+        next.seq = state.seq + taken;
+
+        if (!in.send || var.who_port == 0) return;   // no one to reply to yet
+        if (!sock.send_to(from, in.payload.data(), in.payload.size())) {
+            if (!var.failing)
+                log.warn("reply to {}:{} failed: {}", var.who, var.who_port, sock.error_text());
+            var.failing = true;
+        } else if (var.failing) {
+            log.info("replying to {}:{} again", var.who, var.who_port);
+            var.failing = false;
+        }
+    }
+
+    output() {
+        if (var.n > 0) out.data = var.rx;
+        out.status    = var.st;
+        out.count     = var.n;
+        out.age       = sim.time() - var.t_last;
+        out.peer      = var.who;
+        out.peer_port = var.who_port;
+    }
+}

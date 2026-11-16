@@ -1,0 +1,74 @@
+// A non-blocking UDP sender: the `payload` input as one datagram to a fixed
+// host and port, on every step `send` is true.
+//
+// `host` is an IPv4 address or a name, looked up once in `init()` through the
+// system's resolver; the address it found is logged, so a name that resolves
+// somewhere unexpected is easy to spot. A name that does not resolve ends the
+// run, as a receiver's failed bind does: it is a fault a person has to fix.
+// Nothing is looked up again during the run.
+//
+// SENDS ON A FLAG. A datagram goes out in `next()`, on every step whose
+// `send` input is true, carrying that step's `payload`. Wire a literal `true` to
+// stream every step, an edge from a decoder to send on an event, or anything
+// else to decide. A rate slower than the model's is the job of whatever drives
+// `send`.
+//
+// REPORTS NOTHING. A sent datagram has no acknowledgement to wait for, and a
+// failed send (no route, a full buffer, a datagram over 65,507 bytes) never
+// stops the run: the first failure of a run of them is a warning naming the
+// reason, and the first success after it one info line. A model that needs to
+// know its peer is there listens for replies, which is UdpClient.
+//
+// The socket is bound to whatever port the system picks, so two senders in
+// one model never collide.
+package se.net;
+
+node UdpSender {
+    settings {
+        host: string(64) = "127.0.0.1";   // an IPv4 address or a name
+        port: int(-);                     // 1..65535
+    }
+
+    inputs {
+        payload: buffer;                  // the datagram, all of it
+        send:    bool;                    // send `payload` on this step
+    }
+
+    vars { failing: bool; }               // the last send failed
+
+    native {
+        sock: se_net_detail::UdpSocket;
+        to:   sockaddr_in;
+    }
+
+    init() {
+        if (!sim.require(param.port >= 1 && param.port <= 65535, "1 <= port <= 65535",
+                         static_cast<double>(param.port)))
+            return;
+        if (param.host.empty()) {
+            sim.abort("UdpSender has no host to send to");
+            return;
+        }
+        if (!sock.open(0) || !sock.resolve(param.host.c_str(), param.port, to)) {
+            log.error("cannot send to {}:{}: {}", param.host, param.port, sock.error_text());
+            sim.abort(se_rt::format("cannot send to {}:{}: {}", param.host, param.port,
+                                    sock.error_text()));
+            return;
+        }
+        var.failing = false;
+        log.info("sending to {} ({}):{}", param.host, se_net_detail::UdpSocket::address(to),
+                 param.port);
+    }
+
+    next(payload, send) {
+        if (!in.send) return;
+        if (!sock.send_to(to, in.payload.data(), in.payload.size())) {
+            if (!var.failing)
+                log.warn("send to {}:{} failed: {}", param.host, param.port, sock.error_text());
+            var.failing = true;
+        } else if (var.failing) {
+            log.info("sending to {}:{} again", param.host, param.port);
+            var.failing = false;
+        }
+    }
+}

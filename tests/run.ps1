@@ -645,8 +645,11 @@ $smokeSettings = @{
     'se.sig.ct.Differentiator3'     = 'wc = 1.0(rad/s);'
     'se.sig.dt.LowPass2'            = 'wn = 1.0(rad/s);'
     'se.sig.src.Ramp'               = 'slope = 1.0(m/s);'
-    # Compiled and linked, never run: running it would bind the port.
+    # Compiled and linked, never run: running them would bind the ports.
     'se.net.UdpReceiver'            = 'port = 47001;'
+    'se.net.UdpSender'              = 'port = 47001;'
+    'se.net.UdpClient'              = 'port = 47001;'
+    'se.net.UdpServer'              = 'port = 47001;'
 }
 
 # Sec. 6.3: an unconnected input is an error, there is no implicit zero, so
@@ -713,6 +716,17 @@ function Get-SmokeRotSource() {
     return 'kr'
 }
 
+# A BUFFER source, for the ports whose type is `buffer` (sec. 5.1a). A literal
+# is a number, never bytes, so the source is a node that holds some: a
+# UdpReceiver's latest datagram. The smoke model is compiled, never run, so its
+# port is never bound.
+function Get-SmokeBufSource() {
+    if (-not $smokeSrc.Contains('kb')) {
+        $smokeSrc['kb'] = @("        node kb: se.net.UdpReceiver { port = 47001; };")
+    }
+    return 'kb.data'
+}
+
 $smokeRoot = Join-Path $emitOut 'stdlib-smoke'
 if (Test-Path $smokeRoot) { Remove-Item -Recurse -Force $smokeRoot }
 $smokePkg = Join-Path $smokeRoot 'smoke'
@@ -770,6 +784,8 @@ foreach ($f in (Get-ChildItem (Join-Path $root 'stdlib') -Recurse -Filter *.se |
                 $src = Get-SmokeQuatSource
             } elseif ($parts[1] -match 'Rot') {
                 $src = Get-SmokeRotSource
+            } elseif ($parts[1] -match '^\s*buffer\b') {
+                $src = Get-SmokeBufSource
             }
             $smokeWires.Add("        $src --> ${ident}.${port};")
         }
@@ -2741,6 +2757,35 @@ if (-not $cl) {
                 Write-Host $said
                 $script:fail++
             }
+        }
+    }
+
+    # se.net over loopback. tests/emit/udp_host.cpp runs UdpLoop: a UdpSender
+    # streaming to a UdpReceiver, and a UdpClient talking to a UdpServer that
+    # echoes back to whoever wrote. It checks what crossed, who the server's
+    # peer is, and the three faults that stop a run at init(). Ports 47002 to
+    # 47004 on 127.0.0.1.
+    if ($emitDirs.ContainsKey('UdpLoop')) {
+        $udpDir = $emitDirs['UdpLoop']
+        Copy-Item (Join-Path $root 'tests\emit\udp_host.cpp') $udpDir -Force
+        Push-Location $udpDir
+        $out = (& cl /nologo /std:c++20 /EHsc /W4 /permissive- /utf-8 /O2 /MD `
+                    /D_CRT_SECURE_NO_WARNINGS /Fe:udp_host.exe udp_host.cpp ws2_32.lib 2>&1 | Out-String)
+        $built = ($LASTEXITCODE -eq 0 -and $out -notmatch 'warning')
+        $said = ''
+        $ran = $false
+        if ($built) {
+            $said = (& '.\udp_host.exe' 2>&1 | Out-String)
+            $ran = ($LASTEXITCODE -eq 0)
+        }
+        Pop-Location
+        if ($built -and $ran) {
+            Write-Host "ok   tests/emit/udp_host.cpp : UdpSender, UdpReceiver, UdpClient and UdpServer over loopback" -ForegroundColor Green
+            $script:pass++
+        } else {
+            Write-Host "FAIL tests/emit/udp_host.cpp" -ForegroundColor Red
+            if (-not $built) { Write-Host $out } else { Write-Host $said }
+            $script:fail++
         }
     }
 

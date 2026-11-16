@@ -489,6 +489,7 @@ itself, so no `-I` is needed to use it.
 | `se.sig.ct` | Continuous-time blocks: integrators, first- and second-order systems and low-passes, a sine |
 | `se.sig.dt` | Discrete-time blocks: biquad, Butterworth, integrator, differentiator, second-order low-pass |
 | `se.sig.src` | Sources: constant, step, ramp, sine, square, triangle, sawtooth, rectangular pulse, chirp, PRBS, and uniform, white and pink noise |
+| `se.net` | Non-blocking UDP, datagrams as buffers: `UdpReceiver`, `UdpSender`, and full-duplex `UdpClient` (one fixed peer) and `UdpServer` (replies to whoever wrote last) |
 
 Several nodes carry a `tests { }` section (§6.13): tables of inputs and expected
 outputs that `sec --test` turns into a test program.
@@ -584,8 +585,8 @@ In rough order. Each step is decided on its own, so this list changes.
    `inputs` section in the settings format, and `--inputs` (§13.8), so a
    recorded run replays.~~ Done.
 7. ~~**Strings on wires and in settings.** Bounded text as a setting, a port,
-   a var and a root port (§5.1b).~~ Done. UDP sender, client and server nodes
-   that use it come next.
+   a var and a root port (§5.1b), and the `se.net` UDP sender, client and
+   server that use it for host names and peers.~~ Done.
 8. **Later:** clean-ups to the generated code's readability, and the open items
    in the spec's Appendix C, such as display units for recording and
    field-level wires.
