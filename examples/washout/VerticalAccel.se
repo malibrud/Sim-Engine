@@ -7,6 +7,7 @@
 package washout;
 
 use se.math;
+use se.kin;
 use se.sig;
 
 node VerticalAccel {
@@ -23,15 +24,20 @@ node VerticalAccel {
         node ain: math.Merge3(m/s^2);
         node win: math.Merge3(rad/s);
         node wdin: math.Merge3(rad/s^2);
+        node att: math.Merge3(rad);
+        node qin: kin.EulerToQuat {};
         node wash: washout.Classical {};
 
         pulse --> ain.z;
         0.0 --> ain.x, ain.y;
         0.0 --> win.x, win.y, win.z;
         0.0 --> wdin.x, wdin.y, wdin.z;
+        // Level throughout: the identity attitude, so no gravity is leaned.
+        0.0 --> att.x, att.y, att.z;
 
         ain --> wash.ain;
         win --> wash.win;
         wdin --> wash.wdin;
+        att --> qin --> wash.qin;
     }
 }

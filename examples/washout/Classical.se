@@ -14,19 +14,22 @@
 // for the rotation channel's washout attitude.
 //
 // THE CHANNELS, and what each output means. All three run AT THE HEAD (see
-// HEAD OFFSET below), so `a` is the datum's `ain` carried out to it:
+// HEAD OFFSET below), so `a` is the datum's `ain` carried out to it, and
+// `g_lean` is the share of gravity the vehicle's attitude turns off vertical
+// (see THE VEHICLE'S ATTITUDE below):
 //
-//   translational   a -> scale/limit -> f = a - g -> + gravity through the
-//                   commanded attitude -> local high pass -> into the inertial
-//                   frame -> global high pass -> integrated twice, and carried
-//                   back to the datum as `aout`, `vout` and `pout`. The high
-//                   passes are why a step in `ain` comes out as a pulse: the
-//                   platform moves, then washes back.
+//   translational   a -> scale/limit -> f = a - g -> + tltGain*g_lean ->
+//                   + gravity through the commanded attitude -> local high
+//                   pass -> into the inertial frame -> global high pass ->
+//                   integrated twice, and carried back to the datum as
+//                   `aout`, `vout` and `pout`. The high passes are why a step
+//                   in `ain` comes out as a pulse: the platform moves, then
+//                   washes back.
 //
-//   tilt            the X and Y accelerations, low passed, become the steady
-//                   lean that stands in for them -- `TiltCalc` inverts
-//                   a = g*sin(tilt) -- and `kin.EulerToQuat` puts that lean in
-//                   the form the attitude channel wants: `qTilt`.
+//   tilt            the X and Y of a + g_lean, scaled and low passed, become
+//                   the steady lean that stands in for them -- `TiltCalc`
+//                   inverts a = g*sin(tilt) -- and `kin.EulerToQuat` puts that
+//                   lean in the form the attitude channel wants: `qTilt`.
 //
 //   rotation        win -> scale/limit -> high pass -> a quaternion integrator
 //                   whose leak returns it to neutral: `qWash`.
@@ -66,13 +69,17 @@
 // puts heave into Z (LongitudinalAccel.sim records it).
 //
 // ONE DELIBERATE DIVERGENCE from the C++: `transScale` scales and limits the
-// gravity-free `ain`, before `sf`. The C++ scales specific force, gravity
-// included, and adds the gravity term unscaled -- K*(a - g) + R^T g, where this
-// node has K*a - g + R^T g. They are identical at the default K = 1, which is
-// every golden run. With K != 1 the C++ leaves (1 - K)*g in the high pass at
-// rest and clips gravity itself against the limit -- harmless at its
-// 100 m/s^2, not at this node's 10. Here the acceleration is scaled on its own,
-// and a platform at rest and level drives nothing at any gain.
+// gravity-free acceleration alone, before `sf`, and the attitude's share of
+// gravity is scaled by the TILT gain in both channels. The C++ scales the
+// whole specific force with each channel's own gain and adds the gravity term
+// unscaled -- K*(a - R_v^T g) + R^T g, where this node has
+// K*a - g + tltGain*g_lean + R^T g. They are identical at the default gains
+// of 1, which is every golden run. Otherwise the C++ leaves (1 - K)*g in the
+// high pass at rest and clips gravity itself against the limit -- harmless at
+// its 100 m/s^2, not at this node's 10 -- and cues a slope's onset at K but
+// holds it at tltGain. Here the acceleration is scaled on its own, a platform
+// at rest and level drives nothing at any gain, and both channels agree on
+// how strong a slope is (THE VEHICLE'S ATTITUDE below).
 //
 // HEAD OFFSET. The boundary is the MOTION DATUM, the point the platform is
 // driven about: `ain`, `win` and `wdin` arrive there, and `aout`, `vout` and
@@ -110,11 +117,35 @@
 // COORDINATE CONVENTION -- SAE, matching `se.math.Vec3`: X forward/north, Y
 // right/east, Z down.
 //
+// THE VEHICLE'S ATTITUDE. The occupant feels specific force, not
+// acceleration, and cannot tell a sustained push from a slope: a vehicle
+// parked across a 0.1 rad hillside feels like one turning at 0.98 m/s^2.
+// The specific force splits into three,
+//
+//     f = a - R(qin)^T grav = a  -  grav  +  g_lean,
+//     g_lean = grav - R(qin)^T grav,
+//
+// the vehicle's own acceleration, the level 1 g, and the share of gravity the
+// attitude `qin` turns off vertical. `g_lean` is exactly zero when level and
+// needs no lever arm, gravity being the same at the head as at the datum, so
+// "Vehicle Attitude, In" adds it after the head transport:
+//
+//   - into the tilt channel, a + g_lean, which `tiltScale` scales by
+//     `tltGain` with the rest: a slope is cued as a lean, like a turn;
+//   - into the translational channel, tltGain*g_lean, beside `sf` and B11.
+//     B11 takes out the push the lean is already giving, so this channel must
+//     see the slope at the strength the lean will hold it. At tltGain the
+//     onset hands over cleanly; at full strength the onset would be twice the
+//     held cue, and left out the channel would drive against the lean.
+//
+// `trnGain` and `trnLimit` scale the vehicle's acceleration and nothing else.
+//
 // `ain` is KINEMATIC acceleration and carries NO gravity: a vehicle at rest and
-// level drives {0, 0, 0}, not {0, 0, -9.81}. The `sf` node subtracts `grav` to
-// form the specific force an accelerometer would read, f = a - g, which at rest
-// and level is {0, 0, -9.80665}. So the 1 g lives INSIDE this node and never at
-// its boundary. Reading it the other way round -- and the earlier draft of this
+// level drives {0, 0, 0}, not {0, 0, -9.81}, and a vehicle at rest on a slope
+// drives {0, 0, 0} too, its slope arriving through `qin`. The `sf` node
+// subtracts `grav` to form f = a - g, which at rest and level is
+// {0, 0, -9.80665}, the specific force an accelerometer would read. So the
+// 1 g lives INSIDE this node and never at its boundary. Reading it the other way round -- and the earlier draft of this
 // comment did -- makes `sf` come out at -2 g, of which the gravity term cancels
 // one. The other is a -g step at t = 0 that the high passes wash away, so a
 // wrongly driven run shows `aout.z` leaving at -9.8 and settling, which looks
@@ -157,6 +188,8 @@ node Classical {
                                   //   see the note above
         win:  math.Vec3(rad/s);   // angular velocity
         wdin: math.Vec3(rad/s^2); // angular acceleration
+        qin:  kin.Quat;           // attitude, body to inertial -- the
+                                  //   identity for a level vehicle
     }
     // The translational three are at the MOTION DATUM and in the INERTIAL
     // frame (B13 above), not the platform's.
@@ -180,6 +213,21 @@ node Classical {
         group "Head Offset, In" {
             node toHead: kin.TranslateAcc (m) {
                 r = param.headPos;
+            };
+        }
+
+        /// The share of gravity the vehicle's attitude turns off vertical,
+        /// zero when level. The tilt channel reads a + g_lean; the
+        /// translational channel adds tltGain*g_lean beside `sf`.
+        ///
+        ///     g_lean = grav - R(qin)^T grav
+        group "Vehicle Attitude, In" {
+            node vehR:   kin.QuatToRot {};
+            node gVeh:   kin.MulRotInvVec (m/s^2);   // R(qin)^T * grav
+            node gLean:  math.Diff3 (m/s^2);         // grav - R(qin)^T * grav
+            node aTilt:  math.Sum3 (m/s^2);          // a + g_lean
+            node gLeanK: math.Scale3 (m/s^2, -) {    // tltGain * g_lean
+                k = param.tltGain;
             };
         }
 
@@ -259,7 +307,8 @@ node Classical {
             // The commanded attitude, as a matrix, for both reads of it.
             node cmdR:     kin.QuatToRot {};
             node gBody:    kin.MulRotInvVec (m/s^2); // R(qCmd)^T * grav     B11
-            node a1:       math.Sum3 (m/s^2);        // f + R(qCmd)^T * grav
+            node a1:       math.SumSum3 (m/s^2);     // f + tltGain*g_lean
+                                                     //   + R(qCmd)^T * grav
             node toGlobal: kin.MulRotVec (m/s^2);    // platform -> inertial B13
 
             node transLocalFilt: sig.ct.SecondOrderSystem3 (m/s^2) {
@@ -322,8 +371,16 @@ node Classical {
         self.win  --> toHead.w;
         self.wdin --> toHead.wd;
 
+        // Vehicle Attitude, In
+        self.qin --> vehR --> gVeh.R;   param.grav --> gVeh.v;
+        param.grav --> gLean.a;
+        gVeh       --> gLean.b;
+        toHead --> aTilt.a;
+        gLean  --> aTilt.b;
+        gLean  --> gLeanK;
+
         // Tilt Channel
-        toHead --> xyAccel --> tiltScale --> tiltLocalFilt;
+        aTilt --> xyAccel --> tiltScale --> tiltLocalFilt;
                                                tiltLocalFilt.vout  --> tiltCalc.acc;
                                                tiltLocalFilt.voutd --> tiltCalc.accRate;
         tiltCalc.tilt --> tiltQuat;
@@ -353,8 +410,9 @@ node Classical {
         param.grav             --> sf.b;
         qCmd --> cmdR;
                  cmdR --> gBody.R;    param.grav --> gBody.v;
-        sf    --> a1.a;
-        gBody --> a1.b;
+        sf     --> a1.a;
+        gLeanK --> a1.b;
+        gBody  --> a1.c;
         a1 --> transLocalFilt --> toGlobal.v;
                  cmdR     --> toGlobal.R;
         toGlobal --> transGlobalAcc --> transGlobalVel --> transGlobalPos;
