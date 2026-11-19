@@ -1,0 +1,54 @@
+// Parked on a hill, nose up, to overlay on the washout repo's golden run
+// validation/golden/Classical__hill_forward_slope.csv. Same drive, same 40 s,
+// same 100 Hz in the file, same g (RN85.settings).
+//
+// HillsideSlope about the other axis, and every number is HillsideSlope's
+// moved from Y to X, with the sign each lean gives: right side down puts the
+// push to the left (-Y), nose up puts it forward (+X), pressing the occupant
+// back into the seat as a forward acceleration would.
+sim HillForwardSlope {
+    root: washout.HillForwardSlope {};
+
+    step:     1 (ms);
+    solver:   rk4;
+    duration: 40 (s);
+
+    settings: "RN85.settings";
+
+    record: {
+        file  = "hill_forward_slope.csv";
+        every = 10;          // 100 Hz, the golden's rate
+
+        // The drive: 0.1 rad of pitch, nose up, from t = 2 to 32.
+        tilt.y;
+
+        // Translation. Y is zero on every row, in both. X: `aout.x` =
+        // +0.978 at t = 2, the platform 0.039 m forward by t = 2.86 and
+        // back, 5 mm from home at the end. Z exactly as HillsideSlope's,
+        // 0.026 m low at the
+        // end. Allowing half a sample the golden is within 1.1e-3 m/s^2,
+        // 1.1e-4 m/s and 1.7e-5 m on X, and 4.9e-5, 5.4e-6 and 2.3e-6 on Z.
+        wash.aout.x;
+        wash.aout.y;
+        wash.aout.z;
+        wash.vout.x;
+        wash.vout.y;
+        wash.vout.z;
+        wash.pout.x;
+        wash.pout.y;
+        wash.pout.z;
+
+        // The commanded attitude: nose up to the slope's 0.1 rad. 1.6e-5
+        // rad from the golden allowing half a sample; roll and heading are
+        // zero in both.
+        wash.ecmd.x;
+        wash.ecmd.y;
+        wash.ecmd.z;
+
+        // The body rate: +0.090 rad/s at t = 2.29, -0.090 at 32.28. 9.9e-5
+        // rad/s from the golden allowing half a sample.
+        wash.wcmd.x;
+        wash.wcmd.y;
+        wash.wcmd.z;
+    }
+}

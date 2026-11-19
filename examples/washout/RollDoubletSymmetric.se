@@ -1,0 +1,59 @@
+// A symmetric roll doublet, as the washout repo's validation suite drives it:
+// `roll_doublet_symmetric` in validation/maneuvers.h, golden run
+// validation/golden/Classical__roll_doublet_symmetric.csv.
+//
+// RollDoublet's roll out to 1 rad, then the same rate reversed to bring it
+// back: +0.4 rad/s from t = 0 to 2.5, -0.4 from 2.5 to 5, level after. Two
+// pulses and a `math.Sum`, because a wire has one producer.
+package washout;
+
+use se.math;
+use se.kin;
+use se.sig;
+
+node RollDoubletSymmetric {
+    settings {
+        half:      double(s)     = 2.5;
+        amplitude: double(rad/s) = 0.4;
+    }
+
+    structure {
+        node pOut: sig.src.RectPulse (rad/s) {
+            t_start    = 0.0;
+            t_duration = param.half;
+            amplitude  = param.amplitude;
+        };
+        node pBack: sig.src.RectPulse (rad/s) {
+            t_start    = param.half;
+            t_duration = param.half;
+            amplitude  = -param.amplitude;
+        };
+        node p: math.Sum(rad/s);
+        node roll: sig.ct.Integrator (rad/s);
+        node ain: math.Merge3(m/s^2);
+        node win: math.Merge3(rad/s);
+        node wdin: math.Merge3(rad/s^2);
+        node att: math.Merge3(rad);
+        node qin: kin.EulerToQuat {};
+        node wash: washout.Classical {};
+
+        pOut --> p.a;   pBack --> p.b;
+
+        0.0 --> ain.x, ain.y, ain.z;
+        p --> win.x;
+        0.0 --> win.y, win.z;
+        // The rate steps, so its true derivative is an impulse at each
+        // edge. Zero stands in for it exactly only because `headPos` is 0
+        // here, and with no lever arm `wdin` multiplies nothing.
+        0.0 --> wdin.x, wdin.y, wdin.z;
+        // The attitude is the rate integrated from level: one axis at a
+        // time, so the Euler rate and the body rate are the same thing.
+        p --> roll --> att.x;
+        0.0 --> att.y, att.z;
+
+        ain --> wash.ain;
+        win --> wash.win;
+        wdin --> wash.wdin;
+        att --> qin --> wash.qin;
+    }
+}

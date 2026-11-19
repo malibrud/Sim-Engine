@@ -1,0 +1,49 @@
+// Parked across a hillside, as the washout repo's validation suite drives it:
+// `hillside_slope` in validation/maneuvers.h, golden run
+// validation/golden/Classical__hillside_slope.csv.
+//
+// From t = 2, held 30 s: a 0.1 rad roll, right side down, with no rate and
+// no acceleration. Nothing but `qin` moves -- the vehicle is at rest, so
+// `ain` is zero throughout -- and the occupant feels g*sin(0.1) = 0.98 m/s^2
+// sideways, the push of a steady turn.
+package washout;
+
+use se.math;
+use se.kin;
+use se.sig;
+
+node HillsideSlope {
+    settings {
+        t_start:  double(s)   = 2.0;
+        duration: double(s)   = 30.0;
+        angle:    double(rad) = 0.1;
+    }
+
+    structure {
+        node tilt: sig.src.RectPulse (rad) {
+            t_start    = param.t_start;
+            t_duration = param.duration;
+            amplitude  = param.angle;
+        };
+        node ain: math.Merge3(m/s^2);
+        node win: math.Merge3(rad/s);
+        node wdin: math.Merge3(rad/s^2);
+        node att: math.Merge3(rad);
+        node qin: kin.EulerToQuat {};
+        node wash: washout.Classical {};
+
+        0.0 --> ain.x, ain.y, ain.z;
+        0.0 --> win.x, win.y, win.z;
+        0.0 --> wdin.x, wdin.y, wdin.z;
+        // The attitude steps with no rate to take it there, as the golden's
+        // does: a test of the slope's sustained push, not of how the vehicle
+        // got onto it.
+        tilt --> att.x;
+        0.0 --> att.y, att.z;
+
+        ain --> wash.ain;
+        win --> wash.win;
+        wdin --> wash.wdin;
+        att --> qin --> wash.qin;
+    }
+}

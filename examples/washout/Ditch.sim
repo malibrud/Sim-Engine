@@ -1,0 +1,64 @@
+// Driving through a ditch, to overlay on the washout repo's golden run
+// validation/golden/Classical__ditch.csv. Same drive, same 20 s, same 100 Hz
+// in the file, same g (RN85.settings). ObstaclePitchHeave.sim says why its
+// columns line up with the golden at different shifts.
+//
+// The obstacle with every sign of the drive reversed. Most of the response
+// reverses with it, and the part that does not is the finding.
+sim Ditch {
+    root: washout.Ditch {};
+
+    step:     1 (ms);
+    solver:   rk4;
+    duration: 20 (s);
+
+    settings: "RN85.settings";
+
+    record: {
+        file  = "ditch.csv";
+        every = 10;          // 100 Hz, the golden's rate
+
+        // The drive: from t = 2, 1 s of -0.4 rad/s pitch with 1 m/s^2
+        // down, then 1 s of +0.4 rad/s with 1 m/s^2 up, and the pitch it
+        // integrates to, -0.4 rad at t = 3 and level again at 4.
+        q.y;
+        az.y;
+        pitch.out.y;
+
+        // Translation. Y is zero on every row, in both. Z nearly reverses
+        // -- `aout.z` -1.95 at t = 3 and +1.12 at 4, against the
+        // obstacle's +2.03 and -1.11 -- and the platform ends 0.010 m up
+        // where the obstacle left it 0.070 m up. X does NOT: what the
+        // platform's pitch rotates out of the heave is a product of the
+        // two, and both changed sign, so the platform ends 0.229 m forward
+        // here as it ended 0.237 m forward over the obstacle. Allowing
+        // half a sample the golden is within 5.8e-3 m/s^2, 4.4e-4 m/s and
+        // 2.7e-4 m on Z, and 4.2e-3, 8.5e-4 and 2.8e-3 on X, where it
+        // ends at 0.226 m; the 1 kHz C++ ends at 0.2287, and is within
+        // 2.8e-4 m of this file on X and 5.4e-5 m on Z throughout.
+        wash.aout.x;
+        wash.aout.y;
+        wash.aout.z;
+        wash.vout.x;
+        wash.vout.y;
+        wash.vout.z;
+        wash.pout.x;
+        wash.pout.y;
+        wash.pout.z;
+
+        // The commanded attitude: the obstacle's, negated, bit for bit on
+        // every row -- nose down to -0.271 rad at t = 3. 1.4e-4 rad
+        // from the golden allowing its attitude's sample.
+        wash.ecmd.x;
+        wash.ecmd.y;
+        wash.ecmd.z;
+
+        // The body rate, likewise negated bit for bit: -0.400 at t = 2,
+        // +0.555 at 3.
+        // 2.8e-3 rad/s from the golden allowing half a sample, 4.7e-4 from
+        // the 1 kHz C++.
+        wash.wcmd.x;
+        wash.wcmd.y;
+        wash.wcmd.z;
+    }
+}

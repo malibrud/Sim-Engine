@@ -1,0 +1,61 @@
+// Parked across a hillside, to overlay on the washout repo's golden run
+// validation/golden/Classical__hillside_slope.csv. Same drive, same 40 s, same
+// 100 Hz in the file, same g (RN85.settings).
+//
+// The case the vehicle's attitude exists for: nothing moves but `qin`. The
+// attitude steps, so there is no integrated lead to allow for, only the
+// golden filters' half sample (LongitudinalAccel.sim).
+sim HillsideSlope {
+    root: washout.HillsideSlope {};
+
+    step:     1 (ms);
+    solver:   rk4;
+    duration: 40 (s);
+
+    settings: "RN85.settings";
+
+    record: {
+        file  = "hillside_slope.csv";
+        every = 10;          // 100 Hz, the golden's rate
+
+        // The drive: 0.1 rad of roll, right side down, from t = 2 to 32.
+        // The occupant feels g*sin(0.1) = 0.98 m/s^2 to the left.
+        tilt.y;
+
+        // Translation. X is zero on every row, in both. Y is the handover
+        // the slope's scaling was chosen for: at t = 2 the translational
+        // channel cues the whole push at once, `aout.y` = -0.978 -- the
+        // slope at `tltGain`, which is the push the lean will hold -- and
+        // hands it to the lean as the lean comes in. The platform slides
+        // 0.039 m left by t = 2.86 and comes back; t = 32 mirrors it, and
+        // it ends 5 mm from home. Z is
+        // the slope's vertical share, g*(1 - cos 0.1) = 0.049 m/s^2 at
+        // t = 2, and the platform ends 0.026 m low. Allowing half a sample
+        // the golden is within 1.1e-3 m/s^2, 1.1e-4 m/s and 1.7e-5 m on
+        // Y, and 4.9e-5, 5.4e-6 and 2.3e-6 on Z.
+        wash.aout.x;
+        wash.aout.y;
+        wash.aout.z;
+        wash.vout.x;
+        wash.vout.y;
+        wash.vout.z;
+        wash.pout.x;
+        wash.pout.y;
+        wash.pout.z;
+
+        // The commanded attitude: the platform rolls to the slope's own
+        // 0.1 rad and holds it, so gravity gives the occupant the push the
+        // vehicle's lean gives the driver. 1.6e-5 rad from the golden
+        // allowing half a sample; pitch and heading are zero in both.
+        wash.ecmd.x;
+        wash.ecmd.y;
+        wash.ecmd.z;
+
+        // The body rate: the tilt's alone, +0.090 rad/s at t = 2.29 and
+        // -0.090 at 32.28. 9.9e-5 rad/s from the golden allowing half a
+        // sample.
+        wash.wcmd.x;
+        wash.wcmd.y;
+        wash.wcmd.z;
+    }
+}

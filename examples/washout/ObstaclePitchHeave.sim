@@ -1,0 +1,68 @@
+// Driving over an obstacle, to overlay on the washout repo's golden run
+// validation/golden/Classical__obstacle_pitch_heave.csv. Same drive, same
+// 20 s, same 100 Hz in the file, same g (RN85.settings). RollDoublet.sim says
+// what to allow for.
+//
+// Two inputs that the golden lines up differently: the pitch is an attitude,
+// a sample early in the golden, and the heave is an acceleration, which is
+// not. So no one shift lines up every column, and the half-sample figures
+// below are the larger for it. The C++ rebuilt at 1 kHz is the fair
+// comparison here, and the one quoted where the two differ.
+sim ObstaclePitchHeave {
+    root: washout.ObstaclePitchHeave {};
+
+    step:     1 (ms);
+    solver:   rk4;
+    duration: 20 (s);
+
+    settings: "RN85.settings";
+
+    record: {
+        file  = "obstacle_pitch_heave.csv";
+        every = 10;          // 100 Hz, the golden's rate
+
+        // The drive: from t = 2, 1 s of +0.4 rad/s pitch with 1 m/s^2 up,
+        // then 1 s of -0.4 rad/s with 1 m/s^2 down, and the pitch it
+        // integrates to, 0.4 rad at t = 3 and level again at 4.
+        q.y;
+        az.y;
+        pitch.out.y;
+
+        // Translation. Y is zero on every row, in both. Z is the heave,
+        // high passed: `aout.z` +2.03 at t = 3, where it steps by 2, and
+        // -1.11 at 4. X is the pitch's share of gravity, which the
+        // translational channel cues while the lean is too slow to, plus
+        // the heave rotated into it by the platform's own pitch. The
+        // platform ends 0.237 m forward and 0.070 m up, and stays: the
+        // high passes alone would bring it home, but a transient rotated
+        // while the rotation changes has lost its zero area
+        // (LongitudinalAccel.sim). Allowing half a sample the golden is
+        // within 9.1e-4 m/s^2, 2.8e-4 m/s and 6.8e-4 m on Z, and 6.3e-3,
+        // 1.7e-3 and 2.8e-3 on X, where it ends at 0.234 m. That 1% is
+        // the golden's 100 Hz: the 1 kHz C++ ends at 0.2366, and is within
+        // 2.8e-4 m of this file on X and 6.9e-5 m on Z throughout.
+        wash.aout.x;
+        wash.aout.y;
+        wash.aout.z;
+        wash.vout.x;
+        wash.vout.y;
+        wash.vout.z;
+        wash.pout.x;
+        wash.pout.y;
+        wash.pout.z;
+
+        // The commanded attitude: nose up to 0.271 rad at t = 3, back to
+        // within 7.5e-4 of level at 4. 1.4e-4 rad from the golden allowing
+        // its attitude's sample; roll and heading are zero in both.
+        wash.ecmd.x;
+        wash.ecmd.y;
+        wash.ecmd.z;
+
+        // The body rate: +0.400 at t = 2 and -0.555 at 3, where the drive
+        // reverses. 2.8e-3 rad/s from the golden allowing half a sample,
+        // 4.7e-4 from the 1 kHz C++.
+        wash.wcmd.x;
+        wash.wcmd.y;
+        wash.wcmd.z;
+    }
+}

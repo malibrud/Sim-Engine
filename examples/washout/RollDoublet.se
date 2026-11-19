@@ -1,0 +1,52 @@
+// Reid & Nahon's roll standard test, as the washout repo's validation suite
+// drives it: `roll_doublet` in validation/maneuvers.h, golden run
+// validation/golden/Classical__roll_doublet.csv.
+//
+// A 0.4 rad/s roll rate from t = 0 for 2.5 s, so the vehicle rolls to 1 rad,
+// right side down, and stays there. The first case here where the vehicle's
+// attitude leans gravity: held at 1 rad, sin(1) of g -- 8.25 m/s^2 -- is a
+// sustained sideways push that only `qin` carries.
+package washout;
+
+use se.math;
+use se.kin;
+use se.sig;
+
+node RollDoublet {
+    settings {
+        duration:  double(s)     = 2.5;
+        amplitude: double(rad/s) = 0.4;
+    }
+
+    structure {
+        node p: sig.src.RectPulse (rad/s) {
+            t_start    = 0.0;
+            t_duration = param.duration;
+            amplitude  = param.amplitude;
+        };
+        node roll: sig.ct.Integrator (rad/s);
+        node ain: math.Merge3(m/s^2);
+        node win: math.Merge3(rad/s);
+        node wdin: math.Merge3(rad/s^2);
+        node att: math.Merge3(rad);
+        node qin: kin.EulerToQuat {};
+        node wash: washout.Classical {};
+
+        0.0 --> ain.x, ain.y, ain.z;
+        p --> win.x;
+        0.0 --> win.y, win.z;
+        // The rate steps, so its true derivative is an impulse at each
+        // edge. Zero stands in for it exactly only because `headPos` is 0
+        // here, and with no lever arm `wdin` multiplies nothing.
+        0.0 --> wdin.x, wdin.y, wdin.z;
+        // The attitude is the rate integrated from level: one axis at a
+        // time, so the Euler rate and the body rate are the same thing.
+        p --> roll --> att.x;
+        0.0 --> att.y, att.z;
+
+        ain --> wash.ain;
+        win --> wash.win;
+        wdin --> wash.wdin;
+        att --> qin --> wash.qin;
+    }
+}

@@ -1,0 +1,67 @@
+// One wheel over a bump, as the washout repo's validation suite drives it:
+// `single_side_bump_roll` in validation/maneuvers.h, golden run
+// validation/golden/Classical__single_side_bump_roll.csv.
+//
+// From t = 2, 1 s of +0.4 rad/s roll, right side down, then 1 s of -0.4 rad/s
+// back to level at t = 4, with 1 m/s^2 up (-Z) during the first second only.
+// The roll is two pulses and a `math.Sum`, because a wire has one producer.
+package washout;
+
+use se.math;
+use se.kin;
+use se.sig;
+
+node SingleSideBumpRoll {
+    settings {
+        t_start:  double(s)     = 2.0;
+        half:     double(s)     = 1.0;
+        rollRate: double(rad/s) = 0.4;
+        heave:    double(m/s^2) = 1.0;
+    }
+
+    structure {
+        node p1: sig.src.RectPulse (rad/s) {
+            t_start    = param.t_start;
+            t_duration = param.half;
+            amplitude  = param.rollRate;
+        };
+        node p2: sig.src.RectPulse (rad/s) {
+            t_start    = param.t_start + param.half;
+            t_duration = param.half;
+            amplitude  = -param.rollRate;
+        };
+        node az: sig.src.RectPulse (m/s^2) {
+            t_start    = param.t_start;
+            t_duration = param.half;
+            amplitude  = -param.heave;
+        };
+        node p: math.Sum(rad/s);
+        node roll: sig.ct.Integrator (rad/s);
+        node ain: math.Merge3(m/s^2);
+        node win: math.Merge3(rad/s);
+        node wdin: math.Merge3(rad/s^2);
+        node att: math.Merge3(rad);
+        node qin: kin.EulerToQuat {};
+        node wash: washout.Classical {};
+
+        p1 --> p.a;    p2 --> p.b;
+
+        0.0 --> ain.x, ain.y;
+        az --> ain.z;
+        p --> win.x;
+        0.0 --> win.y, win.z;
+        // The rate steps, so its true derivative is an impulse at each
+        // edge. Zero stands in for it exactly only because `headPos` is 0
+        // here, and with no lever arm `wdin` multiplies nothing.
+        0.0 --> wdin.x, wdin.y, wdin.z;
+        // The attitude is the rate integrated from level: one axis at a
+        // time, so the Euler rate and the body rate are the same thing.
+        p --> roll --> att.x;
+        0.0 --> att.y, att.z;
+
+        ain --> wash.ain;
+        win --> wash.win;
+        wdin --> wash.wdin;
+        att --> qin --> wash.qin;
+    }
+}

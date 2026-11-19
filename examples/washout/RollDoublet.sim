@@ -1,0 +1,75 @@
+// Reid & Nahon's roll test, to overlay on the washout repo's golden run
+// validation/golden/Classical__roll_doublet.csv. Same drive, same 40 s, same
+// 100 Hz in the file, same g (RN85.settings).
+//
+// The first golden case whose vehicle attitude leans gravity, and so the first
+// that `qin` carries anything into. Two things to allow for when overlaying it:
+//
+//   - The golden's ATTITUDE is integrated forward Euler, taking sample i's rate
+//     before it reports sample i, so it leads this file's by one sample (its
+//     `in_roll` against `roll.out.y`: 4.0e-3 rad as recorded, 6.7e-5 allowing
+//     the sample), and so does everything the attitude drives.
+//   - Its FILTERS are 100 Hz bilinear, half a sample late (LongitudinalAccel.sim).
+//
+// The C++ harness rebuilt at 1 kHz (`kFs` in validation/harness.h) needs
+// neither allowance, and is the sharper check: every column below is within
+// 7.6e-4 of it, sample for sample, outside the 30 ms either side of a step
+// in the drive.
+sim RollDoublet {
+    root: washout.RollDoublet {};
+
+    step:     1 (ms);
+    solver:   rk4;
+    duration: 40 (s);
+
+    settings: "RN85.settings";
+
+    record: {
+        file  = "roll_doublet.csv";
+        every = 10;          // 100 Hz, the golden's rate
+
+        // The drive: 0.4 rad/s about +X, right side down, 0-2.5 s, and the
+        // attitude it integrates to, 1 rad from t = 2.5 on.
+        p.y;
+        roll.out.y;
+
+        // Translation. X is zero on every row, in both: a roll moves
+        // nothing fore and aft. Y is the onset: the rotation channel rolls
+        // the platform at once, the lean the tilt channel will hold comes
+        // in behind it, and the translational channel makes up the
+        // difference while they disagree. `aout.y` goes -0.116 at t = 0.51
+        // and +0.181 at 3.06, and the platform goes 0.202 m left at 3.06,
+        // 0.140 m right at 8.75, and ends 0.091 m right. Z is the frame
+        // rotation, as in LongitudinalAccel.sim: the platform goes 0.226 m
+        // low (+Z is down) by t = 7.76 and stays 0.221 m low. All six are
+        // within 1.4e-4 of the golden allowing its attitude's one sample.
+        wash.aout.x;
+        wash.aout.y;
+        wash.aout.z;
+        wash.vout.x;
+        wash.vout.y;
+        wash.vout.z;
+        wash.pout.x;
+        wash.pout.y;
+        wash.pout.z;
+
+        // The commanded attitude. The vehicle held at 1 rad feels
+        // g*sin(1) = 8.25 m/s^2 of sideways push, and the tilt channel
+        // leans the platform until gravity gives the same: `ecmd.x` rises
+        // to 1.005 at t = 10.76 and settles at 1.0001, rolled as far as
+        // the vehicle, in both runs. 1.3e-4 rad from the
+        // golden allowing its sample; pitch and heading are zero in both.
+        wash.ecmd.x;
+        wash.ecmd.y;
+        wash.ecmd.z;
+
+        // The body rate: the high pass passes the 0.4 rad/s step whole,
+        // and at the release `wcmd.x` drops to -0.099. It mixes a filter
+        // of `win`, half a sample late in the golden, with the tilt's
+        // rate, a sample early, so no one shift lines it up: 1.7e-3 rad/s
+        // allowing half a sample, and 3.0e-4 from the 1 kHz C++.
+        wash.wcmd.x;
+        wash.wcmd.y;
+        wash.wcmd.z;
+    }
+}

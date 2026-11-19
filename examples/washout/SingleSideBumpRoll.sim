@@ -1,0 +1,62 @@
+// One wheel over a bump, to overlay on the washout repo's golden run
+// validation/golden/Classical__single_side_bump_roll.csv. Same drive, same
+// 20 s, same 100 Hz in the file, same g (RN85.settings).
+// ObstaclePitchHeave.sim says why its columns line up with the golden at
+// different shifts.
+//
+// The obstacle's shape about the other axis, with the heave only on the way
+// up: the vehicle rolls right side down and back while the near wheel lifts.
+sim SingleSideBumpRoll {
+    root: washout.SingleSideBumpRoll {};
+
+    step:     1 (ms);
+    solver:   rk4;
+    duration: 20 (s);
+
+    settings: "RN85.settings";
+
+    record: {
+        file  = "single_side_bump_roll.csv";
+        every = 10;          // 100 Hz, the golden's rate
+
+        // The drive: from t = 2, 1 s of +0.4 rad/s roll with 1 m/s^2 up,
+        // then 1 s of -0.4 rad/s with no heave, and the roll it
+        // integrates to, 0.4 rad at t = 3 and level again at 4.
+        p.y;
+        az.y;
+        roll.out.y;
+
+        // Translation. X is zero on every row, in both. Z is the heave,
+        // high passed: `aout.z` -1.00 at t = 2 and +1.06 at 3, where it
+        // ends; the platform rises 0.059 m by t = 3.02 and stays 0.057 m
+        // up. Y is the roll's share of gravity and the heave rotated into
+        // it, and the platform ends 0.141 m left. Allowing the better of
+        // half a sample and a whole one, the golden is within 5.4e-3 m/s^2,
+        // 1.1e-3 m/s and 1.6e-3 m on Y, where it ends at 0.139 m, and
+        // 1.9e-3, 2.5e-4 and 4.4e-4 on Z; the 1 kHz C++ is within 1.6e-4 m
+        // of this file on Y and 4.5e-5 m on Z throughout.
+        wash.aout.x;
+        wash.aout.y;
+        wash.aout.z;
+        wash.vout.x;
+        wash.vout.y;
+        wash.vout.z;
+        wash.pout.x;
+        wash.pout.y;
+        wash.pout.z;
+
+        // The commanded attitude: the obstacle's pitch, as roll -- 0.271
+        // rad at t = 3 -- because the attitude channels see the same
+        // rate and the heave reaches only translation. 1.4e-4 rad from the
+        // golden allowing its attitude's sample.
+        wash.ecmd.x;
+        wash.ecmd.y;
+        wash.ecmd.z;
+
+        // The body rate: +0.400 at t = 2, -0.555 at 3. 2.8e-3 rad/s from
+        // the golden allowing half a sample, 4.7e-4 from the 1 kHz C++.
+        wash.wcmd.x;
+        wash.wcmd.y;
+        wash.wcmd.z;
+    }
+}

@@ -477,6 +477,23 @@ $examples = @(
        roots = @('examples', 'stdlib') },
     @{ name = 'slalom';     sim = 'examples/washout/Slalom.sim';
        roots = @('examples', 'stdlib') },
+    # The seven maneuvers whose vehicle attitude leans gravity, so the only
+    # goldens that drive `qin`: the roll doublets, the obstacle, the ditch, the
+    # one-sided bump and the two slopes.
+    @{ name = 'rolldbl';    sim = 'examples/washout/RollDoublet.sim';
+       roots = @('examples', 'stdlib') },
+    @{ name = 'rolldblsym'; sim = 'examples/washout/RollDoubletSymmetric.sim';
+       roots = @('examples', 'stdlib') },
+    @{ name = 'obstacle';   sim = 'examples/washout/ObstaclePitchHeave.sim';
+       roots = @('examples', 'stdlib') },
+    @{ name = 'ditch';      sim = 'examples/washout/Ditch.sim';
+       roots = @('examples', 'stdlib') },
+    @{ name = 'bump';       sim = 'examples/washout/SingleSideBumpRoll.sim';
+       roots = @('examples', 'stdlib') },
+    @{ name = 'hillside';   sim = 'examples/washout/HillsideSlope.sim';
+       roots = @('examples', 'stdlib') },
+    @{ name = 'hillfwd';    sim = 'examples/washout/HillForwardSlope.sim';
+       roots = @('examples', 'stdlib') },
     # The surge test with the head a metre above the motion datum: the one
     # case with a nonzero `headPos`, so the lever-arm wiring compiles.
     @{ name = 'rn85head';   sim = 'examples/washout/LongitudinalAccelHead.sim';
