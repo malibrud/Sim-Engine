@@ -90,8 +90,9 @@
 //     a = ain + wdin x r + win x (win x r),
 //
 // and both the tilt and the translational channels read `a`. On the way out
-// the translational channel's three are the HEAD's, and the lever arm is
-// taken back off through the commanded attitude, R = R(qCmd), w = wcmd:
+// the translational channel's three are the HEAD's, and `HeadToDatum` takes
+// the lever arm back off through the commanded attitude, R = R(qCmd),
+// w = wcmd:
 //
 //     pout = p - (R r - r)             zero at neutral, where R = I
 //     vout = v - R (w x r)
@@ -335,31 +336,18 @@ node Classical {
             node transGlobalPos: sig.ct.Integrator3 (m/s);
         }
 
-        /// Each is the head's quantity less the lever arm's share of it,
-        /// turned into the inertial frame by `cmdR`:
-        ///
-        ///     pout = p - (R r - r)
-        ///     vout = v - R (w x r)
-        ///     aout = a - R (wd x r + w x (w x r))
+        /// The head's motion, carried back to the datum: each quantity less
+        /// the lever arm's share of it, turned into the inertial frame by
+        /// `cmdR` (`HeadToDatum`'s header has the equations and the axes).
         @diagram(collapsed)
         group "Head Offset, Out" {
             node wdCmd:  sig.ct.Differentiator3 (rad/s) {
                 wc = param.wdcRoll;
             };
 
-            node armR:   kin.MulRotVec (m);                 // R r
-            node armP:   math.Diff3 (m);                    // R r - r
-            node pDatum: math.Diff3 (m);
-
-            node armV:   math.Cross3 (rad/s, m);            // w x r
-            node armVG:  kin.MulRotVec (m/s);               // R (w x r)
-            node vDatum: math.Diff3 (m/s);
-
-            node armT:   math.Cross3 (rad/s^2, m);          // wd x r
-            node armC:   math.CrossCross3 (rad/s, rad/s, m);// w x (w x r)
-            node armA:   math.Sum3 (m/s^2);
-            node armAG:  kin.MulRotVec (m/s^2);             // R (wd x r + w x (w x r))
-            node aDatum: math.Diff3 (m/s^2);
+            node toDatum: HeadToDatum {
+                r = param.headPos;
+            };
         }
 
         //----------------------------------
@@ -420,26 +408,14 @@ node Classical {
         // Head Offset, Out
         wCmd --> wdCmd --> self.wdcmd;
 
-        cmdR --> armR.R;   param.headPos --> armR.v;
-        armR          --> armP.a;
-        param.headPos --> armP.b;
-        transGlobalPos --> pDatum.a;
-        armP           --> pDatum.b;
-        pDatum --> self.pout;
-
-        wCmd --> armV.a;   param.headPos --> armV.b;
-        cmdR --> armVG.R;  armV --> armVG.v;
-        transGlobalVel --> vDatum.a;
-        armVG          --> vDatum.b;
-        vDatum --> self.vout;
-
-        wdCmd --> armT.a;  param.headPos --> armT.b;
-        wCmd  --> armC.a, armC.b;   param.headPos --> armC.c;
-        armT --> armA.a;
-        armC --> armA.b;
-        cmdR --> armAG.R;  armA --> armAG.v;
-        transGlobalAcc --> aDatum.a;
-        armAG          --> aDatum.b;
-        aDatum --> self.aout;
+        transGlobalPos --> toDatum.p;
+        transGlobalVel --> toDatum.v;
+        transGlobalAcc --> toDatum.a;
+        cmdR  --> toDatum.R;
+        wCmd  --> toDatum.w;
+        wdCmd --> toDatum.wd;
+        toDatum.pout --> self.pout;
+        toDatum.vout --> self.vout;
+        toDatum.aout --> self.aout;
     }
 }

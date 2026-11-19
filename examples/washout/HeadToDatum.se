@@ -1,0 +1,91 @@
+// Carry the commanded platform motion from the occupant's head back to the
+// motion datum: the outbound half of Classical's head offset, the inverse of
+// what `kin.TranslateAcc` does to the datum's acceleration on the way in.
+//
+// The washout runs at the head, `r` away from the datum, so its translational
+// channel produces the HEAD's position, velocity and acceleration. The
+// platform is driven about the datum, so each one has the lever arm's share
+// taken back off:
+//
+//     pout = p - (R r - r)
+//     vout = v - R (w x r)
+//     aout = a - R (wd x r + w x (w x r))
+//
+// THE AXES ARE MIXED, on purpose. `r` is fixed in the body, so it is given in
+// BODY axes, and so are `w` and `wd`, the body rate and its derivative. `p`,
+// `v` and `a`, in and out, are INERTIAL. `R` takes body to inertial, which is
+// why every lever-arm term passes through it before it is subtracted.
+//
+// `pout` is a DISPLACEMENT FROM NEUTRAL, not an absolute position. At neutral
+// the head sits `r` from the datum and R = I, so the arm's share is R r - r,
+// which is zero there.
+//
+// `wd` is an input, not something this node works out: the caller decides how
+// to get it (Classical differentiates `wcmd`, rolled off at `wdcRoll`), as the
+// caller of `kin.TranslateAcc` does. With `r` zero every output is its input,
+// exactly.
+package washout;
+
+use se.math;
+use se.kin;
+
+@diagram(collapsed)
+node HeadToDatum {
+    settings {
+        // The lever arm from the datum to the head, fixed in the body and in
+        // body axes.
+        r: math.Vec3(m) = { 0.0, 0.0, 0.0 };
+    }
+
+    inputs {
+        p:  math.Vec3(m);         // head position from neutral, inertial
+        v:  math.Vec3(m/s);       // head velocity, inertial
+        a:  math.Vec3(m/s^2);     // head acceleration, inertial
+        R:  kin.Rot;              // attitude, body to inertial
+        w:  math.Vec3(rad/s);     // body rate, body axes
+        wd: math.Vec3(rad/s^2);   // its derivative, body axes
+    }
+    outputs {
+        pout: math.Vec3(m);       // datum position from neutral, inertial
+        vout: math.Vec3(m/s);     // datum velocity, inertial
+        aout: math.Vec3(m/s^2);   // datum acceleration, inertial
+    }
+
+    structure {
+        node armR:   kin.MulRotVec (m);                 // R r
+        node armP:   math.Diff3 (m);                    // R r - r
+        node pDatum: math.Diff3 (m);
+
+        node armV:   math.Cross3 (rad/s, m);            // w x r
+        node armVG:  kin.MulRotVec (m/s);               // R (w x r)
+        node vDatum: math.Diff3 (m/s);
+
+        node armT:   math.Cross3 (rad/s^2, m);          // wd x r
+        node armC:   math.CrossCross3 (rad/s, rad/s, m);// w x (w x r)
+        node armA:   math.Sum3 (m/s^2);
+        node armAG:  kin.MulRotVec (m/s^2);             // R (wd x r + w x (w x r))
+        node aDatum: math.Diff3 (m/s^2);
+
+        self.R --> armR.R;   param.r --> armR.v;
+        armR    --> armP.a;
+        param.r --> armP.b;
+        self.p --> pDatum.a;
+        armP   --> pDatum.b;
+        pDatum --> self.pout;
+
+        self.w --> armV.a;   param.r --> armV.b;
+        self.R --> armVG.R;  armV --> armVG.v;
+        self.v --> vDatum.a;
+        armVG  --> vDatum.b;
+        vDatum --> self.vout;
+
+        self.wd --> armT.a;  param.r --> armT.b;
+        self.w  --> armC.a, armC.b;   param.r --> armC.c;
+        armT --> armA.a;
+        armC --> armA.b;
+        self.R --> armAG.R;  armA --> armAG.v;
+        self.a --> aDatum.a;
+        armAG  --> aDatum.b;
+        aDatum --> self.aout;
+    }
+}
